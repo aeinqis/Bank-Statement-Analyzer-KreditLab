@@ -47,17 +47,82 @@ DEFAULT_HIGH_VALUE_THRESHOLD = 100_000.00
 st.markdown(
     """
     <style>
+    :root {
+        --kl-accent: #0078D4;
+        --kl-accent-hover: #00A8A8;
+        --kl-label: #CCCCCC;
+    }
+
+    h1, h2, h3 {
+        color: #FFFFFF;
+    }
+
+    [data-testid="stWidgetLabel"] label,
+    [data-testid="stWidgetLabel"] p,
+    [data-testid="stFileUploader"] label {
+        color: var(--kl-label);
+        font-weight: 600;
+    }
+
     div.stButton > button[kind="primary"] {
         min-height: 3rem;
+        padding: 0.75rem 1rem;
         border-radius: 8px;
+        border: 1px solid var(--kl-accent);
+        background: var(--kl-accent);
+        color: #FFFFFF;
         font-size: 1rem;
         font-weight: 700;
-        box-shadow: 0 8px 18px rgba(31, 111, 235, 0.18);
+        box-shadow: 0 8px 18px rgba(0, 120, 212, 0.18);
+        transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
     }
+
+    div.stButton > button[kind="primary"]:hover {
+        border-color: var(--kl-accent-hover);
+        background: var(--kl-accent-hover);
+        box-shadow: 0 10px 24px rgba(0, 168, 168, 0.24);
+        transform: translateY(-1px);
+    }
+
     div.stButton > button:not([kind="primary"]) {
         min-height: 3rem;
+        padding: 0.75rem 1rem;
         border-radius: 8px;
+        border: 1px solid rgba(204, 204, 204, 0.38);
         font-weight: 600;
+        transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+    }
+
+    div.stButton > button:not([kind="primary"]):hover {
+        border-color: var(--kl-accent);
+        box-shadow: 0 8px 18px rgba(0, 120, 212, 0.14);
+        transform: translateY(-1px);
+    }
+
+    .kl-status {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        margin: 0.5rem 0 1rem;
+    }
+
+    .kl-status h3 {
+        margin: 0;
+    }
+
+    .kl-spinner {
+        width: 1rem;
+        height: 1rem;
+        border: 2px solid rgba(204, 204, 204, 0.35);
+        border-top-color: var(--kl-accent-hover);
+        border-radius: 50%;
+        animation: kl-spin 780ms linear infinite;
+    }
+
+    @keyframes kl-spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
     </style>
     """,
@@ -670,6 +735,7 @@ with input_col3:
         "High Value Threshold (RM)",
         key="high_value_threshold_input",
         placeholder=f"{DEFAULT_HIGH_VALUE_THRESHOLD:,.2f}",
+        help="Credits equal to or above this amount are flagged as high value. Leave blank to use RM 100,000.00.",
     )
 
 # Detect encrypted files
@@ -706,7 +772,16 @@ with button_col2:
         on_click=reset_app_inputs,
     )
 
-st.write(f"### ⚙️ Status: **{st.session_state.status.upper()}**")
+status_spinner = '<span class="kl-spinner"></span>' if st.session_state.status == "running" else ""
+st.markdown(
+    f"""
+    <div class="kl-status">
+        {status_spinner}
+        <h3>Status: {st.session_state.status.upper()}</h3>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 all_tx: List[dict] = []
