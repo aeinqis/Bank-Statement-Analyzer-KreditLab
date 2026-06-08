@@ -4,15 +4,6 @@ Streamlit app to extract transactions from Malaysian bank statement PDFs.
 
 ## Run locally
 
-Set HTTP Basic Auth credentials via environment variables before starting the app:
-
-```bash
-export BASIC_AUTH_USER=your_username
-export BASIC_AUTH_PASS=your_password
-```
-
-Then run:
-
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
@@ -56,7 +47,6 @@ Recommended Railway setup:
 1. Set the start command to `streamlit run app.py --server.address=0.0.0.0 --server.port=$PORT --server.headless=true` (or let Railway use `Procfile`).
 2. Ensure `requirements.txt` is installed during build.
 3. Use Python 3.10+ runtime.
-4. Configure `BASIC_AUTH_USER` and `BASIC_AUTH_PASS` environment variables in Railway.
 
 ## Notes
 

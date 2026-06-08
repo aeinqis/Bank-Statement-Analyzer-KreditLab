@@ -1,7 +1,5 @@
 import json
-import os
 import re
-import secrets
 from datetime import datetime
 from io import BytesIO
 from typing import Callable, Dict, List, Tuple, Optional
@@ -39,43 +37,7 @@ from alliance import parse_transactions_alliance
 from pdf_security import is_pdf_encrypted, decrypt_pdf_bytes
 
 
-def require_basic_auth() -> None:
-    """Gate the app behind credentials loaded from environment variables."""
-    configured_user = os.getenv("BASIC_AUTH_USER")
-    configured_pass = os.getenv("BASIC_AUTH_PASS")
-
-    if not configured_user or not configured_pass:
-        st.error(
-            "Missing BASIC_AUTH_USER or BASIC_AUTH_PASS environment variables. "
-            "Set both to use this app."
-        )
-        st.stop()
-
-    if st.session_state.get("is_authenticated"):
-        return
-
-    st.subheader("🔐 Login required")
-
-    with st.form("basic_auth_form"):
-        entered_user = st.text_input("Username")
-        entered_pass = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in")
-
-    if submitted:
-        is_valid = secrets.compare_digest(entered_user, configured_user) and secrets.compare_digest(
-            entered_pass,
-            configured_pass,
-        )
-        if is_valid:
-            st.session_state.is_authenticated = True
-            st.rerun()
-        st.error("Invalid username or password.")
-
-    st.stop()
-
-
 st.set_page_config(page_title="Bank Statement Parser", layout="wide")
-require_basic_auth()
 st.title("📄 Bank Statement Parser (Multi-File Support)")
 st.write("Upload one or more bank statement PDFs to extract transactions.")
 
