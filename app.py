@@ -13,6 +13,7 @@ from core_utils import (
     normalize_transactions,
     safe_float,
 )
+from transaction_analysis import parse_top_parties_and_high_value
 
 from maybank import parse_transactions_maybank
 from public_bank import parse_transactions_pbb
@@ -40,6 +41,28 @@ from pdf_security import is_pdf_encrypted, decrypt_pdf_bytes
 st.set_page_config(page_title="Bank Statement Parser", layout="wide")
 st.title("📄 Bank Statement Parser (Multi-File Support)")
 st.write("Upload one or more bank statement PDFs to extract transactions.")
+
+DEFAULT_HIGH_VALUE_THRESHOLD = 100_000.00
+
+st.markdown(
+    """
+    <style>
+    div.stButton > button[kind="primary"] {
+        min-height: 3rem;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 700;
+        box-shadow: 0 8px 18px rgba(31, 111, 235, 0.18);
+    }
+    div.stButton > button:not([kind="primary"]) {
+        min-height: 3rem;
+        border-radius: 8px;
+        font-weight: 600;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # -----------------------------
@@ -85,11 +108,60 @@ if "pdf_password" not in st.session_state:
 if "company_name_override" not in st.session_state:
     st.session_state.company_name_override = ""
 
+if "company_account_no_override" not in st.session_state:
+    st.session_state.company_account_no_override = ""
+
+if "high_value_threshold_input" not in st.session_state:
+    st.session_state.high_value_threshold_input = ""
+
+if "upload_widget_reset_id" not in st.session_state:
+    st.session_state.upload_widget_reset_id = 0
+
 if "file_company_name" not in st.session_state:
     st.session_state.file_company_name = {}
 
 if "file_account_no" not in st.session_state:
     st.session_state.file_account_no = {}
+
+def clear_processing_outputs() -> None:
+    st.session_state.results = []
+    st.session_state.affin_statement_totals = []
+    st.session_state.affin_file_transactions = {}
+    st.session_state.ambank_statement_totals = []
+    st.session_state.ambank_file_transactions = {}
+    st.session_state.cimb_statement_totals = []
+    st.session_state.rhb_statement_totals = []
+    st.session_state.cimb_file_transactions = {}
+    st.session_state.rhb_file_transactions = {}
+    st.session_state.bank_islam_file_month = {}
+    st.session_state.file_company_name = {}
+    st.session_state.file_account_no = {}
+
+
+def start_processing() -> None:
+    st.session_state.status = "running"
+    clear_processing_outputs()
+
+
+def reset_app_inputs() -> None:
+    st.session_state.status = "idle"
+    clear_processing_outputs()
+    st.session_state.pdf_password = ""
+    st.session_state.company_name_override = ""
+    st.session_state.company_account_no_override = ""
+    st.session_state.high_value_threshold_input = ""
+    st.session_state.upload_widget_reset_id += 1
+    if "bank_choice" in st.session_state and "PARSERS" in globals():
+        st.session_state.bank_choice = list(PARSERS.keys())[0]
+
+
+def get_high_value_threshold() -> float:
+    raw = str(st.session_state.get("high_value_threshold_input", "") or "").strip()
+    if not raw:
+        return DEFAULT_HIGH_VALUE_THRESHOLD
+    if not re.search(r"\d", raw):
+        return DEFAULT_HIGH_VALUE_THRESHOLD
+    return max(0.0, safe_float(raw))
 
 
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -577,14 +649,28 @@ PARSERS: Dict[str, Callable[[bytes, str], List[dict]]] = {
 }
 
 
-bank_choice = st.selectbox("Select Bank Format", list(PARSERS.keys()))
+bank_choice = st.selectbox("Select Bank Format", list(PARSERS.keys()), key="bank_choice")
 
-uploaded_files = st.file_uploader("Upload PDF files", type=["pdf"], accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "Upload PDF files",
+    type=["pdf"],
+    accept_multiple_files=True,
+    key=f"pdf_upload_{st.session_state.upload_widget_reset_id}",
+)
 if uploaded_files:
     uploaded_files = sorted(uploaded_files, key=lambda x: x.name)
 
-# Manual company name override
-st.text_input("Company Name (optional override)", key="company_name_override")
+input_col1, input_col2, input_col3 = st.columns([1.2, 1.0, 0.8])
+with input_col1:
+    st.text_input("Company Name (optional override)", key="company_name_override")
+with input_col2:
+    st.text_input("Company Account No. (optional override)", key="company_account_no_override")
+with input_col3:
+    st.text_input(
+        "High Value Threshold (RM)",
+        key="high_value_threshold_input",
+        placeholder=f"{DEFAULT_HIGH_VALUE_THRESHOLD:,.2f}",
+    )
 
 # Detect encrypted files
 encrypted_files: List[str] = []
@@ -604,44 +690,21 @@ if uploaded_files:
         st.text_input("PDF Password", type="password", key="pdf_password")
 
 
-col1, col2, col3 = st.columns(3)
-with col1:
-    if st.button("▶️ Start Processing"):
-        st.session_state.status = "running"
-        st.session_state.affin_statement_totals = []
-        st.session_state.affin_file_transactions = {}
-        st.session_state.ambank_statement_totals = []
-        st.session_state.ambank_file_transactions = {}
-        st.session_state.cimb_statement_totals = []
-        st.session_state.rhb_statement_totals = []
-        st.session_state.cimb_file_transactions = {}
-        st.session_state.rhb_file_transactions = {}
-        st.session_state.bank_islam_file_month = {}
-        st.session_state.file_company_name = {}
-        st.session_state.file_account_no = {}
+button_col1, button_col2 = st.columns([2.5, 1])
+with button_col1:
+    st.button(
+        "Start Processing",
+        type="primary",
+        use_container_width=True,
+        on_click=start_processing,
+    )
 
-with col2:
-    if st.button("⏹️ Stop"):
-        st.session_state.status = "stopped"
-
-with col3:
-    if st.button("🔄 Reset"):
-        st.session_state.status = "idle"
-        st.session_state.results = []
-        st.session_state.affin_statement_totals = []
-        st.session_state.affin_file_transactions = {}
-        st.session_state.ambank_statement_totals = []
-        st.session_state.ambank_file_transactions = {}
-        st.session_state.cimb_statement_totals = []
-        st.session_state.rhb_statement_totals = []
-        st.session_state.cimb_file_transactions = {}
-        st.session_state.rhb_file_transactions = {}
-        st.session_state.bank_islam_file_month = {}
-        st.session_state.file_company_name = {}
-        st.session_state.file_account_no = {}
-        st.session_state.pdf_password = ""
-        st.session_state.company_name_override = ""
-        st.rerun()
+with button_col2:
+    st.button(
+        "Reset",
+        use_container_width=True,
+        on_click=reset_app_inputs,
+    )
 
 st.write(f"### ⚙️ Status: **{st.session_state.status.upper()}**")
 
@@ -656,10 +719,6 @@ if uploaded_files and st.session_state.status == "running":
     parser = PARSERS[bank_choice]
 
     for file_idx, uploaded_file in enumerate(uploaded_files):
-        if st.session_state.status == "stopped":
-            st.warning("⏹️ Processing stopped by user.")
-            break
-
         st.write(f"### 🗂️ Processing File: **{uploaded_file.name}**")
         bank_display_box.info(f"📄 Processing {bank_choice}: {uploaded_file.name}...")
 
@@ -689,6 +748,8 @@ if uploaded_files and st.session_state.status == "running":
             # manual override wins
             if (st.session_state.company_name_override or "").strip():
                 company_name = st.session_state.company_name_override.strip()
+            if (st.session_state.company_account_no_override or "").strip():
+                account_no = st.session_state.company_account_no_override.strip()
 
             st.session_state.file_company_name[uploaded_file.name] = company_name
             st.session_state.file_account_no[uploaded_file.name] = account_no
@@ -734,9 +795,11 @@ if uploaded_files and st.session_state.status == "running":
                 default_bank=bank_choice,
                 source_file=uploaded_file.name,
             )
+            high_value_threshold = get_high_value_threshold()
             for t in tx_norm:
                 t["company_name"] = company_name
                 t["account_no"] = account_no
+                t["high_value_credit"] = safe_float(t.get("credit", 0)) >= high_value_threshold
 
             if bank_choice == "Affin Bank":
                 st.session_state.affin_file_transactions[uploaded_file.name] = tx_norm
@@ -1257,6 +1320,10 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
     bank_choice == "RHB Bank" and st.session_state.rhb_statement_totals
 ):
     st.subheader("📊 Extracted Transactions")
+    high_value_threshold = get_high_value_threshold()
+    for tx in st.session_state.results:
+        tx["high_value_credit"] = safe_float(tx.get("credit", 0)) >= high_value_threshold
+
     df = pd.DataFrame(st.session_state.results) if st.session_state.results else pd.DataFrame()
 
     if not df.empty:
@@ -1266,6 +1333,7 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             "debit",
             "credit",
             "balance",
+            "high_value_credit",
             "company_name",
             "account_no",
             "page",
@@ -1277,6 +1345,16 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         st.dataframe(df[display_cols], use_container_width=True)
     else:
         st.info("No line-item transactions extracted.")
+
+    transaction_analysis_report = parse_top_parties_and_high_value(
+        st.session_state.results,
+        high_value_threshold=high_value_threshold,
+    )
+    high_value_credits = transaction_analysis_report.get("high_value_credits", [])
+    if high_value_credits:
+        st.subheader("High Value Credits")
+        st.caption(f"Threshold: RM {high_value_threshold:,.2f}")
+        st.dataframe(pd.DataFrame(high_value_credits), use_container_width=True)
 
     monthly_summary_raw = calculate_monthly_summary(st.session_state.results)
     monthly_summary = present_monthly_summary_standard(monthly_summary_raw)
@@ -1345,8 +1423,10 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
                 "total_files_processed": total_files_processed,
                 "company_names": company_names,
                 "account_nos": account_nos,
+                "high_value_threshold": high_value_threshold,
                 "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
+            "transaction_analysis": transaction_analysis_report,
             "monthly_summary": monthly_summary,
             "transactions": df_download.to_dict(orient="records"),
         }
@@ -1364,6 +1444,12 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             df_download.to_excel(writer, sheet_name="Transactions", index=False)
             if monthly_summary:
                 pd.DataFrame(monthly_summary).to_excel(writer, sheet_name="Monthly Summary", index=False)
+            if transaction_analysis_report.get("high_value_credits"):
+                pd.DataFrame(transaction_analysis_report["high_value_credits"]).to_excel(
+                    writer,
+                    sheet_name="High Value Credits",
+                    index=False,
+                )
 
         st.download_button(
             "📊 Download Full Report (XLSX)",
