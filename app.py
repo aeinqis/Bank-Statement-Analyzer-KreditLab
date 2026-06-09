@@ -67,39 +67,60 @@ st.markdown(
         font-weight: 600;
     }
 
-    div.stButton > button[kind="primary"] {
-        min-height: 3rem;
-        padding: 0.75rem 1rem;
-        border-radius: 8px;
-        border: 1px solid var(--kl-accent);
-        background: var(--kl-accent);
-        color: #FFFFFF;
-        font-size: 1rem;
-        font-weight: 700;
-        box-shadow: 0 8px 18px rgba(0, 120, 212, 0.18);
-        transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+    div.stButton {
+        text-align: left;
     }
 
-    div.stButton > button[kind="primary"]:hover {
-        border-color: var(--kl-accent-hover);
-        background: var(--kl-accent-hover);
-        box-shadow: 0 10px 24px rgba(0, 168, 168, 0.24);
-        transform: translateY(-1px);
-    }
-
-    div.stButton > button:not([kind="primary"]) {
+    div.stButton > button {
         min-height: 3rem;
-        padding: 0.75rem 1rem;
-        border-radius: 8px;
-        border: 1px solid rgba(204, 204, 204, 0.38);
+        width: 100%;
+        padding: 0.7rem 1.35rem;
+        border-radius: 8px !important;
         font-weight: 600;
-        transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+        letter-spacing: 0;
+        transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, color 160ms ease;
     }
 
-    div.stButton > button:not([kind="primary"]):hover {
-        border-color: var(--kl-accent);
-        box-shadow: 0 8px 18px rgba(0, 120, 212, 0.14);
+    div.stButton > button[kind="primary"],
+    div.stButton > button[type="primary"] {
+        border: 1px solid #0052CC !important;
+        background: linear-gradient(135deg, #0078D4 0%, #0052CC 100%) !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 8px 18px rgba(0, 102, 255, 0.22) !important;
+    }
+
+    div.stButton > button[kind="primary"]:hover,
+    div.stButton > button[type="primary"]:hover {
+        border-color: #1A75FF !important;
+        background: linear-gradient(135deg, #1A75FF 0%, #0066FF 100%) !important;
+        box-shadow: 0 10px 24px rgba(0, 102, 255, 0.34) !important;
         transform: translateY(-1px);
+    }
+
+    div.stButton > button[kind="primary"]:active,
+    div.stButton > button[type="primary"]:active {
+        box-shadow: 0 4px 10px rgba(0, 102, 255, 0.22) !important;
+        transform: translateY(1px);
+    }
+
+    div.stButton > button:not([kind="primary"]):not([type="primary"]) {
+        border: 1px solid #374151 !important;
+        background: #111827 !important;
+        color: #D1D5DB !important;
+        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.16) !important;
+    }
+
+    div.stButton > button:not([kind="primary"]):not([type="primary"]):hover {
+        border-color: #9CA3AF !important;
+        background: #1F2937 !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22) !important;
+        transform: translateY(-1px);
+    }
+
+    div.stButton > button:not([kind="primary"]):not([type="primary"]):active {
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+        transform: translateY(1px);
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
@@ -108,17 +129,16 @@ st.markdown(
         box-sizing: border-box;
     }
 
-    div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button {
-        border-color: #B42318 !important;
-        background: #B42318 !important;
-        color: #FFFFFF !important;
-        box-shadow: 0 8px 18px rgba(180, 35, 24, 0.18);
+    div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button:hover {
+        border-color: #EF4444 !important;
+        background: rgba(239, 68, 68, 0.08) !important;
+        color: #FCA5A5 !important;
+        box-shadow: 0 8px 18px rgba(239, 68, 68, 0.16) !important;
     }
 
-    div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button:hover {
-        border-color: #D92D20 !important;
-        background: #D92D20 !important;
-        box-shadow: 0 10px 24px rgba(217, 45, 32, 0.24);
+    div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button:active {
+        background: rgba(239, 68, 68, 0.14) !important;
+        transform: translateY(1px);
     }
 
     .kl-status {
@@ -933,6 +953,7 @@ with button_col1:
 with button_col2:
     st.button(
         "Stop",
+        type="secondary",
         use_container_width=True,
         on_click=stop_processing,
     )
@@ -940,6 +961,7 @@ with button_col2:
 with button_col3:
     st.button(
         "Reset",
+        type="secondary",
         use_container_width=True,
         on_click=reset_app_inputs,
     )
