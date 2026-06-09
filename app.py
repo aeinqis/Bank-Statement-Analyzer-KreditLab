@@ -341,7 +341,8 @@ def detect_rapid_repeat_transactions(df: pd.DataFrame, days_window: int = 30) ->
         
         for i in range(len(dates)):
             if i < len(dates) - 1:
-                days_diff = (dates[i + 1] - dates[i]).days
+                # Convert to Timestamp to access .days attribute
+                days_diff = (pd.Timestamp(dates[i + 1]) - pd.Timestamp(dates[i])).days
                 if days_diff <= days_window:
                     idx = group_sorted.iloc[i].name
                     df.loc[idx, "is_rapid_repeat_transaction"] = True
