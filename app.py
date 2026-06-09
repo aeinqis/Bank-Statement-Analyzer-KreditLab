@@ -39,7 +39,10 @@ from pdf_security import is_pdf_encrypted, decrypt_pdf_bytes
 
 
 st.set_page_config(page_title="Bank Statement Parser", layout="wide")
-st.title("📄 Bank Statement Parser (Multi-File Support)")
+st.markdown(
+    '<h1>📄 Bank Statement Parser (Multi-File Support)</h1>',
+    unsafe_allow_html=True,
+)
 st.write("Upload one or more bank statement PDFs to extract transactions.")
 
 DEFAULT_HIGH_VALUE_THRESHOLD = 100_000.00
@@ -97,6 +100,19 @@ st.markdown(
         border-color: var(--kl-accent);
         box-shadow: 0 8px 18px rgba(0, 120, 212, 0.14);
         transform: translateY(-1px);
+    }
+
+    div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button {
+        border-color: #B42318 !important;
+        background: #B42318 !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 8px 18px rgba(180, 35, 24, 0.18);
+    }
+
+    div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button:hover {
+        border-color: #D92D20 !important;
+        background: #D92D20 !important;
+        box-shadow: 0 10px 24px rgba(217, 45, 32, 0.24);
     }
 
     .kl-status {
@@ -179,6 +195,15 @@ if "company_account_no_override" not in st.session_state:
 if "high_value_threshold_input" not in st.session_state:
     st.session_state.high_value_threshold_input = ""
 
+if "high_value_threshold_error" not in st.session_state:
+    st.session_state.high_value_threshold_error = ""
+
+if "active_high_value_threshold" not in st.session_state:
+    st.session_state.active_high_value_threshold = None
+
+if "stop_requested" not in st.session_state:
+    st.session_state.stop_requested = False
+
 if "upload_widget_reset_id" not in st.session_state:
     st.session_state.upload_widget_reset_id = 0
 
@@ -203,30 +228,101 @@ def clear_processing_outputs() -> None:
     st.session_state.file_account_no = {}
 
 
+def parse_high_value_threshold() -> Tuple[Optional[float], Optional[str]]:
+    raw = str(st.session_state.get("high_value_threshold_input", "") or "").strip()
+    if not raw:
+        return None, "Please insert the high value threshold."
+    if not re.search(r"\d", raw):
+        return None, "Please insert a valid high value threshold."
+
+    threshold = safe_float(raw)
+    if threshold <= 0:
+        return None, "Please insert a high value threshold above 0."
+    return threshold, None
+
+
+def clear_high_value_threshold_error() -> None:
+    st.session_state.high_value_threshold_error = ""
+
+
 def start_processing() -> None:
+    threshold, threshold_error = parse_high_value_threshold()
+    if threshold_error:
+        st.session_state.high_value_threshold_error = threshold_error
+        st.session_state.status = "idle"
+        return
+
+    st.session_state.high_value_threshold_error = ""
+    st.session_state.active_high_value_threshold = threshold
+    st.session_state.stop_requested = False
     st.session_state.status = "running"
     clear_processing_outputs()
 
 
+def stop_processing() -> None:
+    st.session_state.stop_requested = True
+    if st.session_state.status == "running":
+        st.session_state.status = "stopped"
+
+
 def reset_app_inputs() -> None:
     st.session_state.status = "idle"
+    st.session_state.stop_requested = False
     clear_processing_outputs()
     st.session_state.pdf_password = ""
     st.session_state.company_name_override = ""
     st.session_state.company_account_no_override = ""
     st.session_state.high_value_threshold_input = ""
+    st.session_state.high_value_threshold_error = ""
+    st.session_state.active_high_value_threshold = None
     st.session_state.upload_widget_reset_id += 1
     if "bank_choice" in st.session_state and "PARSERS" in globals():
         st.session_state.bank_choice = list(PARSERS.keys())[0]
 
 
+def render_status(container) -> None:
+    status_label = str(st.session_state.status).replace("_", " ").upper()
+    status_spinner = '<span class="kl-spinner"></span>' if st.session_state.status == "running" else ""
+    container.markdown(
+        f"""
+        <div class="kl-status">
+            {status_spinner}
+            <h3>Status: {status_label}</h3>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def get_high_value_threshold() -> float:
-    raw = str(st.session_state.get("high_value_threshold_input", "") or "").strip()
-    if not raw:
-        return DEFAULT_HIGH_VALUE_THRESHOLD
-    if not re.search(r"\d", raw):
-        return DEFAULT_HIGH_VALUE_THRESHOLD
-    return max(0.0, safe_float(raw))
+    threshold, threshold_error = parse_high_value_threshold()
+    if not threshold_error and threshold is not None:
+        return threshold
+
+    active_threshold = st.session_state.get("active_high_value_threshold")
+    if active_threshold is not None:
+        return float(active_threshold)
+    return 0.0
+
+
+if st.session_state.high_value_threshold_error:
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) div[data-baseweb="input"],
+        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) input {
+            border-color: #F04438 !important;
+            box-shadow: 0 0 0 1px rgba(240, 68, 56, 0.72) !important;
+        }
+
+        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) label,
+        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) p {
+            color: #FDA29B !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -734,9 +830,12 @@ with input_col3:
     st.text_input(
         "High Value Threshold (RM)",
         key="high_value_threshold_input",
-        placeholder=f"{DEFAULT_HIGH_VALUE_THRESHOLD:,.2f}",
-        help="Credits equal to or above this amount are flagged as high value. Leave blank to use RM 100,000.00.",
+        placeholder=f"e.g. {DEFAULT_HIGH_VALUE_THRESHOLD:,.2f}",
+        help="Required. Credits equal to or above this amount are flagged as high value.",
+        on_change=clear_high_value_threshold_error,
     )
+    if st.session_state.high_value_threshold_error:
+        st.error(st.session_state.high_value_threshold_error)
 
 # Detect encrypted files
 encrypted_files: List[str] = []
@@ -756,7 +855,7 @@ if uploaded_files:
         st.text_input("PDF Password", type="password", key="pdf_password")
 
 
-button_col1, button_col2 = st.columns([2.5, 1])
+button_col1, button_col2, button_col3 = st.columns([2.0, 0.9, 1.0])
 with button_col1:
     st.button(
         "Start Processing",
@@ -767,42 +866,55 @@ with button_col1:
 
 with button_col2:
     st.button(
+        "Stop",
+        use_container_width=True,
+        on_click=stop_processing,
+    )
+
+with button_col3:
+    st.button(
         "Reset",
         use_container_width=True,
         on_click=reset_app_inputs,
     )
 
-status_spinner = '<span class="kl-spinner"></span>' if st.session_state.status == "running" else ""
-st.markdown(
-    f"""
-    <div class="kl-status">
-        {status_spinner}
-        <h3>Status: {st.session_state.status.upper()}</h3>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+status_box = st.empty()
+render_status(status_box)
 
 
 all_tx: List[dict] = []
 
 if uploaded_files and st.session_state.status == "running":
-    bank_display_box = st.empty()
+    progress_text = st.empty()
     progress_bar = st.progress(0)
 
     total_files = len(uploaded_files)
     parser = PARSERS[bank_choice]
+    processing_errors: List[str] = []
+    total_extracted = 0
+    files_finished = 0
+
+    progress_text.write(f"Preparing {total_files} file(s) for {bank_choice}.")
 
     for file_idx, uploaded_file in enumerate(uploaded_files):
-        st.write(f"### 🗂️ Processing File: **{uploaded_file.name}**")
-        bank_display_box.info(f"📄 Processing {bank_choice}: {uploaded_file.name}...")
+        if st.session_state.get("stop_requested"):
+            st.session_state.status = "stopped"
+            progress_text.write(f"Stopped after {files_finished} of {total_files} file(s).")
+            break
+
+        current_file = file_idx + 1
+        progress_bar.progress(file_idx / total_files)
+        progress_text.write(f"File {current_file} of {total_files}: loading {uploaded_file.name}")
 
         try:
             pdf_bytes = uploaded_file.getvalue()
 
             # decrypt if encrypted
             if is_pdf_encrypted(pdf_bytes):
+                progress_text.write(f"File {current_file} of {total_files}: decrypting {uploaded_file.name}")
                 pdf_bytes = decrypt_pdf_bytes(pdf_bytes, st.session_state.pdf_password)
+
+            progress_text.write(f"File {current_file} of {total_files}: reading statement details")
 
             # extract company name (FIXED)
             company_name = None
@@ -828,6 +940,8 @@ if uploaded_files and st.session_state.status == "running":
 
             st.session_state.file_company_name[uploaded_file.name] = company_name
             st.session_state.file_account_no[uploaded_file.name] = account_no
+
+            progress_text.write(f"File {current_file} of {total_files}: parsing transactions")
 
             # Parse transactions (existing logic)
             if bank_choice == "Affin Bank":
@@ -864,6 +978,8 @@ if uploaded_files and st.session_state.status == "running":
             else:
                 tx_raw = parser(pdf_bytes, uploaded_file.name) or []
 
+            progress_text.write(f"File {current_file} of {total_files}: normalizing transactions")
+
             # Normalize then attach company_name
             tx_norm = normalize_transactions(
                 tx_raw,
@@ -886,18 +1002,35 @@ if uploaded_files and st.session_state.status == "running":
                 st.session_state.rhb_file_transactions[uploaded_file.name] = tx_norm
 
             if tx_norm:
-                st.success(f"✅ Extracted {len(tx_norm)} transactions from {uploaded_file.name}")
                 all_tx.extend(tx_norm)
+                total_extracted += len(tx_norm)
+                progress_text.write(
+                    f"File {current_file} of {total_files}: extracted {len(tx_norm)} transactions from {uploaded_file.name}"
+                )
             else:
-                st.warning(f"⚠️ No transactions found in {uploaded_file.name}")
+                progress_text.write(f"File {current_file} of {total_files}: no transactions found in {uploaded_file.name}")
 
         except Exception as e:
+            processing_errors.append(uploaded_file.name)
+            progress_text.write(f"File {current_file} of {total_files}: error processing {uploaded_file.name}")
             st.error(f"❌ Error processing {uploaded_file.name}: {e}")
             st.exception(e)
 
         progress_bar.progress((file_idx + 1) / total_files)
+        files_finished = file_idx + 1
 
-    bank_display_box.success(f"🏦 Completed processing: **{bank_choice}**")
+    if st.session_state.get("stop_requested"):
+        st.session_state.status = "stopped"
+        progress_text.write(f"Stopped after {files_finished} of {total_files} file(s).")
+    elif processing_errors:
+        st.session_state.status = "completed_with_errors"
+        progress_text.write(
+            f"Finished with {len(processing_errors)} error(s). Extracted {total_extracted} transactions from {total_files} file(s)."
+        )
+    else:
+        st.session_state.status = "completed"
+        progress_text.write(f"Finished. Extracted {total_extracted} transactions from {total_files} file(s).")
+    render_status(status_box)
 
     all_tx = dedupe_transactions(all_tx)
 
@@ -1534,5 +1667,5 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         )
 
 else:
-    if uploaded_files:
+    if uploaded_files and st.session_state.status == "idle" and not st.session_state.high_value_threshold_error:
         st.warning("⚠️ No transactions found — click **Start Processing**.")
