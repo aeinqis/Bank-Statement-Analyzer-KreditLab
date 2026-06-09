@@ -503,33 +503,43 @@ def compute_epf_payments(df: pd.DataFrame) -> Tuple[int, float]:
         r"\bKWSP\s+KARIM\b",
     ]
     
-    pattern = re.compile("|".join(epf_patterns), re.IGNORECASE)
+    # SOCSO patterns to EXCLUDE
+    socso_patterns = [
+        r"\bSOCSO\b",
+        r"\bPERKESO\b",
+        r"\bEIS\b",
+        r"\bSIP\b",
+        r"\bPERTUBUHAN\s+KESELAMATAN\s+SOSIAL\b",
+    ]
     
-    epf_mask = df["description"].astype(str).apply(lambda x: bool(pattern.search(x)))
+    # Compile patterns once
+    epf_regex = re.compile("|".join(epf_patterns), re.IGNORECASE)
+    socso_regex = re.compile("|".join(socso_patterns), re.IGNORECASE)
     
-    # Filter out SOCSO which might match some patterns
-    socso_pattern = re.compile(r"\b(SOCSO|PERKESO|EIS|SIP)\b", re.IGNORECASE)
-    socso_mask = df["description"].astype(str).apply(lambda x: bool(socso_pattern.search(x)))
+    # Calculate masks efficiently
+    descriptions = df["description"].fillna("").astype(str)
     
-    # EPF should not be SOCSO
-    epf_mask = epf_mask & ~socso_mask
+    # Check for EPF
+    is_epf = descriptions.apply(lambda x: bool(epf_regex.search(x)))
     
-    epf_df = df[epf_mask].copy()
+    # Check for SOCSO (to exclude)
+    is_socso = descriptions.apply(lambda x: bool(socso_regex.search(x)))
     
-    # Get amounts (debit/credit - contributions are usually debits/outflows)
-    epf_df["amount"] = epf_df.apply(
-        lambda row: row.get("debit", 0) if row.get("debit", 0) > 0 else row.get("credit", 0),
-        axis=1
-    )
+    # Final mask: EPF but NOT SOCSO
+    final_mask = is_epf & ~is_socso
     
-    total_amount = epf_df["amount"].sum()
-    count = len(epf_df)
+    if not final_mask.any():
+        return 0, 0.0
     
-    # Also add flags to dataframe for detailed view
-    if "is_epf_payment" not in df.columns:
-        df["is_epf_payment"] = False
-    df.loc[epf_mask, "is_epf_payment"] = True
-    df.loc[epf_mask, "epf_amount"] = epf_df["amount"]
+    # Calculate amounts
+    amounts = []
+    for idx in df[final_mask].index:
+        row = df.loc[idx]
+        amount = row.get("debit", 0) if row.get("debit", 0) > 0 else row.get("credit", 0)
+        amounts.append(amount)
+    
+    total_amount = sum(amounts)
+    count = len(amounts)
     
     return count, total_amount
 
