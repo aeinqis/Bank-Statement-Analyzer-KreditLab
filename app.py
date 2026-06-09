@@ -930,7 +930,7 @@ with input_col3:
     st.text_input(
         "High Value Threshold (RM)",
         key="high_value_threshold_input",
-        placeholder=f"e.g. {DEFAULT_HIGH_VALUE_THRESHOLD:,.2f}",
+        placeholder=f"e.g. 10,000",
         help="Required. Credits equal to or above this amount are flagged as high value.",
         on_change=clear_high_value_threshold_error,
     )
