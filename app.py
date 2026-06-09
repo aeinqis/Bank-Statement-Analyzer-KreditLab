@@ -1640,25 +1640,13 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
     df = pd.DataFrame(st.session_state.results) if st.session_state.results else pd.DataFrame()
 
     if not df.empty:
-        # 1. Inject the header alignment CSS securely
-        st.markdown(
-            """
-            <style>
-            .stDataFrame div[role="columnheader"] p {
-                text-align: center !important;
-                justify-content: center !important;
-                display: flex !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-
-        # 2. Define the columns you want
+        # 1. Define the columns you want
         requested_cols = ["date", "description", "debit", "credit", "balance"]
+        
+        # 2. Safety check: Filter only columns that actually exist in the dataframe
         display_cols = [c for c in requested_cols if c in df.columns]
 
-        # 3. Render table (Titles will be centered by CSS, content follows defaults)
+        # 3. Display ONLY ONE table with the configured column names
         st.dataframe(
             df[display_cols], 
             use_container_width=True,
@@ -1703,8 +1691,25 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             "source_files",
         ]
         summary_df = summary_df[[c for c in desired_cols if c in summary_df.columns]]
-        st.dataframe(summary_df, use_container_width=True)
-
+        
+        # Display the monthly summary table with friendly headers
+        st.dataframe(
+            summary_df, 
+            use_container_width=True,
+            column_config={
+                "month": "Month",
+                "company_name": "Company Name",
+                "account_no": "Account Number",
+                "opening_balance": "Opening Balance",
+                "total_debit": "Total Debit",
+                "total_credit": "Total Credit",
+                "highest_balance": "Highest Balance",
+                "lowest_balance": "Lowest Balance",
+                "swing": "Swing",
+                "ending_balance": "Ending Balance",
+                "source_files": "Source Files"
+            }
+        )
     st.subheader("⬇️ Download Options")
     col1, col2, col3 = st.columns(3)
 
