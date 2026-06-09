@@ -390,20 +390,6 @@ def reset_app_inputs() -> None:
         st.session_state.bank_choice = None
 
 
-def render_status(container) -> None:
-    status_label = str(st.session_state.status).replace("_", " ").upper()
-    status_spinner = '<span class="kl-spinner"></span>' if st.session_state.status == "running" else ""
-    container.markdown(
-        f"""
-        <div class="kl-status">
-            {status_spinner}
-            <h3>Status: {status_label}</h3>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def get_high_value_threshold() -> float:
     threshold, threshold_error = parse_high_value_threshold()
     if not threshold_error and threshold is not None:
