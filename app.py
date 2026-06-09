@@ -421,12 +421,33 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text).strip().upper())
 
 
-def is_round_number(amount: float, tolerance: float = 0.01) -> bool:
-    """Check if amount is a round number (ends with .00 or .99)"""
-    if amount is None:
+def is_round_number(amount: float, round_thresholds: List[float] = None, tolerance: float = 0.01) -> bool:
+    """
+    Check if amount is a round number (multiple of significant thresholds like 10,000, 50,000, 100,000, etc.)
+    
+    Args:
+        amount: The transaction amount to check
+        round_thresholds: List of thresholds to check (default: [10000, 50000, 100000, 500000, 1000000])
+        tolerance: Tolerance for floating point precision (default: 0.01)
+    
+    Returns:
+        True if amount is a multiple of any threshold, False otherwise
+    """
+    if amount is None or amount == 0:
         return False
-    decimal_part = abs(amount) % 1
-    return abs(decimal_part - 0.00) <= tolerance or abs(decimal_part - 0.99) <= tolerance
+    
+    if round_thresholds is None:
+        round_thresholds = [10000, 50000, 100000, 500000, 1000000, 5000000, 10000000]
+    
+    abs_amount = abs(amount)
+    
+    for threshold in round_thresholds:
+        if abs_amount >= threshold:
+            remainder = abs_amount % threshold
+            if remainder < tolerance or (threshold - remainder) < tolerance:
+                return True
+    
+    return False
 
 
 def detect_duplicate_transactions(df: pd.DataFrame) -> pd.DataFrame:
@@ -662,7 +683,7 @@ def compute_hrdf_payments(df: pd.DataFrame) -> Tuple[int, float]:
     return count, total_amount
 
 
-def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float) -> pd.DataFrame:
+def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float, round_thresholds: List[float] = None) -> pd.DataFrame:
     """Run all fraud/pattern detection checks on the transaction dataframe"""
     if df.empty:
         return df
@@ -672,9 +693,9 @@ def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float) -> pd.DataFr
     # High value detection
     df["is_high_value"] = df["credit"].apply(lambda x: safe_float(x) >= high_value_threshold if x else False)
     
-    # Round number detection
+    # Round number detection - using flexible thresholds
     df["is_round"] = df.apply(
-        lambda row: is_round_number(row.get("credit", 0)) or is_round_number(row.get("debit", 0)),
+        lambda row: is_round_number(row.get("credit", 0), round_thresholds) or is_round_number(row.get("debit", 0), round_thresholds),
         axis=1
     )
     
