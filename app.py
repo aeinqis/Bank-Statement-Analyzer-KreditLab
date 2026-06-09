@@ -1424,6 +1424,7 @@ def present_monthly_summary_standard(rows: List[dict]) -> List[dict]:
                 "month": r.get("month"),
                 "company_name": r.get("company_name"),
                 "account_no": r.get("account_no"),
+                "transaction_count": r.get("transaction_count"),
                 "opening_balance": r.get("opening_balance"),
                 "total_debit": r.get("total_debit"),
                 "total_credit": r.get("total_credit"),
@@ -1481,11 +1482,6 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         st.session_state.results,
         high_value_threshold=high_value_threshold,
     )
-    high_value_credits = transaction_analysis_report.get("high_value_credits", [])
-    if high_value_credits:
-        st.subheader("High Value Credits")
-        st.caption(f"Threshold: RM {high_value_threshold:,.2f}")
-        st.dataframe(pd.DataFrame(high_value_credits), use_container_width=True)
 
     monthly_summary_raw = calculate_monthly_summary(st.session_state.results)
     monthly_summary = present_monthly_summary_standard(monthly_summary_raw)
@@ -1497,6 +1493,7 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             "month",
             "company_name",
             "account_no",
+            "transaction_count",
             "opening_balance",
             "total_debit",
             "total_credit",
@@ -1515,6 +1512,7 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
                 "month": "Month",
                 "company_name": "Company Name",
                 "account_no": "Account Number",
+                "transaction_count": "No. of Transactions",
                 "opening_balance": "Opening Balance",
                 "total_debit": "Total Debit",
                 "total_credit": "Total Credit",
