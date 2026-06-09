@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime
+from html import escape
 from io import BytesIO
 from typing import Callable, Dict, List, Tuple, Optional
 
@@ -152,6 +153,83 @@ st.markdown(
     div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button:active {
         background: rgba(239, 68, 68, 0.14) !important;
         transform: translateY(1px);
+    }
+
+    .kl-analysis-title {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        margin: 0.5rem 0 0.75rem;
+        color: #FFFFFF;
+        font-size: 1.75rem;
+        font-weight: 800;
+        line-height: 1.2;
+    }
+
+    .kl-analysis-subtitle {
+        color: #A9C1DD;
+        font-size: 1rem;
+        margin: 0 0 1.25rem;
+    }
+
+    .kl-metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.875rem;
+        margin-bottom: 0.875rem;
+    }
+
+    .kl-metric-card {
+        min-height: 6rem;
+        padding: 1rem 1.15rem;
+        border: 1px solid #334155;
+        border-radius: 12px;
+        background: #0B111D;
+        box-sizing: border-box;
+    }
+
+    .kl-metric-card-wide {
+        grid-column: 1 / -1;
+    }
+
+    .kl-metric-label {
+        color: #D7E3F8;
+        font-size: 0.92rem;
+        font-weight: 600;
+        margin-bottom: 0.55rem;
+    }
+
+    .kl-metric-value {
+        color: #FFFFFF;
+        font-size: 2.25rem;
+        line-height: 1;
+        font-weight: 800;
+    }
+
+    div[data-testid="stExpander"] {
+        border: 1px solid #374151;
+        border-radius: 8px;
+        background: #0B0F16;
+        overflow: hidden;
+        margin-bottom: 1rem;
+    }
+
+    div[data-testid="stExpander"] details summary {
+        min-height: 3.2rem;
+        padding: 0.85rem 1rem;
+        font-weight: 700;
+    }
+
+    @media (max-width: 900px) {
+        .kl-metric-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 560px) {
+        .kl-metric-grid {
+            grid-template-columns: 1fr;
+        }
     }
     </style>
     """,
@@ -464,7 +542,7 @@ def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
 
 def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> None:
     """Render expandable sections for each pattern type"""
-    st.markdown("#### Pattern Details")
+    st.markdown("### Pattern Details")
     
     # Duplicate transactions
     if "is_duplicate_transaction" in df.columns:
@@ -474,7 +552,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
                 axis=1
             )
-            with st.expander(f"🔄 Repeated Transactions ({len(duplicate_hits)})"):
+            with st.expander(f"Repeated transaction ({len(duplicate_hits)})"):
                 st.caption("The following entries share the same date, description, and amount.")
                 display_cols = [c for c in ["date", "description", "amount", "balance"] if c in duplicate_hits.columns]
                 st.dataframe(duplicate_hits[display_cols], use_container_width=True)
@@ -483,7 +561,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
     if "is_rapid_repeat_transaction" in df.columns:
         rapid_repeat_hits = df[df["is_rapid_repeat_transaction"] == True].copy()
         if not rapid_repeat_hits.empty:
-            with st.expander(f"⚡ High Frequency Transactions ({len(rapid_repeat_hits)})"):
+            with st.expander(f"High freq transactions ({len(rapid_repeat_hits)})"):
                 st.caption("Transactions repeated to the same merchant within a short time window.")
                 display_cols = [c for c in ["date", "description", "credit", "debit", "repeat_days_in_window"] if c in rapid_repeat_hits.columns]
                 st.dataframe(rapid_repeat_hits[display_cols], use_container_width=True)
@@ -496,7 +574,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
                 axis=1
             )
-            with st.expander(f"🎯 Round-Number Transactions ({len(round_hits)})"):
+            with st.expander(f"Round-number transactions ({len(round_hits)})"):
                 st.caption("Transactions with round numbers (ending with .00 or .99).")
                 display_cols = [c for c in ["date", "description", "amount", "source_file"] if c in round_hits.columns]
                 st.dataframe(round_hits[display_cols], use_container_width=True)
@@ -505,71 +583,65 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
     if "is_high_value" in df.columns:
         high_hits = df[df["is_high_value"] == True].copy()
         if not high_hits.empty:
-            with st.expander(f"💰 High-Value Transactions (>= RM{high_value_threshold:,.2f}) ({len(high_hits)})"):
+            with st.expander(f"High-value transactions (>= RM{high_value_threshold:,.2f}) ({len(high_hits)})"):
                 display_cols = [c for c in ["date", "description", "credit", "balance"] if c in high_hits.columns]
                 st.dataframe(high_hits[display_cols], use_container_width=True)
-    
-    # Transaction spikes
-    if "is_transaction_spike" in df.columns:
-        spike_hits = df[df["is_transaction_spike"] == True].copy()
-        if not spike_hits.empty:
-            spike_hits["amount"] = spike_hits.apply(
-                lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
-                axis=1
-            )
-            with st.expander(f"📈 Transaction Spikes ({len(spike_hits)})"):
-                st.caption("Transactions significantly larger than recent median amounts.")
-                display_cols = [c for c in ["date", "description", "amount", "recent_median_amount", "amount_vs_recent_median"] if c in spike_hits.columns]
-                st.dataframe(spike_hits[display_cols], use_container_width=True)
-    
-    # Transaction drops
-    if "is_transaction_drop" in df.columns:
-        drop_hits = df[df["is_transaction_drop"] == True].copy()
-        if not drop_hits.empty:
-            drop_hits["amount"] = drop_hits.apply(
-                lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
-                axis=1
-            )
-            with st.expander(f"📉 Transaction Drops ({len(drop_hits)})"):
-                st.caption("Transactions significantly smaller than recent median amounts.")
-                display_cols = [c for c in ["date", "description", "amount", "recent_median_amount", "amount_vs_recent_median"] if c in drop_hits.columns]
-                st.dataframe(drop_hits[display_cols], use_container_width=True)
+
+
+def render_metric_cards(metrics: List[Tuple[str, object]], wide_metrics: List[Tuple[str, object]]) -> None:
+    cards = []
+    for label, value in metrics:
+        cards.append(
+            f"""
+            <div class="kl-metric-card">
+                <div class="kl-metric-label">{escape(str(label))}</div>
+                <div class="kl-metric-value">{escape(str(value))}</div>
+            </div>
+            """
+        )
+    for label, value in wide_metrics:
+        cards.append(
+            f"""
+            <div class="kl-metric-card kl-metric-card-wide">
+                <div class="kl-metric-label">{escape(str(label))}</div>
+                <div class="kl-metric-value">{escape(str(value))}</div>
+            </div>
+            """
+        )
+
+    st.markdown(
+        f"""
+        <div class="kl-metric-grid">
+            {''.join(cards)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -> None:
     """Render the transaction pattern overview dashboard"""
     pattern_summary = summarize_transaction_patterns(df)
     
-    st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
-    st.subheader("📊 Transactional Pattern Analysis")
     st.markdown(
-        '<div style="color: #94a3b8; margin-bottom: 1rem;">The story of the money and whether the financial behavior makes sense.</div>',
+        """
+        <div class="kl-analysis-title">📊 Transactional Pattern Analysis</div>
+        <div class="kl-analysis-subtitle">The story of the money and whether the financial behavior makes sense.</div>
+        """,
         unsafe_allow_html=True,
     )
     
     # Display summary metrics
     item_map = dict(pattern_summary.get("items", []))
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Transactions", item_map.get("Total Transactions", 0))
-    with col2:
-        st.metric("High-Value Flags", item_map.get("High-Value Flags", 0))
-    with col3:
-        st.metric("Round-Number Ratio", item_map.get("Round-Number Ratio", "0.0%"))
-    with col4:
-        st.metric("Repeated Transactions", item_map.get("Repeated", 0))
-    
-    col5, col6, col7 = st.columns(3)
-    with col5:
-        st.metric("High Frequency Flags", item_map.get("High Frequency Flags", 0))
-    with col6:
-        st.metric("Transaction Spikes", item_map.get("Transaction Spikes", 0))
-    with col7:
-        st.metric("Transaction Drops", item_map.get("Transaction Drops", 0))
-    
-    if pattern_summary.get("headline"):
-        st.write(pattern_summary["headline"])
+    render_metric_cards(
+        [
+            ("Transactions", item_map.get("Total Transactions", 0)),
+            ("High-Value Flags", item_map.get("High-Value Flags", 0)),
+            ("Round-Number Ratio", item_map.get("Round-Number Ratio", "0.0%")),
+            ("Repeated", item_map.get("Repeated", 0)),
+        ],
+        [("High Frequency Flags", item_map.get("High Frequency Flags", 0))],
+    )
     
     # Render detailed expandable sections
     render_pattern_details(df, high_value_threshold)
@@ -1436,7 +1508,6 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
 ) or (bank_choice == "CIMB Bank" and st.session_state.cimb_statement_totals) or (
     bank_choice == "RHB Bank" and st.session_state.rhb_statement_totals
 ):
-    st.subheader("📊 Extracted Transactions")
     high_value_threshold = get_high_value_threshold()
     
     # Convert results to DataFrame
@@ -1523,17 +1594,51 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
 
     df_download = df.copy() if not df.empty else pd.DataFrame([])
 
+    # Helper function to convert dataframe to JSON-serializable format
+    def make_json_serializable(obj):
+        """Recursively convert non-serializable objects to JSON-serializable format"""
+        if isinstance(obj, dict):
+            return {key: make_json_serializable(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [make_json_serializable(item) for item in obj]
+        elif isinstance(obj, pd.Timestamp):
+            return obj.isoformat()
+        elif isinstance(obj, pd.Period):
+            return str(obj)
+        elif pd.isna(obj):
+            return None
+        elif hasattr(obj, 'isoformat'):  # For datetime objects
+            return obj.isoformat()
+        else:
+            return obj
+
+    # Convert transactions to JSON-serializable format
+    if not df_download.empty:
+        json_records = df_download.to_dict(orient="records")
+        json_records = make_json_serializable(json_records)
+    else:
+        json_records = []
+
     with col1:
         st.download_button(
             "📄 Download Transactions (JSON)",
-            json.dumps(df_download.to_dict(orient="records"), indent=4),
+            json.dumps(json_records, indent=4),
             "transactions.json",
             "application/json",
         )
 
     with col2:
-        date_min = df_download["date"].min() if "date" in df_download.columns and not df_download.empty else None
-        date_max = df_download["date"].max() if "date" in df_download.columns and not df_download.empty else None
+        # Handle date conversion for display
+        if "date" in df_download.columns and not df_download.empty:
+            date_min = df_download["date"].min()
+            date_max = df_download["date"].max()
+            date_min_str = date_min.isoformat() if isinstance(date_min, pd.Timestamp) else str(date_min)
+            date_max_str = date_max.isoformat() if isinstance(date_max, pd.Timestamp) else str(date_max)
+            date_range_str = f"{date_min_str} to {date_max_str}"
+        else:
+            date_min_str = None
+            date_max_str = None
+            date_range_str = None
 
         total_files_processed = None
         if "source_file" in df_download.columns and not df_download.empty:
@@ -1556,19 +1661,25 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             {x for x in df_download.get("account_no", pd.Series([], dtype=object)).dropna().astype(str).tolist() if x.strip()}
         )
 
+        # Convert monthly_summary to JSON-serializable format
+        serializable_monthly_summary = make_json_serializable(monthly_summary)
+        
+        # Convert transaction_analysis_report to JSON-serializable format
+        serializable_transaction_analysis = make_json_serializable(transaction_analysis_report)
+
         full_report = {
             "summary": {
                 "total_transactions": int(len(df_download)),
-                "date_range": f"{date_min} to {date_max}" if date_min and date_max else None,
+                "date_range": date_range_str,
                 "total_files_processed": total_files_processed,
                 "company_names": company_names,
                 "account_nos": account_nos,
                 "high_value_threshold": high_value_threshold,
                 "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
-            "transaction_analysis": transaction_analysis_report,
-            "monthly_summary": monthly_summary,
-            "transactions": df_download.to_dict(orient="records"),
+            "transaction_analysis": serializable_transaction_analysis,
+            "monthly_summary": serializable_monthly_summary,
+            "transactions": json_records,
         }
 
         st.download_button(
