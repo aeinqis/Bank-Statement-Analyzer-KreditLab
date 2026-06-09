@@ -630,23 +630,23 @@ if uploaded_files and st.session_state.status == "running":
         progress_bar.progress((file_idx + 1) / total_files)
         files_finished = file_idx + 1
 
+        # Ensure progress bar shows 100% completion
+    progress_bar.progress(1.0)  # Force to 100%
+    
     if st.session_state.get("stop_requested"):
         st.session_state.status = "stopped"
-        progress_text.write(f"Stopped after {files_finished} of {total_files} file(s).")
+        progress_text.write(f"✅ Stopped after {files_finished} of {total_files} file(s).")
     elif processing_errors:
         st.session_state.status = "completed_with_errors"
         progress_text.write(
-            f"Finished with {len(processing_errors)} error(s). Extracted {total_extracted} transactions from {total_files} file(s)."
+            f"⚠️ Finished with {len(processing_errors)} error(s). Extracted {total_extracted} transactions from {total_files} file(s)."
         )
     else:
-        st.session_state.status = "completed"
-        progress_text.write(f"Finished. Extracted {total_extracted} transactions from {total_files} file(s).")
-    
-    # Clear progress indicators after completion
-    if st.session_state.status in ["completed", "completed_with_errors", "stopped"]:
-        progress_text.empty()
-        progress_bar.empty()
-
+        if st.session_state.status == "completed":
+            st.success(f"🎉 Successfully processed {total_files} file(s)!")
+        elif st.session_state.status == "completed_with_errors":
+            st.warning(f"⚠️ Processed with {len(processing_errors)} error(s)")
+            
     all_tx = dedupe_transactions(all_tx)
 
     # Stable ordering
