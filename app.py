@@ -278,6 +278,302 @@ if "file_company_name" not in st.session_state:
 if "file_account_no" not in st.session_state:
     st.session_state.file_account_no = {}
 
+
+# -----------------------------
+# Fraud/Pattern Analysis Functions
+# -----------------------------
+def normalize_text(text: str) -> str:
+    """Normalize text for comparison"""
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", str(text).strip().upper())
+
+
+def is_round_number(amount: float, tolerance: float = 0.01) -> bool:
+    """Check if amount is a round number (ends with .00 or .99)"""
+    if amount is None:
+        return False
+    decimal_part = abs(amount) % 1
+    return abs(decimal_part - 0.00) <= tolerance or abs(decimal_part - 0.99) <= tolerance
+
+
+def detect_duplicate_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """Detect duplicate transactions based on date, description, and amount"""
+    if df.empty:
+        return df
+    
+    df = df.copy()
+    df["duplicate_key"] = df.apply(
+        lambda row: (
+            row.get("date", ""),
+            normalize_text(row.get("description", "")),
+            row.get("credit", 0) if row.get("credit", 0) > 0 else row.get("debit", 0)
+        ),
+        axis=1
+    )
+    
+    duplicate_counts = df.groupby("duplicate_key").size().to_dict()
+    df["is_duplicate_transaction"] = df["duplicate_key"].map(lambda x: duplicate_counts.get(x, 0) > 1)
+    df["duplicate_count"] = df["duplicate_key"].map(lambda x: duplicate_counts.get(x, 0))
+    df.drop("duplicate_key", axis=1, inplace=True)
+    
+    return df
+
+
+def detect_rapid_repeat_transactions(df: pd.DataFrame, days_window: int = 30) -> pd.DataFrame:
+    """Detect transactions that repeat rapidly to the same party"""
+    if df.empty:
+        return df
+    
+    df = df.copy()
+    df["parsed_date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["normalized_description"] = df["description"].apply(normalize_text)
+    
+    df["is_rapid_repeat_transaction"] = False
+    df["repeat_days_in_window"] = 0
+    
+    for normalized_desc, group in df.groupby("normalized_description"):
+        if len(group) < 2:
+            continue
+        
+        group_sorted = group.sort_values("parsed_date")
+        dates = group_sorted["parsed_date"].values
+        
+        for i in range(len(dates)):
+            if i < len(dates) - 1:
+                days_diff = (dates[i + 1] - dates[i]).days
+                if days_diff <= days_window:
+                    idx = group_sorted.iloc[i].name
+                    df.loc[idx, "is_rapid_repeat_transaction"] = True
+                    df.loc[idx, "repeat_days_in_window"] = days_diff
+    
+    return df
+
+
+def detect_transaction_spikes(df: pd.DataFrame, window_days: int = 7, spike_multiplier: float = 3.0) -> pd.DataFrame:
+    """Detect transaction amount spikes compared to recent median"""
+    if df.empty:
+        return df
+    
+    df = df.copy()
+    df["parsed_date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.sort_values("parsed_date").reset_index(drop=True)
+    
+    df["amount"] = df.apply(
+        lambda row: row.get("credit", 0) if row.get("credit", 0) > 0 else row.get("debit", 0),
+        axis=1
+    )
+    
+    df["is_transaction_spike"] = False
+    df["is_transaction_drop"] = False
+    df["recent_median_amount"] = pd.NA
+    df["amount_vs_recent_median"] = pd.NA
+    
+    for i in range(window_days, len(df)):
+        window_start = max(0, i - window_days)
+        window_amounts = df.iloc[window_start:i]["amount"].tolist()
+        
+        if len(window_amounts) >= 3:
+            median_amount = pd.Series(window_amounts).median()
+            current_amount = df.iloc[i]["amount"]
+            
+            if median_amount > 0 and current_amount > median_amount * spike_multiplier:
+                df.loc[df.index[i], "is_transaction_spike"] = True
+                df.loc[df.index[i], "recent_median_amount"] = round(median_amount, 2)
+                df.loc[df.index[i], "amount_vs_recent_median"] = round(current_amount / median_amount, 2)
+            elif median_amount > 0 and current_amount < median_amount / spike_multiplier and current_amount > 0:
+                df.loc[df.index[i], "is_transaction_drop"] = True
+                df.loc[df.index[i], "recent_median_amount"] = round(median_amount, 2)
+                df.loc[df.index[i], "amount_vs_recent_median"] = round(current_amount / median_amount, 2)
+    
+    return df
+
+
+def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float, round_threshold: float = 0.30) -> Tuple[pd.DataFrame, bool, float]:
+    """Run all fraud/pattern detection checks on the transaction dataframe"""
+    if df.empty:
+        return df, False, 0.0
+    
+    df = df.copy()
+    
+    # High value detection
+    df["is_high_value"] = df["credit"].apply(lambda x: safe_float(x) >= high_value_threshold if x else False)
+    
+    # Round number detection
+    df["is_round"] = df.apply(
+        lambda row: is_round_number(row.get("credit", 0)) or is_round_number(row.get("debit", 0)),
+        axis=1
+    )
+    
+    # Duplicate detection
+    df = detect_duplicate_transactions(df)
+    
+    # Rapid repeat detection
+    df = detect_rapid_repeat_transactions(df)
+    
+    # Spike/drop detection
+    df = detect_transaction_spikes(df)
+    
+    # Calculate round number ratio
+    round_ratio = df["is_round"].mean() if not df.empty else 0.0
+    is_round_suspicious = round_ratio > round_threshold
+    
+    return df, is_round_suspicious, round_ratio
+
+
+def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
+    """Create summary of transaction patterns"""
+    if df.empty:
+        return {
+            "title": "Transactional Pattern Analysis",
+            "items": [],
+            "headline": "No transactions to analyze."
+        }
+    
+    high_value_count = int(df["is_high_value"].sum()) if "is_high_value" in df.columns else 0
+    duplicate_count = int(df["is_duplicate_transaction"].sum()) if "is_duplicate_transaction" in df.columns else 0
+    high_freq_count = int(df["is_rapid_repeat_transaction"].sum()) if "is_rapid_repeat_transaction" in df.columns else 0
+    spike_count = int(df["is_transaction_spike"].sum()) if "is_transaction_spike" in df.columns else 0
+    drop_count = int(df["is_transaction_drop"].sum()) if "is_transaction_drop" in df.columns else 0
+    
+    round_ratio = float(df["is_round"].mean()) if "is_round" in df.columns else 0.0
+    
+    total_transactions = len(df)
+    
+    headline = (
+        f"Analyzed {total_transactions} transactions. "
+        f"Found {high_value_count} high-value, {duplicate_count} duplicates, "
+        f"{high_freq_count} high-frequency, {spike_count} spikes, and {drop_count} drops."
+    )
+    
+    return {
+        "title": "Transactional Pattern Analysis",
+        "headline": headline,
+        "items": [
+            ("Total Transactions", total_transactions),
+            ("High-Value Flags", high_value_count),
+            ("Round-Number Ratio", f"{round_ratio:.1%}"),
+            ("Repeated", duplicate_count),
+            ("High Frequency Flags", high_freq_count),
+            ("Transaction Spikes", spike_count),
+            ("Transaction Drops", drop_count),
+        ],
+    }
+
+
+def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> None:
+    """Render expandable sections for each pattern type"""
+    st.markdown("#### Pattern Details")
+    
+    # Duplicate transactions
+    if "is_duplicate_transaction" in df.columns:
+        duplicate_hits = df[df["is_duplicate_transaction"] == True].copy()
+        if not duplicate_hits.empty:
+            duplicate_hits["amount"] = duplicate_hits.apply(
+                lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
+                axis=1
+            )
+            with st.expander(f"🔄 Repeated Transactions ({len(duplicate_hits)})"):
+                st.caption("The following entries share the same date, description, and amount.")
+                display_cols = [c for c in ["date", "description", "amount", "balance"] if c in duplicate_hits.columns]
+                st.dataframe(duplicate_hits[display_cols], use_container_width=True)
+    
+    # Rapid repeat transactions
+    if "is_rapid_repeat_transaction" in df.columns:
+        rapid_repeat_hits = df[df["is_rapid_repeat_transaction"] == True].copy()
+        if not rapid_repeat_hits.empty:
+            with st.expander(f"⚡ High Frequency Transactions ({len(rapid_repeat_hits)})"):
+                st.caption("Transactions repeated to the same merchant within a short time window.")
+                display_cols = [c for c in ["date", "description", "credit", "debit", "repeat_days_in_window"] if c in rapid_repeat_hits.columns]
+                st.dataframe(rapid_repeat_hits[display_cols], use_container_width=True)
+    
+    # Round number transactions
+    if "is_round" in df.columns:
+        round_hits = df[df["is_round"] == True].copy()
+        if not round_hits.empty:
+            round_hits["amount"] = round_hits.apply(
+                lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
+                axis=1
+            )
+            with st.expander(f"🎯 Round-Number Transactions ({len(round_hits)})"):
+                st.caption("Transactions with round numbers (ending with .00 or .99).")
+                display_cols = [c for c in ["date", "description", "amount", "source_file"] if c in round_hits.columns]
+                st.dataframe(round_hits[display_cols], use_container_width=True)
+    
+    # High value transactions
+    if "is_high_value" in df.columns:
+        high_hits = df[df["is_high_value"] == True].copy()
+        if not high_hits.empty:
+            with st.expander(f"💰 High-Value Transactions (>= RM{high_value_threshold:,.2f}) ({len(high_hits)})"):
+                display_cols = [c for c in ["date", "description", "credit", "balance"] if c in high_hits.columns]
+                st.dataframe(high_hits[display_cols], use_container_width=True)
+    
+    # Transaction spikes
+    if "is_transaction_spike" in df.columns:
+        spike_hits = df[df["is_transaction_spike"] == True].copy()
+        if not spike_hits.empty:
+            spike_hits["amount"] = spike_hits.apply(
+                lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
+                axis=1
+            )
+            with st.expander(f"📈 Transaction Spikes ({len(spike_hits)})"):
+                st.caption("Transactions significantly larger than recent median amounts.")
+                display_cols = [c for c in ["date", "description", "amount", "recent_median_amount", "amount_vs_recent_median"] if c in spike_hits.columns]
+                st.dataframe(spike_hits[display_cols], use_container_width=True)
+    
+    # Transaction drops
+    if "is_transaction_drop" in df.columns:
+        drop_hits = df[df["is_transaction_drop"] == True].copy()
+        if not drop_hits.empty:
+            drop_hits["amount"] = drop_hits.apply(
+                lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
+                axis=1
+            )
+            with st.expander(f"📉 Transaction Drops ({len(drop_hits)})"):
+                st.caption("Transactions significantly smaller than recent median amounts.")
+                display_cols = [c for c in ["date", "description", "amount", "recent_median_amount", "amount_vs_recent_median"] if c in drop_hits.columns]
+                st.dataframe(drop_hits[display_cols], use_container_width=True)
+
+
+def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -> None:
+    """Render the transaction pattern overview dashboard"""
+    pattern_summary = summarize_transaction_patterns(df)
+    
+    st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
+    st.subheader("📊 Transactional Pattern Analysis")
+    st.markdown(
+        '<div style="color: #94a3b8; margin-bottom: 1rem;">The story of the money and whether the financial behavior makes sense.</div>',
+        unsafe_allow_html=True,
+    )
+    
+    # Display summary metrics
+    item_map = dict(pattern_summary.get("items", []))
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Transactions", item_map.get("Total Transactions", 0))
+    with col2:
+        st.metric("High-Value Flags", item_map.get("High-Value Flags", 0))
+    with col3:
+        st.metric("Round-Number Ratio", item_map.get("Round-Number Ratio", "0.0%"))
+    with col4:
+        st.metric("Repeated Transactions", item_map.get("Repeated", 0))
+    
+    col5, col6, col7 = st.columns(3)
+    with col5:
+        st.metric("High Frequency Flags", item_map.get("High Frequency Flags", 0))
+    with col6:
+        st.metric("Transaction Spikes", item_map.get("Transaction Spikes", 0))
+    with col7:
+        st.metric("Transaction Drops", item_map.get("Transaction Drops", 0))
+    
+    if pattern_summary.get("headline"):
+        st.write(pattern_summary["headline"])
+    
+    # Render detailed expandable sections
+    render_pattern_details(df, high_value_threshold)
+
+
 def clear_processing_outputs() -> None:
     st.session_state.results = []
     st.session_state.affin_statement_totals = []
@@ -629,7 +925,7 @@ if uploaded_files and st.session_state.status == "running":
         files_finished = file_idx + 1
 
     # After all files are processed - set final progress and show completion
-    progress_bar.progress(1.0)  # Force to 100%
+    progress_bar.progress(1.0)
     
     # Display final status message
     if st.session_state.get("stop_requested"):
@@ -686,7 +982,7 @@ if uploaded_files and st.session_state.status == "running":
 
 
 # =========================================================
-# Monthly Summary Calculation (same logic, adds company_name)
+# Monthly Summary Calculation
 # =========================================================
 def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
     # Affin-only
@@ -1100,9 +1396,6 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
     return monthly_summary_sorted
 
 
-# =========================================================
-# Presentation-only Monthly Summary Standardization
-# =========================================================
 def present_monthly_summary_standard(rows: List[dict]) -> List[dict]:
     out = []
     for r in rows or []:
@@ -1144,16 +1437,22 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
 ):
     st.subheader("📊 Extracted Transactions")
     high_value_threshold = get_high_value_threshold()
-    for tx in st.session_state.results:
-        tx["high_value_credit"] = safe_float(tx.get("credit", 0)) >= high_value_threshold
-
+    
+    # Convert results to DataFrame
     df = pd.DataFrame(st.session_state.results) if st.session_state.results else pd.DataFrame()
-
+    
     if not df.empty:
-        # 1. Define the columns you want
+        # Run fraud/pattern checks
+        df, is_round_suspicious, round_ratio = run_fraud_checks(df, high_value_threshold)
+        
+        # Display transaction pattern overview
+        render_transaction_overview(df, high_value_threshold)
+        
+        # Display basic transaction table
+        st.markdown("#### All Transactions")
         requested_cols = ["date", "description", "debit", "credit", "balance"]
         display_cols = [c for c in requested_cols if c in df.columns]
-
+        
         st.dataframe(
             df[display_cols], 
             use_container_width=True,
@@ -1167,7 +1466,8 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         )
     else:
         st.info("No line-item transactions extracted.")
-
+    
+    # Original transaction analysis from existing code
     transaction_analysis_report = parse_top_parties_and_high_value(
         st.session_state.results,
         high_value_threshold=high_value_threshold,
@@ -1199,7 +1499,6 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         ]
         summary_df = summary_df[[c for c in desired_cols if c in summary_df.columns]]
         
-        # Display the monthly summary table with friendly headers
         st.dataframe(
             summary_df, 
             use_container_width=True,
@@ -1217,6 +1516,7 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
                 "source_files": "Source Files"
             }
         )
+    
     st.subheader("⬇️ Download Options")
     col1, col2, col3 = st.columns(3)
 
