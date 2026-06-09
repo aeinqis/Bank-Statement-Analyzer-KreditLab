@@ -1640,29 +1640,24 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
     df = pd.DataFrame(st.session_state.results) if st.session_state.results else pd.DataFrame()
 
     if not df.empty:
-        display_cols = [
-            "date",
-            "description",
-            "debit",
-            "credit",
-            "balance",
-           
-        ]
+        # 1. Define the columns you want
+        requested_cols = ["date", "description", "debit", "credit", "balance"]
+        
+        # 2. Safety check: Filter only columns that actually exist in the dataframe
+        display_cols = [c for c in requested_cols if c in df.columns]
 
+        # 3. Display ONLY ONE table with the configured column names
         st.dataframe(
             df[display_cols], 
             use_container_width=True,
             column_config={
-                "date": "Transaction Date",
-                "description": "Description",
-                "debit": "Debit (RM)",
-                "credit": "Credit (RM)",
-                "balance": "Running Balance"
+                "date": st.column_config.TextColumn("Transaction Date", alignment="center"),
+                "description": st.column_config.TextColumn("Description", alignment="center"),
+                "debit": st.column_config.NumberColumn("Debit (RM)", alignment="center"),
+                "credit": st.column_config.NumberColumn("Credit (RM)", alignment="center"),
+                "balance": st.column_config.NumberColumn("Running Balance", alignment="center")
             }
         )
-        
-        display_cols = [c for c in display_cols if c in df.columns]
-        st.dataframe(df[display_cols], use_container_width=True)
     else:
         st.info("No line-item transactions extracted.")
 
