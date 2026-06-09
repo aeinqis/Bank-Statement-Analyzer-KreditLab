@@ -429,49 +429,10 @@ def detect_rapid_repeat_transactions(df: pd.DataFrame, days_window: int = 30) ->
     return df
 
 
-def detect_transaction_spikes(df: pd.DataFrame, window_days: int = 7, spike_multiplier: float = 3.0) -> pd.DataFrame:
-    """Detect transaction amount spikes compared to recent median"""
-    if df.empty:
-        return df
-    
-    df = df.copy()
-    df["parsed_date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df.sort_values("parsed_date").reset_index(drop=True)
-    
-    df["amount"] = df.apply(
-        lambda row: row.get("credit", 0) if row.get("credit", 0) > 0 else row.get("debit", 0),
-        axis=1
-    )
-    
-    df["is_transaction_spike"] = False
-    df["is_transaction_drop"] = False
-    df["recent_median_amount"] = pd.NA
-    df["amount_vs_recent_median"] = pd.NA
-    
-    for i in range(window_days, len(df)):
-        window_start = max(0, i - window_days)
-        window_amounts = df.iloc[window_start:i]["amount"].tolist()
-        
-        if len(window_amounts) >= 3:
-            median_amount = pd.Series(window_amounts).median()
-            current_amount = df.iloc[i]["amount"]
-            
-            if median_amount > 0 and current_amount > median_amount * spike_multiplier:
-                df.loc[df.index[i], "is_transaction_spike"] = True
-                df.loc[df.index[i], "recent_median_amount"] = round(median_amount, 2)
-                df.loc[df.index[i], "amount_vs_recent_median"] = round(current_amount / median_amount, 2)
-            elif median_amount > 0 and current_amount < median_amount / spike_multiplier and current_amount > 0:
-                df.loc[df.index[i], "is_transaction_drop"] = True
-                df.loc[df.index[i], "recent_median_amount"] = round(median_amount, 2)
-                df.loc[df.index[i], "amount_vs_recent_median"] = round(current_amount / median_amount, 2)
-    
-    return df
-
-
-def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float, round_threshold: float = 0.30) -> Tuple[pd.DataFrame, bool, float]:
+def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float) -> pd.DataFrame:
     """Run all fraud/pattern detection checks on the transaction dataframe"""
     if df.empty:
-        return df, False, 0.0
+        return df
     
     df = df.copy()
     
@@ -489,15 +450,8 @@ def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float, round_thresh
     
     # Rapid repeat detection
     df = detect_rapid_repeat_transactions(df)
-    
-    # Spike/drop detection
-    df = detect_transaction_spikes(df)
-    
-    # Calculate round number ratio
-    round_ratio = df["is_round"].mean() if not df.empty else 0.0
-    is_round_suspicious = round_ratio > round_threshold
-    
-    return df, is_round_suspicious, round_ratio
+
+    return df
 
 
 def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
@@ -512,17 +466,14 @@ def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
     high_value_count = int(df["is_high_value"].sum()) if "is_high_value" in df.columns else 0
     duplicate_count = int(df["is_duplicate_transaction"].sum()) if "is_duplicate_transaction" in df.columns else 0
     high_freq_count = int(df["is_rapid_repeat_transaction"].sum()) if "is_rapid_repeat_transaction" in df.columns else 0
-    spike_count = int(df["is_transaction_spike"].sum()) if "is_transaction_spike" in df.columns else 0
-    drop_count = int(df["is_transaction_drop"].sum()) if "is_transaction_drop" in df.columns else 0
-    
-    round_ratio = float(df["is_round"].mean()) if "is_round" in df.columns else 0.0
+    round_count = int(df["is_round"].sum()) if "is_round" in df.columns else 0
     
     total_transactions = len(df)
     
     headline = (
         f"Analyzed {total_transactions} transactions. "
         f"Found {high_value_count} high-value, {duplicate_count} duplicates, "
-        f"{high_freq_count} high-frequency, {spike_count} spikes, and {drop_count} drops."
+        f"{high_freq_count} high-frequency, and {round_count} round-number transactions."
     )
     
     return {
@@ -531,11 +482,9 @@ def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
         "items": [
             ("Total Transactions", total_transactions),
             ("High-Value Flags", high_value_count),
-            ("Round-Number Ratio", f"{round_ratio:.1%}"),
+            ("Round-Number", round_count),
             ("Repeated", duplicate_count),
             ("High Frequency Flags", high_freq_count),
-            ("Transaction Spikes", spike_count),
-            ("Transaction Drops", drop_count),
         ],
     }
 
@@ -592,30 +541,21 @@ def render_metric_cards(metrics: List[Tuple[str, object]], wide_metrics: List[Tu
     cards = []
     for label, value in metrics:
         cards.append(
-            f"""
-            <div class="kl-metric-card">
-                <div class="kl-metric-label">{escape(str(label))}</div>
-                <div class="kl-metric-value">{escape(str(value))}</div>
-            </div>
-            """
+            '<div class="kl-metric-card">'
+            f'<div class="kl-metric-label">{escape(str(label))}</div>'
+            f'<div class="kl-metric-value">{escape(str(value))}</div>'
+            "</div>"
         )
     for label, value in wide_metrics:
         cards.append(
-            f"""
-            <div class="kl-metric-card kl-metric-card-wide">
-                <div class="kl-metric-label">{escape(str(label))}</div>
-                <div class="kl-metric-value">{escape(str(value))}</div>
-            </div>
-            """
+            '<div class="kl-metric-card kl-metric-card-wide">'
+            f'<div class="kl-metric-label">{escape(str(label))}</div>'
+            f'<div class="kl-metric-value">{escape(str(value))}</div>'
+            "</div>"
         )
 
-    st.markdown(
-        f"""
-        <div class="kl-metric-grid">
-            {''.join(cards)}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.html(
+        f'<div class="kl-metric-grid">{"".join(cards)}</div>',
     )
 
 
@@ -623,12 +563,9 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     """Render the transaction pattern overview dashboard"""
     pattern_summary = summarize_transaction_patterns(df)
     
-    st.markdown(
-        """
-        <div class="kl-analysis-title">📊 Transactional Pattern Analysis</div>
-        <div class="kl-analysis-subtitle">The story of the money and whether the financial behavior makes sense.</div>
-        """,
-        unsafe_allow_html=True,
+    st.html(
+        '<div class="kl-analysis-title">📊 Transactional Pattern Analysis</div>'
+        '<div class="kl-analysis-subtitle">The story of the money and whether the financial behavior makes sense.</div>',
     )
     
     # Display summary metrics
@@ -637,7 +574,7 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
         [
             ("Transactions", item_map.get("Total Transactions", 0)),
             ("High-Value Flags", item_map.get("High-Value Flags", 0)),
-            ("Round-Number Ratio", item_map.get("Round-Number Ratio", "0.0%")),
+            ("Round-Number", item_map.get("Round-Number", 0)),
             ("Repeated", item_map.get("Repeated", 0)),
         ],
         [("High Frequency Flags", item_map.get("High Frequency Flags", 0))],
@@ -1515,7 +1452,7 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
     
     if not df.empty:
         # Run fraud/pattern checks
-        df, is_round_suspicious, round_ratio = run_fraud_checks(df, high_value_threshold)
+        df = run_fraud_checks(df, high_value_threshold)
         
         # Display transaction pattern overview
         render_transaction_overview(df, high_value_threshold)
