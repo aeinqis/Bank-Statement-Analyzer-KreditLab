@@ -499,8 +499,6 @@ if st.session_state.validation_toast_message:
     st.toast(st.session_state.validation_toast_message)
     st.session_state.validation_toast_message = ""
 
-# Removed status_box and render_status calls
-
 all_tx: List[dict] = []
 
 if uploaded_files and st.session_state.status == "running":
@@ -630,23 +628,25 @@ if uploaded_files and st.session_state.status == "running":
         progress_bar.progress((file_idx + 1) / total_files)
         files_finished = file_idx + 1
 
-        # Ensure progress bar shows 100% completion
+    # After all files are processed - set final progress and show completion
     progress_bar.progress(1.0)  # Force to 100%
     
+    # Display final status message
     if st.session_state.get("stop_requested"):
         st.session_state.status = "stopped"
         progress_text.write(f"✅ Stopped after {files_finished} of {total_files} file(s).")
+        st.warning(f"⚠️ Processing stopped at {files_finished} of {total_files} files.")
     elif processing_errors:
         st.session_state.status = "completed_with_errors"
         progress_text.write(
             f"⚠️ Finished with {len(processing_errors)} error(s). Extracted {total_extracted} transactions from {total_files} file(s)."
         )
+        st.warning(f"⚠️ Completed with {len(processing_errors)} error(s). Check the errors above.")
     else:
-        if st.session_state.status == "completed":
-            st.success(f"🎉 Successfully processed {total_files} file(s)!")
-        elif st.session_state.status == "completed_with_errors":
-            st.warning(f"⚠️ Processed with {len(processing_errors)} error(s)")
-            
+        st.session_state.status = "completed"
+        progress_text.write(f"✅ Completed! Extracted {total_extracted} transactions from {total_files} file(s).")
+        st.success(f"🎉 Successfully processed all {total_files} file(s)!")
+    
     all_tx = dedupe_transactions(all_tx)
 
     # Stable ordering
