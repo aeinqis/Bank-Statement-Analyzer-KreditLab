@@ -501,7 +501,6 @@ def compute_epf_payments(df: pd.DataFrame) -> Tuple[int, float]:
         r"\bKARIM\s+JASMINE\s+EPF\b",
         r"\bEPF\s+KARIM\b",
         r"\bKWSP\s+KARIM\b",
-        r"\bPERTUBUHAN\s+KESELAMATAN\s+SOSIAL\b",  # SOCSO (but keep separate)
     ]
     
     pattern = re.compile("|".join(epf_patterns), re.IGNORECASE)
