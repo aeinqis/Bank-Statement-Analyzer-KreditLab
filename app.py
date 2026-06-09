@@ -483,6 +483,185 @@ def detect_rapid_repeat_transactions(df: pd.DataFrame, days_window: int = 30) ->
     return df
 
 
+# -----------------------------
+# Statutory Payment Detection Functions
+# -----------------------------
+def compute_epf_payments(df: pd.DataFrame) -> Tuple[int, float]:
+    """
+    Detect EPF / KWSP contributions from transaction descriptions.
+    Returns: (count, total_amount)
+    """
+    if df.empty:
+        return 0, 0.0
+    
+    epf_patterns = [
+        r"\bEPF\b",
+        r"\bKWSP\b",
+        r"\bKUMPULAN\s+WANG\s+SIMPANAN\s+PEKERJA\b",
+        r"\bKARIM\s+JASMINE\s+EPF\b",
+        r"\bEPF\s+KARIM\b",
+        r"\bKWSP\s+KARIM\b",
+        r"\bPERTUBUHAN\s+KESELAMATAN\s+SOSIAL\b",  # SOCSO (but keep separate)
+    ]
+    
+    pattern = re.compile("|".join(epf_patterns), re.IGNORECASE)
+    
+    epf_mask = df["description"].astype(str).apply(lambda x: bool(pattern.search(x)))
+    
+    # Filter out SOCSO which might match some patterns
+    socso_pattern = re.compile(r"\b(SOCSO|PERKESO|EIS|SIP)\b", re.IGNORECASE)
+    socso_mask = df["description"].astype(str).apply(lambda x: bool(socso_pattern.search(x)))
+    
+    # EPF should not be SOCSO
+    epf_mask = epf_mask & ~socso_mask
+    
+    epf_df = df[epf_mask].copy()
+    
+    # Get amounts (debit/credit - contributions are usually debits/outflows)
+    epf_df["amount"] = epf_df.apply(
+        lambda row: row.get("debit", 0) if row.get("debit", 0) > 0 else row.get("credit", 0),
+        axis=1
+    )
+    
+    total_amount = epf_df["amount"].sum()
+    count = len(epf_df)
+    
+    # Also add flags to dataframe for detailed view
+    if "is_epf_payment" not in df.columns:
+        df["is_epf_payment"] = False
+    df.loc[epf_mask, "is_epf_payment"] = True
+    df.loc[epf_mask, "epf_amount"] = epf_df["amount"]
+    
+    return count, total_amount
+
+
+def compute_socso_payments(df: pd.DataFrame) -> Tuple[int, float]:
+    """
+    Detect SOCSO / PERKESO / EIS contributions from transaction descriptions.
+    Returns: (count, total_amount)
+    """
+    if df.empty:
+        return 0, 0.0
+    
+    socso_patterns = [
+        r"\bSOCSO\b",
+        r"\bPERKESO\b",
+        r"\bEIS\b",
+        r"\bSIP\b",
+        r"\bPERTUBUHAN\s+KESELAMATAN\s+SOSIAL\b",
+        r"\bPERKESO\s+SOCSO\b",
+    ]
+    
+    pattern = re.compile("|".join(socso_patterns), re.IGNORECASE)
+    
+    socso_mask = df["description"].astype(str).apply(lambda x: bool(pattern.search(x)))
+    
+    socso_df = df[socso_mask].copy()
+    
+    # Get amounts (debit/credit - contributions are usually debits/outflows)
+    socso_df["amount"] = socso_df.apply(
+        lambda row: row.get("debit", 0) if row.get("debit", 0) > 0 else row.get("credit", 0),
+        axis=1
+    )
+    
+    total_amount = socso_df["amount"].sum()
+    count = len(socso_df)
+    
+    # Add flags to dataframe for detailed view
+    if "is_socso_payment" not in df.columns:
+        df["is_socso_payment"] = False
+    df.loc[socso_mask, "is_socso_payment"] = True
+    df.loc[socso_mask, "socso_amount"] = socso_df["amount"]
+    
+    return count, total_amount
+
+
+def compute_lhdn_tax_payments(df: pd.DataFrame) -> Tuple[int, float]:
+    """
+    Detect LHDN / tax payments from transaction descriptions.
+    Returns: (count, total_amount)
+    """
+    if df.empty:
+        return 0, 0.0
+    
+    lhdn_patterns = [
+        r"\bLHDN\b",
+        r"\bLEMBAGA\s+HASIL\s+DALAM\s+NEGERI\b",
+        r"\bINLAND\s+REVENUE\b",
+        r"\bTAX\s+PAYMENT\b",
+        r"\bPCB\b",
+        r"\bPOTONGAN\s+CUKAI\s+BULANAN\b",
+        r"\bCUKAI\s+PENDAPATAN\b",
+        r"\bINCOME\s+TAX\b",
+        r"\bHASIL\s+DALAM\s+NEGERI\b",
+    ]
+    
+    pattern = re.compile("|".join(lhdn_patterns), re.IGNORECASE)
+    
+    lhdn_mask = df["description"].astype(str).apply(lambda x: bool(pattern.search(x)))
+    
+    lhdn_df = df[lhdn_mask].copy()
+    
+    # Get amounts (debit/credit - tax payments are usually debits/outflows)
+    lhdn_df["amount"] = lhdn_df.apply(
+        lambda row: row.get("debit", 0) if row.get("debit", 0) > 0 else row.get("credit", 0),
+        axis=1
+    )
+    
+    total_amount = lhdn_df["amount"].sum()
+    count = len(lhdn_df)
+    
+    # Add flags to dataframe for detailed view
+    if "is_lhdn_payment" not in df.columns:
+        df["is_lhdn_payment"] = False
+    df.loc[lhdn_mask, "is_lhdn_payment"] = True
+    df.loc[lhdn_mask, "lhdn_amount"] = lhdn_df["amount"]
+    
+    return count, total_amount
+
+
+def compute_hrdf_payments(df: pd.DataFrame) -> Tuple[int, float]:
+    """
+    Detect HRDF / PSMB levy payments from transaction descriptions.
+    Returns: (count, total_amount)
+    """
+    if df.empty:
+        return 0, 0.0
+    
+    hrdf_patterns = [
+        r"\bHRDF\b",
+        r"\bPSMB\b",
+        r"\bPEMBANGUNAN\s+SUMBER\s+MANUSIA\b",
+        r"\bHUMAN\s+RESOURCE\s+DEVELOPMENT\b",
+        r"\bLEVY\s+HRDF\b",
+        r"\bHRD\s+CORP\b",
+        r"\bHRD\s+CORPORATION\b",
+    ]
+    
+    pattern = re.compile("|".join(hrdf_patterns), re.IGNORECASE)
+    
+    hrdf_mask = df["description"].astype(str).apply(lambda x: bool(pattern.search(x)))
+    
+    hrdf_df = df[hrdf_mask].copy()
+    
+    # Get amounts (debit/credit - levies are usually debits/outflows)
+    hrdf_df["amount"] = hrdf_df.apply(
+        lambda row: row.get("debit", 0) if row.get("debit", 0) > 0 else row.get("credit", 0),
+        axis=1
+    )
+    
+    total_amount = hrdf_df["amount"].sum()
+    count = len(hrdf_df)
+    
+    # Add flags to dataframe for detailed view
+    if "is_hrdf_payment" not in df.columns:
+        df["is_hrdf_payment"] = False
+    df.loc[hrdf_mask, "is_hrdf_payment"] = True
+    df.loc[hrdf_mask, "hrdf_amount"] = hrdf_df["amount"]
+    
+    return count, total_amount
+
+
 def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float) -> pd.DataFrame:
     """Run all fraud/pattern detection checks on the transaction dataframe"""
     if df.empty:
@@ -504,12 +683,18 @@ def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float) -> pd.DataFr
     
     # Rapid repeat detection
     df = detect_rapid_repeat_transactions(df)
+    
+    # Statutory payment detections
+    compute_epf_payments(df)
+    compute_socso_payments(df)
+    compute_lhdn_tax_payments(df)
+    compute_hrdf_payments(df)
 
     return df
 
 
 def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
-    """Create summary of transaction patterns"""
+    """Create summary of transaction patterns including statutory payments"""
     if df.empty:
         return {
             "title": "Transactional Pattern Analysis",
@@ -522,12 +707,20 @@ def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
     high_freq_count = int(df["is_rapid_repeat_transaction"].sum()) if "is_rapid_repeat_transaction" in df.columns else 0
     round_count = int(df["is_round"].sum()) if "is_round" in df.columns else 0
     
+    # Statutory payment counts
+    epf_count, epf_total = compute_epf_payments(df)
+    socso_count, socso_total = compute_socso_payments(df)
+    lhdn_count, lhdn_total = compute_lhdn_tax_payments(df)
+    hrdf_count, hrdf_total = compute_hrdf_payments(df)
+    
     total_transactions = len(df)
     
     headline = (
         f"Analyzed {total_transactions} transactions. "
         f"Found {high_value_count} high-value, {duplicate_count} duplicates, "
-        f"{high_freq_count} high-frequency, and {round_count} round-number transactions."
+        f"{high_freq_count} high-frequency, and {round_count} round-number transactions. "
+        f"Statutory payments: EPF ({epf_count}), SOCSO ({socso_count}), "
+        f"LHDN ({lhdn_count}), HRDF ({hrdf_count})."
     )
     
     return {
@@ -539,6 +732,12 @@ def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
             ("Round-Number", round_count),
             ("Repeated", duplicate_count),
             ("High Frequency Flags", high_freq_count),
+        ],
+        "statutory_items": [
+            ("EPF / KWSP", epf_count, f"RM {epf_total:,.2f}"),
+            ("SOCSO / PERKESO", socso_count, f"RM {socso_total:,.2f}"),
+            ("LHDN / Tax", lhdn_count, f"RM {lhdn_total:,.2f}"),
+            ("HRDF / PSMB", hrdf_count, f"RM {hrdf_total:,.2f}"),
         ],
     }
 
@@ -589,9 +788,67 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
             with st.expander(f"High-value transactions (>= RM{high_value_threshold:,.2f}) ({len(high_hits)})"):
                 display_cols = [c for c in ["date", "description", "credit", "balance"] if c in high_hits.columns]
                 st.dataframe(high_hits[display_cols], use_container_width=True)
+    
+    # Statutory payments sections
+    epf_count, epf_total = compute_epf_payments(df)
+    socso_count, socso_total = compute_socso_payments(df)
+    lhdn_count, lhdn_total = compute_lhdn_tax_payments(df)
+    hrdf_count, hrdf_total = compute_hrdf_payments(df)
+    
+    # EPF Payments
+    if epf_count > 0:
+        epf_hits = df[df["is_epf_payment"] == True].copy() if "is_epf_payment" in df.columns else pd.DataFrame()
+        if not epf_hits.empty:
+            epf_hits["amount"] = epf_hits.apply(
+                lambda row: f"-{row['debit']:,.2f}" if row.get('debit', 0) > 0 else f"+{row['credit']:,.2f}",
+                axis=1
+            )
+            with st.expander(f"🏦 EPF / KWSP Contributions ({epf_count} payments, RM {epf_total:,.2f})"):
+                st.caption("Employee Provident Fund (EPF) / KWSP contributions detected.")
+                display_cols = [c for c in ["date", "description", "amount"] if c in epf_hits.columns]
+                st.dataframe(epf_hits[display_cols], use_container_width=True)
+    
+    # SOCSO Payments
+    if socso_count > 0:
+        socso_hits = df[df["is_socso_payment"] == True].copy() if "is_socso_payment" in df.columns else pd.DataFrame()
+        if not socso_hits.empty:
+            socso_hits["amount"] = socso_hits.apply(
+                lambda row: f"-{row['debit']:,.2f}" if row.get('debit', 0) > 0 else f"+{row['credit']:,.2f}",
+                axis=1
+            )
+            with st.expander(f"🛡️ SOCSO / PERKESO Contributions ({socso_count} payments, RM {socso_total:,.2f})"):
+                st.caption("Social Security Organization (SOCSO/PERKESO) contributions including EIS/SIP.")
+                display_cols = [c for c in ["date", "description", "amount"] if c in socso_hits.columns]
+                st.dataframe(socso_hits[display_cols], use_container_width=True)
+    
+    # LHDN/Tax Payments
+    if lhdn_count > 0:
+        lhdn_hits = df[df["is_lhdn_payment"] == True].copy() if "is_lhdn_payment" in df.columns else pd.DataFrame()
+        if not lhdn_hits.empty:
+            lhdn_hits["amount"] = lhdn_hits.apply(
+                lambda row: f"-{row['debit']:,.2f}" if row.get('debit', 0) > 0 else f"+{row['credit']:,.2f}",
+                axis=1
+            )
+            with st.expander(f"📋 LHDN / Tax Payments ({lhdn_count} payments, RM {lhdn_total:,.2f})"):
+                st.caption("Inland Revenue Board (LHDN) / Income tax payments detected.")
+                display_cols = [c for c in ["date", "description", "amount"] if c in lhdn_hits.columns]
+                st.dataframe(lhdn_hits[display_cols], use_container_width=True)
+    
+    # HRDF Payments
+    if hrdf_count > 0:
+        hrdf_hits = df[df["is_hrdf_payment"] == True].copy() if "is_hrdf_payment" in df.columns else pd.DataFrame()
+        if not hrdf_hits.empty:
+            hrdf_hits["amount"] = hrdf_hits.apply(
+                lambda row: f"-{row['debit']:,.2f}" if row.get('debit', 0) > 0 else f"+{row['credit']:,.2f}",
+                axis=1
+            )
+            with st.expander(f"🎓 HRDF / PSMB Levies ({hrdf_count} payments, RM {hrdf_total:,.2f})"):
+                st.caption("Human Resource Development Fund (HRDF/PSMB) levy payments detected.")
+                display_cols = [c for c in ["date", "description", "amount"] if c in hrdf_hits.columns]
+                st.dataframe(hrdf_hits[display_cols], use_container_width=True)
 
 
-def render_metric_cards(metrics: List[Tuple[str, object]], wide_metrics: List[Tuple[str, object]]) -> None:
+def render_metric_cards(metrics: List[Tuple[str, object]], wide_metrics: List[Tuple[str, object]], statutory_metrics: List[Tuple[str, int, str]] = None) -> None:
     cards = []
     for label, value in metrics:
         cards.append(
@@ -607,6 +864,17 @@ def render_metric_cards(metrics: List[Tuple[str, object]], wide_metrics: List[Tu
             f'<div class="kl-metric-value">{escape(str(value))}</div>'
             "</div>"
         )
+    
+    # Add statutory payment cards
+    if statutory_metrics:
+        for label, count, total in statutory_metrics:
+            cards.append(
+                '<div class="kl-metric-card">'
+                f'<div class="kl-metric-label">{escape(str(label))}</div>'
+                f'<div class="kl-metric-value">{count}</div>'
+                f'<div style="font-size: 0.85rem; color: #A9C1DD; margin-top: 0.35rem;">{escape(str(total))}</div>'
+                "</div>"
+            )
 
     st.html(
         f'<div class="kl-metric-grid">{"".join(cards)}</div>',
@@ -625,6 +893,8 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     
     # Display summary metrics
     item_map = dict(pattern_summary.get("items", []))
+    statutory_items = pattern_summary.get("statutory_items", [])
+    
     render_metric_cards(
         [
             ("Transactions", item_map.get("Total Transactions", 0)),
@@ -633,6 +903,7 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
             ("Repeated", item_map.get("Repeated", 0)),
         ],
         [("High Frequency Flags", item_map.get("High Frequency Flags", 0))],
+        statutory_metrics=statutory_items if statutory_items else None,
     )
     
     # Render detailed expandable sections
