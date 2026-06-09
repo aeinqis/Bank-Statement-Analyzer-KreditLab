@@ -252,6 +252,9 @@ if "high_value_threshold_error" not in st.session_state:
 if "bank_choice_error" not in st.session_state:
     st.session_state.bank_choice_error = ""
 
+if "validation_toast_message" not in st.session_state:
+    st.session_state.validation_toast_message = ""
+
 if "active_high_value_threshold" not in st.session_state:
     st.session_state.active_high_value_threshold = None
 
@@ -297,6 +300,7 @@ def parse_high_value_threshold() -> Tuple[Optional[float], Optional[str]]:
 
 def clear_high_value_threshold_error() -> None:
     st.session_state.high_value_threshold_error = ""
+    st.session_state.validation_toast_message = ""
 
 
 def validate_bank_choice() -> Optional[str]:
@@ -308,6 +312,7 @@ def validate_bank_choice() -> Optional[str]:
 
 def clear_bank_choice_error() -> None:
     st.session_state.bank_choice_error = ""
+    st.session_state.validation_toast_message = ""
 
 
 def start_processing() -> None:
@@ -318,9 +323,12 @@ def start_processing() -> None:
     st.session_state.bank_choice_error = bank_choice_error or ""
 
     if threshold_error or bank_choice_error:
+        validation_messages = [msg for msg in (bank_choice_error, threshold_error) if msg]
+        st.session_state.validation_toast_message = " ".join(validation_messages)
         st.session_state.status = "idle"
         return
 
+    st.session_state.validation_toast_message = ""
     st.session_state.active_high_value_threshold = threshold
     st.session_state.stop_requested = False
     st.session_state.status = "running"
@@ -343,6 +351,7 @@ def reset_app_inputs() -> None:
     st.session_state.high_value_threshold_input = ""
     st.session_state.high_value_threshold_error = ""
     st.session_state.bank_choice_error = ""
+    st.session_state.validation_toast_message = ""
     st.session_state.active_high_value_threshold = None
     st.session_state.upload_widget_reset_id += 1
     if "bank_choice" in st.session_state and "PARSERS" in globals():
@@ -935,16 +944,9 @@ with button_col3:
         on_click=reset_app_inputs,
     )
 
-validation_messages = [
-    msg
-    for msg in (
-        st.session_state.bank_choice_error,
-        st.session_state.high_value_threshold_error,
-    )
-    if msg
-]
-if validation_messages:
-    st.error(" ".join(validation_messages))
+if st.session_state.validation_toast_message:
+    st.toast(st.session_state.validation_toast_message)
+    st.session_state.validation_toast_message = ""
 
 status_box = st.empty()
 render_status(status_box)
