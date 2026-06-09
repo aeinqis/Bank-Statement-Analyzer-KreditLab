@@ -1641,11 +1641,12 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
 
     if not df.empty:
         display_cols = [
-            "Date",
-            "Description",
-            "Debit",
-            "Credit",
-            "Balance",
+            "date",
+            "description",
+            "debit",
+            "credit",
+            "balance",
+           
         ]
         display_cols = [c for c in display_cols if c in df.columns]
         st.dataframe(df[display_cols], use_container_width=True)
@@ -1669,17 +1670,17 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         st.subheader("📅 Monthly Summary (Standardized)")
         summary_df = pd.DataFrame(monthly_summary)
         desired_cols = [
-            "Month",
-            "Company Name",
-            "Account No",
-            "Opening Balance",
-            "Total Debit",
-            "Total Credit",
-            "Highest Balance",
-            "Lowest Balance",
-            "Swing",
-            "Ending Balance",
-            "Source Files",
+            "month",
+            "company_name",
+            "account_no",
+            "opening_balance",
+            "total_debit",
+            "total_credit",
+            "highest_balance",
+            "lowest_balance",
+            "swing",
+            "ending_balance",
+            "source_files",
         ]
         summary_df = summary_df[[c for c in desired_cols if c in summary_df.columns]]
         st.dataframe(summary_df, use_container_width=True)
