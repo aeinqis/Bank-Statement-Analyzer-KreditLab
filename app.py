@@ -327,9 +327,14 @@ if st.session_state.bank_choice_error:
     st.markdown(
         """
         <style>
-        div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
             border-color: #F04438 !important;
             box-shadow: 0 0 0 1px rgba(240, 68, 56, 0.72) !important;
+            border-radius: 8px !important;
+        }
+
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover {
+            border-color: #F04438 !important;
         }
 
         div[data-testid="stSelectbox"] label,
@@ -854,7 +859,7 @@ bank_choice = st.selectbox(
     list(PARSERS.keys()),
     index=None,
     key="bank_choice",
-    placeholder="Select bank format",
+    placeholder="Choose the bank for the uploaded statement(s)",
     on_change=clear_bank_choice_error,
 )
 
