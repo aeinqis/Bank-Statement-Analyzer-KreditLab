@@ -198,6 +198,9 @@ if "high_value_threshold_input" not in st.session_state:
 if "high_value_threshold_error" not in st.session_state:
     st.session_state.high_value_threshold_error = ""
 
+if "bank_choice_error" not in st.session_state:
+    st.session_state.bank_choice_error = ""
+
 if "active_high_value_threshold" not in st.session_state:
     st.session_state.active_high_value_threshold = None
 
@@ -245,14 +248,28 @@ def clear_high_value_threshold_error() -> None:
     st.session_state.high_value_threshold_error = ""
 
 
+def validate_bank_choice() -> Optional[str]:
+    bank_choice_value = st.session_state.get("bank_choice")
+    if not bank_choice_value:
+        return "Please select the bank format."
+    return None
+
+
+def clear_bank_choice_error() -> None:
+    st.session_state.bank_choice_error = ""
+
+
 def start_processing() -> None:
     threshold, threshold_error = parse_high_value_threshold()
-    if threshold_error:
-        st.session_state.high_value_threshold_error = threshold_error
+    bank_choice_error = validate_bank_choice()
+
+    st.session_state.high_value_threshold_error = threshold_error or ""
+    st.session_state.bank_choice_error = bank_choice_error or ""
+
+    if threshold_error or bank_choice_error:
         st.session_state.status = "idle"
         return
 
-    st.session_state.high_value_threshold_error = ""
     st.session_state.active_high_value_threshold = threshold
     st.session_state.stop_requested = False
     st.session_state.status = "running"
@@ -274,10 +291,11 @@ def reset_app_inputs() -> None:
     st.session_state.company_account_no_override = ""
     st.session_state.high_value_threshold_input = ""
     st.session_state.high_value_threshold_error = ""
+    st.session_state.bank_choice_error = ""
     st.session_state.active_high_value_threshold = None
     st.session_state.upload_widget_reset_id += 1
     if "bank_choice" in st.session_state and "PARSERS" in globals():
-        st.session_state.bank_choice = list(PARSERS.keys())[0]
+        st.session_state.bank_choice = None
 
 
 def render_status(container) -> None:
@@ -304,6 +322,24 @@ def get_high_value_threshold() -> float:
         return float(active_threshold)
     return 0.0
 
+
+if st.session_state.bank_choice_error:
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+            border-color: #F04438 !important;
+            box-shadow: 0 0 0 1px rgba(240, 68, 56, 0.72) !important;
+        }
+
+        div[data-testid="stSelectbox"] label,
+        div[data-testid="stSelectbox"] p {
+            color: #FDA29B !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 if st.session_state.high_value_threshold_error:
     st.markdown(
@@ -810,7 +846,17 @@ PARSERS: Dict[str, Callable[[bytes, str], List[dict]]] = {
 }
 
 
-bank_choice = st.selectbox("Select Bank Format", list(PARSERS.keys()), key="bank_choice")
+if "bank_choice" not in st.session_state:
+    st.session_state.bank_choice = None
+
+bank_choice = st.selectbox(
+    "Select Bank Format",
+    list(PARSERS.keys()),
+    index=None,
+    key="bank_choice",
+    placeholder="Select bank format",
+    on_change=clear_bank_choice_error,
+)
 
 uploaded_files = st.file_uploader(
     "Upload PDF files",
@@ -834,8 +880,6 @@ with input_col3:
         help="Required. Credits equal to or above this amount are flagged as high value.",
         on_change=clear_high_value_threshold_error,
     )
-    if st.session_state.high_value_threshold_error:
-        st.error(st.session_state.high_value_threshold_error)
 
 # Detect encrypted files
 encrypted_files: List[str] = []
@@ -877,6 +921,17 @@ with button_col3:
         use_container_width=True,
         on_click=reset_app_inputs,
     )
+
+validation_messages = [
+    msg
+    for msg in (
+        st.session_state.bank_choice_error,
+        st.session_state.high_value_threshold_error,
+    )
+    if msg
+]
+if validation_messages:
+    st.error(" ".join(validation_messages))
 
 status_box = st.empty()
 render_status(status_box)
@@ -1667,5 +1722,10 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         )
 
 else:
-    if uploaded_files and st.session_state.status == "idle" and not st.session_state.high_value_threshold_error:
+    if (
+        uploaded_files
+        and st.session_state.status == "idle"
+        and not st.session_state.high_value_threshold_error
+        and not st.session_state.bank_choice_error
+    ):
         st.warning("⚠️ No transactions found — click **Start Processing**.")
