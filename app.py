@@ -1648,6 +1648,19 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             "balance",
            
         ]
+
+        st.dataframe(
+            df[display_cols], 
+            use_container_width=True,
+            column_config={
+                "date": "Transaction Date",
+                "description": "Description",
+                "debit": "Debit (RM)",
+                "credit": "Credit (RM)",
+                "balance": "Running Balance"
+            }
+        )
+        
         display_cols = [c for c in display_cols if c in df.columns]
         st.dataframe(df[display_cols], use_container_width=True)
     else:
