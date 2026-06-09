@@ -1520,7 +1520,7 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
 
         monthly_summary.append(
             {
-                "Month": period,
+                "month": period,
                 "company_name": company_name,
                 "account_no": account_no,
                 "transaction_count": int(len(group_sorted)),
@@ -1608,17 +1608,17 @@ def present_monthly_summary_standard(rows: List[dict]) -> List[dict]:
 
         out.append(
             {
-                "Month": r.get("month"),
-                "Company Name": r.get("company_name"),
-                "Account No": r.get("account_no"),
-                "Opening Balance": r.get("opening_balance"),
-                "Total Debit": r.get("total_debit"),
-                "Total Credit": r.get("total_credit"),
-                "Highest Balance": highest,
-                "Lowest Balance": lowest,
-                "Swing": swing,
-                "Ending Balance": r.get("ending_balance"),
-                "Source Files": r.get("source_files"),
+                "month": r.get("month"),
+                "company_name": r.get("company_name"),
+                "account_no": r.get("account_no"),
+                "opening_balance": r.get("opening_balance"),
+                "total_debit": r.get("total_debit"),
+                "total_credit": r.get("total_credit"),
+                "highest_balance": highest,
+                "lowest_balance": lowest,
+                "swing": swing,
+                "ending_balance": r.get("ending_balance"),
+                "source_files": r.get("source_files"),
             }
         )
     return out
@@ -1641,11 +1641,11 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
 
     if not df.empty:
         display_cols = [
-            "date",
-            "description",
-            "debit",
-            "credit",
-            "balance",
+            "Date",
+            "Description",
+            "Debit",
+            "Credit",
+            "Balance",
         ]
         display_cols = [c for c in display_cols if c in df.columns]
         st.dataframe(df[display_cols], use_container_width=True)
@@ -1669,17 +1669,17 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         st.subheader("📅 Monthly Summary (Standardized)")
         summary_df = pd.DataFrame(monthly_summary)
         desired_cols = [
-            "month",
-            "company_name",
-            "account_no",
-            "opening_balance",
-            "total_debit",
-            "total_credit",
-            "highest_balance",
-            "lowest_balance",
-            "swing",
-            "ending_balance",
-            "source_files",
+            "Month",
+            "Company Name",
+            "Account No",
+            "Opening Balance",
+            "Total Debit",
+            "Total Credit",
+            "Highest Balance",
+            "Lowest Balance",
+            "Swing",
+            "Ending Balance",
+            "Source Files",
         ]
         summary_df = summary_df[[c for c in desired_cols if c in summary_df.columns]]
         st.dataframe(summary_df, use_container_width=True)
