@@ -74,6 +74,53 @@ st.markdown(
         margin-top: -0.25rem;
     }
 
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+        min-height: 3.35rem !important;
+        align-items: center !important;
+        padding-left: 0.95rem !important;
+        border-radius: 8px !important;
+    }
+
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
+        font-size: 1rem !important;
+        font-weight: 600 !important;
+        line-height: 1.35 !important;
+    }
+
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
+        font-size: 1rem !important;
+        font-weight: 600 !important;
+        line-height: 1.35 !important;
+    }
+
+    div[data-testid="stSelectbox"] [data-baseweb="tag"] {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+    }
+
+    div[data-testid="stSelectbox"] svg {
+        width: 1rem;
+        height: 1rem;
+    }
+
+    div[role="listbox"] {
+        padding: 0.4rem !important;
+        border: 1px solid #374151 !important;
+        border-radius: 10px !important;
+        background: #0B0F16 !important;
+    }
+
+    div[role="option"] {
+        min-height: 2.65rem !important;
+        padding: 0.6rem 0.75rem !important;
+        border-radius: 7px !important;
+        font-size: 0.98rem !important;
+        font-weight: 600 !important;
+        display: flex !important;
+        align-items: center !important;
+    }
+
     [data-testid="stWidgetLabel"] label,
     [data-testid="stWidgetLabel"] p,
     [data-testid="stFileUploader"] label {
