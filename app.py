@@ -102,6 +102,12 @@ st.markdown(
         transform: translateY(-1px);
     }
 
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+    div[data-testid="stTextInput"] div[data-baseweb="input"] {
+        min-height: 3rem;
+        box-sizing: border-box;
+    }
+
     div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button {
         border-color: #B42318 !important;
         background: #B42318 !important;
@@ -140,6 +146,51 @@ st.markdown(
             transform: rotate(360deg);
         }
     }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+validation_css_parts = []
+if st.session_state.get("bank_choice_error"):
+    validation_css_parts.append(
+        """
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            border-color: #F04438 !important;
+            box-shadow: inset 0 0 0 1px rgba(240, 68, 56, 0.72) !important;
+            border-radius: 8px !important;
+            box-sizing: border-box !important;
+        }
+
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover {
+            border-color: #F04438 !important;
+        }
+
+        div[data-testid="stSelectbox"] label,
+        div[data-testid="stSelectbox"] p {
+            color: #FDA29B !important;
+        }
+        """
+    )
+if st.session_state.get("high_value_threshold_error"):
+    validation_css_parts.append(
+        """
+        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) div[data-baseweb="input"] {
+            border-color: #F04438 !important;
+            box-shadow: inset 0 0 0 1px rgba(240, 68, 56, 0.72) !important;
+            box-sizing: border-box !important;
+        }
+
+        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) label,
+        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) p {
+            color: #FDA29B !important;
+        }
+        """
+    )
+st.markdown(
+    f"""
+    <style>
+    {''.join(validation_css_parts)}
     </style>
     """,
     unsafe_allow_html=True,
@@ -321,49 +372,6 @@ def get_high_value_threshold() -> float:
     if active_threshold is not None:
         return float(active_threshold)
     return 0.0
-
-
-if st.session_state.bank_choice_error:
-    st.markdown(
-        """
-        <style>
-        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-            border-color: #F04438 !important;
-            box-shadow: 0 0 0 1px rgba(240, 68, 56, 0.72) !important;
-            border-radius: 8px !important;
-        }
-
-        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover {
-            border-color: #F04438 !important;
-        }
-
-        div[data-testid="stSelectbox"] label,
-        div[data-testid="stSelectbox"] p {
-            color: #FDA29B !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-if st.session_state.high_value_threshold_error:
-    st.markdown(
-        """
-        <style>
-        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) div[data-baseweb="input"],
-        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) input {
-            border-color: #F04438 !important;
-            box-shadow: 0 0 0 1px rgba(240, 68, 56, 0.72) !important;
-        }
-
-        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) label,
-        div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) p {
-            color: #FDA29B !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
