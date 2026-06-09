@@ -153,32 +153,6 @@ st.markdown(
         background: rgba(239, 68, 68, 0.14) !important;
         transform: translateY(1px);
     }
-
-    .kl-status {
-        display: flex;
-        align-items: center;
-        gap: 0.55rem;
-        margin: 0.5rem 0 1rem;
-    }
-
-    .kl-status h3 {
-        margin: 0;
-    }
-
-    .kl-spinner {
-        width: 1rem;
-        height: 1rem;
-        border: 2px solid rgba(204, 204, 204, 0.35);
-        border-top-color: var(--kl-accent-hover);
-        border-radius: 50%;
-        animation: kl-spin 780ms linear infinite;
-    }
-
-    @keyframes kl-spin {
-        to {
-            transform: rotate(360deg);
-        }
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -392,20 +366,6 @@ def reset_app_inputs() -> None:
         st.session_state.bank_choice = None
 
 
-def render_status(container) -> None:
-    status_label = str(st.session_state.status).replace("_", " ").upper()
-    status_spinner = '<span class="kl-spinner"></span>' if st.session_state.status == "running" else ""
-    container.markdown(
-        f"""
-        <div class="kl-status">
-            {status_spinner}
-            <h3>Status: {status_label}</h3>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def get_high_value_threshold() -> float:
     threshold, threshold_error = parse_high_value_threshold()
     if not threshold_error and threshold is not None:
@@ -539,9 +499,7 @@ if st.session_state.validation_toast_message:
     st.toast(st.session_state.validation_toast_message)
     st.session_state.validation_toast_message = ""
 
-status_box = st.empty()
-render_status(status_box)
-
+# Removed status_box and render_status calls
 
 all_tx: List[dict] = []
 
@@ -565,19 +523,17 @@ if uploaded_files and st.session_state.status == "running":
 
         current_file = file_idx + 1
         progress_bar.progress(file_idx / total_files)
-        progress_text.write(f"File {current_file} of {total_files}: loading {uploaded_file.name}")
+        progress_text.write(f"Processing {current_file} of {total_files}: {uploaded_file.name}")
 
         try:
             pdf_bytes = uploaded_file.getvalue()
 
             # decrypt if encrypted
             if is_pdf_encrypted(pdf_bytes):
-                progress_text.write(f"File {current_file} of {total_files}: decrypting {uploaded_file.name}")
+                progress_text.write(f"Decrypting {uploaded_file.name}...")
                 pdf_bytes = decrypt_pdf_bytes(pdf_bytes, st.session_state.pdf_password)
 
-            progress_text.write(f"File {current_file} of {total_files}: reading statement details")
-
-            # extract company name (FIXED)
+            # extract company name
             company_name = None
             try:
                 with bytes_to_pdfplumber(pdf_bytes) as meta_pdf:
@@ -585,7 +541,7 @@ if uploaded_files and st.session_state.status == "running":
             except Exception:
                 company_name = None
 
-            # extract account number (NEW)
+            # extract account number
             account_no = None
             try:
                 with bytes_to_pdfplumber(pdf_bytes) as meta_pdf:
@@ -602,9 +558,7 @@ if uploaded_files and st.session_state.status == "running":
             st.session_state.file_company_name[uploaded_file.name] = company_name
             st.session_state.file_account_no[uploaded_file.name] = account_no
 
-            progress_text.write(f"File {current_file} of {total_files}: parsing transactions")
-
-            # Parse transactions (existing logic)
+            # Parse transactions
             if bank_choice == "Affin Bank":
                 with bytes_to_pdfplumber(pdf_bytes) as pdf:
                     totals = extract_affin_statement_totals(pdf, uploaded_file.name)
@@ -639,8 +593,6 @@ if uploaded_files and st.session_state.status == "running":
             else:
                 tx_raw = parser(pdf_bytes, uploaded_file.name) or []
 
-            progress_text.write(f"File {current_file} of {total_files}: normalizing transactions")
-
             # Normalize then attach company_name
             tx_norm = normalize_transactions(
                 tx_raw,
@@ -665,15 +617,13 @@ if uploaded_files and st.session_state.status == "running":
             if tx_norm:
                 all_tx.extend(tx_norm)
                 total_extracted += len(tx_norm)
-                progress_text.write(
-                    f"File {current_file} of {total_files}: extracted {len(tx_norm)} transactions from {uploaded_file.name}"
-                )
+                progress_text.write(f"✓ {uploaded_file.name}: {len(tx_norm)} transactions extracted")
             else:
-                progress_text.write(f"File {current_file} of {total_files}: no transactions found in {uploaded_file.name}")
+                progress_text.write(f"⚠ {uploaded_file.name}: No transactions found")
 
         except Exception as e:
             processing_errors.append(uploaded_file.name)
-            progress_text.write(f"File {current_file} of {total_files}: error processing {uploaded_file.name}")
+            progress_text.write(f"✗ Error processing {uploaded_file.name}: {str(e)[:100]}")
             st.error(f"❌ Error processing {uploaded_file.name}: {e}")
             st.exception(e)
 
@@ -691,7 +641,11 @@ if uploaded_files and st.session_state.status == "running":
     else:
         st.session_state.status = "completed"
         progress_text.write(f"Finished. Extracted {total_extracted} transactions from {total_files} file(s).")
-    render_status(status_box)
+    
+    # Clear progress indicators after completion
+    if st.session_state.status in ["completed", "completed_with_errors", "stopped"]:
+        progress_text.empty()
+        progress_bar.empty()
 
     all_tx = dedupe_transactions(all_tx)
 
