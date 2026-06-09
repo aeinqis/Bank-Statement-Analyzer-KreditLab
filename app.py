@@ -1640,27 +1640,25 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
     df = pd.DataFrame(st.session_state.results) if st.session_state.results else pd.DataFrame()
 
     if not df.empty:
-
+        # 1. Inject the header alignment CSS securely
         st.markdown(
             """
             <style>
             .stDataFrame div[role="columnheader"] p {
                 text-align: center !important;
                 justify-content: center !important;
-                display: flex;
+                display: flex !important;
             }
             </style>
             """,
-            unsafe_html=True
+            unsafe_allow_html=True
         )
-        
-        # 1. Define the columns you want
+
+        # 2. Define the columns you want
         requested_cols = ["date", "description", "debit", "credit", "balance"]
-        
-        # 2. Safety check: Filter only columns that actually exist in the dataframe
         display_cols = [c for c in requested_cols if c in df.columns]
 
-        # 3. Display ONLY ONE table with the configured column names
+        # 3. Render table (Titles will be centered by CSS, content follows defaults)
         st.dataframe(
             df[display_cols], 
             use_container_width=True,
