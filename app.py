@@ -112,13 +112,20 @@ st.markdown(
     }
 
     div[role="option"] {
-        min-height: 2.65rem !important;
-        padding: 0.6rem 0.75rem !important;
+        min-height: 2.9rem !important;
+        padding: 0.7rem 0.85rem !important;
         border-radius: 7px !important;
-        font-size: 0.98rem !important;
-        font-weight: 600 !important;
+        color: #E5E7EB !important;
+        font-size: 1.05rem !important;
+        font-weight: 700 !important;
         display: flex !important;
         align-items: center !important;
+    }
+
+    div[role="option"]:hover,
+    div[aria-selected="true"] {
+        background: #2D3340 !important;
+        color: #FFFFFF !important;
     }
 
     [data-testid="stWidgetLabel"] label,
