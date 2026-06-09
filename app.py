@@ -43,7 +43,7 @@ st.markdown(
     '<h1>📄 Bank Statement Parser (Multi-File Support)</h1>',
     unsafe_allow_html=True,
 )
-st.caption("Upload and analyze bank statements for compliance and integrity checks.")
+st.write("Upload one or more bank statement PDFs to extract transactions.")
 
 DEFAULT_HIGH_VALUE_THRESHOLD = 100_000.00
 
@@ -64,28 +64,7 @@ st.markdown(
     [data-testid="stWidgetLabel"] p,
     [data-testid="stFileUploader"] label {
         color: var(--kl-label);
-        font-size: 0.875rem;
         font-weight: 600;
-        margin-bottom: 0.375rem;
-    }
-
-    [data-testid="stFileUploaderDropzone"] {
-        border: 2px dashed #4B5563;
-        background: #111827;
-        border-radius: 12px;
-        padding: 1.25rem;
-    }
-
-    [data-testid="stFileUploaderDropzone"]:hover {
-        border-color: rgba(0, 120, 212, 0.7);
-    }
-
-    .stSelectbox,
-    .stTextInput,
-    .stNumberInput,
-    div[data-baseweb="input"],
-    div[data-baseweb="select"] > div {
-        border-radius: 8px !important;
     }
 
     div.stButton > button[kind="primary"] {
@@ -123,14 +102,14 @@ st.markdown(
         transform: translateY(-1px);
     }
 
-    div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button {
+    div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button {
         border-color: #B42318 !important;
         background: #B42318 !important;
         color: #FFFFFF !important;
         box-shadow: 0 8px 18px rgba(180, 35, 24, 0.18);
     }
 
-    div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button:hover {
+    div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button:hover {
         border-color: #D92D20 !important;
         background: #D92D20 !important;
         box-shadow: 0 10px 24px rgba(217, 45, 32, 0.24);
@@ -875,30 +854,30 @@ PARSERS: Dict[str, Callable[[bytes, str], List[dict]]] = {
 if "bank_choice" not in st.session_state:
     st.session_state.bank_choice = None
 
-config_col, workspace_col = st.columns([1, 2], gap="large")
+bank_choice = st.selectbox(
+    "Select Bank Format",
+    list(PARSERS.keys()),
+    index=None,
+    key="bank_choice",
+    placeholder="Choose the bank for the uploaded statement(s)",
+    on_change=clear_bank_choice_error,
+)
 
-with config_col:
-    st.subheader("Configuration")
+uploaded_files = st.file_uploader(
+    "Upload PDF files",
+    type=["pdf"],
+    accept_multiple_files=True,
+    key=f"pdf_upload_{st.session_state.upload_widget_reset_id}",
+)
+if uploaded_files:
+    uploaded_files = sorted(uploaded_files, key=lambda x: x.name)
 
-    bank_choice = st.selectbox(
-        "Select Bank Format",
-        list(PARSERS.keys()),
-        index=None,
-        key="bank_choice",
-        placeholder="Choose the bank for the uploaded statement(s)",
-        on_change=clear_bank_choice_error,
-    )
-
-    st.text_input(
-        "Company Name (optional override)",
-        key="company_name_override",
-        placeholder="Optional override",
-    )
-    st.text_input(
-        "Company Account No. (optional override)",
-        key="company_account_no_override",
-        placeholder="Optional override",
-    )
+input_col1, input_col2, input_col3 = st.columns([1.2, 1.0, 0.8])
+with input_col1:
+    st.text_input("Company Name (optional override)", key="company_name_override")
+with input_col2:
+    st.text_input("Company Account No. (optional override)", key="company_account_no_override")
+with input_col3:
     st.text_input(
         "High Value Threshold (RM)",
         key="high_value_threshold_input",
@@ -907,70 +886,57 @@ with config_col:
         on_change=clear_high_value_threshold_error,
     )
 
-with workspace_col:
-    st.subheader("File Workspace")
-
-    with st.container(border=True):
-        uploaded_files = st.file_uploader(
-            "Upload PDF files",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key=f"pdf_upload_{st.session_state.upload_widget_reset_id}",
-            help="PDF format only",
-        )
-    if uploaded_files:
-        uploaded_files = sorted(uploaded_files, key=lambda x: x.name)
-
-    # Detect encrypted files
-    encrypted_files: List[str] = []
-    if uploaded_files:
-        for uf in uploaded_files:
-            try:
-                if is_pdf_encrypted(uf.getvalue()):
-                    encrypted_files.append(uf.name)
-            except Exception:
+# Detect encrypted files
+encrypted_files: List[str] = []
+if uploaded_files:
+    for uf in uploaded_files:
+        try:
+            if is_pdf_encrypted(uf.getvalue()):
                 encrypted_files.append(uf.name)
+        except Exception:
+            encrypted_files.append(uf.name)
 
-        if encrypted_files:
-            st.warning(
-                "🔒 Encrypted PDF(s) detected. Enter the password once and it will be used for all encrypted files:\n\n"
-                + "\n".join([f"- {n}" for n in encrypted_files])
-            )
-            st.text_input("PDF Password", type="password", key="pdf_password")
-
-    button_col1, button_col2, button_col3 = st.columns([2.0, 0.9, 1.0])
-    with button_col1:
-        st.button(
-            "Start Processing",
-            type="primary",
-            use_container_width=True,
-            on_click=start_processing,
+    if encrypted_files:
+        st.warning(
+            "🔒 Encrypted PDF(s) detected. Enter the password once and it will be used for all encrypted files:\n\n"
+            + "\n".join([f"- {n}" for n in encrypted_files])
         )
+        st.text_input("PDF Password", type="password", key="pdf_password")
 
-    with button_col2:
-        st.button(
-            "Stop",
-            use_container_width=True,
-            on_click=stop_processing,
-        )
 
-    with button_col3:
-        st.button(
-            "Reset",
-            use_container_width=True,
-            on_click=reset_app_inputs,
-        )
+button_col1, button_col2, button_col3 = st.columns([2.0, 0.9, 1.0])
+with button_col1:
+    st.button(
+        "Start Processing",
+        type="primary",
+        use_container_width=True,
+        on_click=start_processing,
+    )
 
-    validation_messages = [
-        msg
-        for msg in (
-            st.session_state.bank_choice_error,
-            st.session_state.high_value_threshold_error,
-        )
-        if msg
-    ]
-    if validation_messages:
-        st.error(" ".join(validation_messages))
+with button_col2:
+    st.button(
+        "Stop",
+        use_container_width=True,
+        on_click=stop_processing,
+    )
+
+with button_col3:
+    st.button(
+        "Reset",
+        use_container_width=True,
+        on_click=reset_app_inputs,
+    )
+
+validation_messages = [
+    msg
+    for msg in (
+        st.session_state.bank_choice_error,
+        st.session_state.high_value_threshold_error,
+    )
+    if msg
+]
+if validation_messages:
+    st.error(" ".join(validation_messages))
 
 status_box = st.empty()
 render_status(status_box)
