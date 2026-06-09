@@ -208,7 +208,7 @@ if st.session_state.get("high_value_threshold_error"):
     validation_css_parts.append(
         """
         div[data-testid="stTextInput"]:has(input[aria-label="High Value Threshold (RM)"]) div[data-baseweb="input"] {
-            border: 1px solid #F04438 !important;
+            border: 2px solid #F04438 !important;
             box-shadow: inset 0 0 0 1px #F04438 !important;
             border-radius: 8px !important;
             box-sizing: border-box !important;
@@ -1520,7 +1520,7 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
 
         monthly_summary.append(
             {
-                "month": period,
+                "Month": period,
                 "company_name": company_name,
                 "account_no": account_no,
                 "transaction_count": int(len(group_sorted)),
@@ -1608,17 +1608,17 @@ def present_monthly_summary_standard(rows: List[dict]) -> List[dict]:
 
         out.append(
             {
-                "month": r.get("month"),
-                "company_name": r.get("company_name"),
-                "account_no": r.get("account_no"),
-                "opening_balance": r.get("opening_balance"),
-                "total_debit": r.get("total_debit"),
-                "total_credit": r.get("total_credit"),
-                "highest_balance": highest,
-                "lowest_balance": lowest,
-                "swing": swing,
-                "ending_balance": r.get("ending_balance"),
-                "source_files": r.get("source_files"),
+                "Month": r.get("month"),
+                "Company Name": r.get("company_name"),
+                "Account No": r.get("account_no"),
+                "Opening Balance": r.get("opening_balance"),
+                "Total Debit": r.get("total_debit"),
+                "Total Credit": r.get("total_credit"),
+                "Highest Balance": highest,
+                "Lowest Balance": lowest,
+                "Swing": swing,
+                "Ending Balance": r.get("ending_balance"),
+                "Source Files": r.get("source_files"),
             }
         )
     return out
@@ -1646,13 +1646,6 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             "debit",
             "credit",
             "balance",
-            "high_value_credit",
-            "company_name",
-            "account_no",
-            "page",
-            "seq",
-            "bank",
-            "source_file",
         ]
         display_cols = [c for c in display_cols if c in df.columns]
         st.dataframe(df[display_cols], use_container_width=True)
