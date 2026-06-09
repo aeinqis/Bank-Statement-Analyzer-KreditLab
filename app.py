@@ -561,7 +561,8 @@ def render_metric_cards(metrics: List[Tuple[str, object]], wide_metrics: List[Tu
 
 def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -> None:
     """Render the transaction pattern overview dashboard"""
-    pattern_summary = summarize_transaction_patterns(df)
+    analysis_df = filter_statement_transactions_df(df)
+    pattern_summary = summarize_transaction_patterns(analysis_df)
     
     st.html(
         '<div class="kl-analysis-title">📊 Transactional Pattern Analysis</div>'
@@ -581,7 +582,7 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     )
     
     # Render detailed expandable sections
-    render_pattern_details(df, high_value_threshold)
+    render_pattern_details(analysis_df, high_value_threshold)
 
 
 def clear_processing_outputs() -> None:
@@ -994,6 +995,45 @@ if uploaded_files and st.session_state.status == "running":
 # =========================================================
 # Monthly Summary Calculation
 # =========================================================
+BALANCE_MARKER_PATTERNS = [
+    r"\bOPENING\s+BAL(?:ANCE)?\b",
+    r"\bCLOSING\s+BAL(?:ANCE)?\b",
+    r"\bBEGINNING\s+BAL(?:ANCE)?\b",
+    r"\bENDING\s+BAL(?:ANCE)?\b",
+    r"\bBALANCE\s+B\/F\b",
+    r"\bBALANCE\s+C\/F\b",
+    r"\bB\/F\s+BALANCE\b",
+    r"\bC\/F\s+BALANCE\b",
+    r"\bBROUGHT\s+FORWARD\b",
+    r"\bCARRIED\s+FORWARD\b",
+    r"\bBAKI\s+AWAL\b",
+    r"\bBAKI\s+AKHIR\b",
+    r"\bBAKI\s+PEMBUKA\b",
+    r"\bBAKI\s+PENUTUP\b",
+    r"\bBAKI\s+B\/B\b",
+    r"\bBAKI\s+C\/F\b",
+]
+
+
+def is_balance_marker_transaction(tx: dict) -> bool:
+    desc = normalize_text(tx.get("description", ""))
+    return any(re.search(pattern, desc, flags=re.IGNORECASE) for pattern in BALANCE_MARKER_PATTERNS)
+
+
+def count_statement_transactions(transactions: List[dict]) -> int:
+    return sum(1 for tx in transactions if not is_balance_marker_transaction(tx))
+
+
+def filter_statement_transactions_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    mask = [
+        not is_balance_marker_transaction(tx)
+        for tx in df.to_dict(orient="records")
+    ]
+    return df.loc[mask].copy()
+
+
 def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
     # Affin-only
     if bank_choice == "Affin Bank" and st.session_state.affin_statement_totals:
@@ -1016,7 +1056,7 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
             ending_balance = round(float(safe_float(ending)), 2) if ending is not None else None
 
             txs = st.session_state.affin_file_transactions.get(fname, []) if fname else []
-            tx_count = int(len(txs)) if txs else None
+            tx_count = count_statement_transactions(txs) if txs else None
 
             balances: List[float] = []
             for x in txs:
@@ -1082,7 +1122,7 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
             ending_balance = round(float(safe_float(ending)), 2) if ending is not None else None
 
             txs = st.session_state.ambank_file_transactions.get(fname, []) if fname else []
-            tx_count = int(len(txs)) if txs else None
+            tx_count = count_statement_transactions(txs) if txs else None
 
             balances: List[float] = []
             for x in txs:
@@ -1149,7 +1189,7 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
                     opening_balance = round(float(ending_balance - (tc - td)), 2)
 
             txs = st.session_state.cimb_file_transactions.get(fname, []) if fname else []
-            tx_count = int(len(txs)) if txs else None
+            tx_count = count_statement_transactions(txs) if txs else None
 
             balances: List[float] = []
             for x in txs:
@@ -1207,7 +1247,7 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
             ending_balance = round(float(safe_float(ending)), 2) if ending is not None else None
 
             txs = st.session_state.rhb_file_transactions.get(fname, []) if fname else []
-            tx_count = int(len(txs)) if txs else None
+            tx_count = count_statement_transactions(txs) if txs else None
 
             balances: List[float] = []
             for x in txs:
@@ -1339,7 +1379,13 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
                 "month": period,
                 "company_name": company_name,
                 "account_no": account_no,
-                "transaction_count": int(len(group_sorted)),
+                "transaction_count": int(
+                    sum(
+                        1
+                        for tx in group_sorted.to_dict(orient="records")
+                        if not is_balance_marker_transaction(tx)
+                    )
+                ),
                 "opening_balance": None,
                 "total_debit": round(float(group_sorted["debit"].sum()), 2),
                 "total_credit": round(float(group_sorted["credit"].sum()), 2),
