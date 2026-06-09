@@ -1642,11 +1642,12 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
     if not df.empty:
         # 1. Define the columns you want
         requested_cols = ["date", "description", "debit", "credit", "balance"]
-        
-        # 2. Safety check: Filter only columns that actually exist in the dataframe
         display_cols = [c for c in requested_cols if c in df.columns]
 
-        # 3. Display ONLY ONE table with the configured column names
+        # Create a display copy and shift the index to start from 1
+        df_display = df[display_cols].copy()
+        df_display.index = df_display.index + 1
+
         st.dataframe(
             df[display_cols], 
             use_container_width=True,
@@ -1691,6 +1692,10 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             "source_files",
         ]
         summary_df = summary_df[[c for c in desired_cols if c in summary_df.columns]]
+        
+        # Create a display copy and shift the index to start from 1
+        summary_display = summary_df.copy()
+        summary_display.index = summary_display.index + 1
         
         # Display the monthly summary table with friendly headers
         st.dataframe(
