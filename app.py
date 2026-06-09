@@ -45,7 +45,6 @@ st.markdown(
 )
 st.write("Upload one or more bank statement PDFs to extract transactions.")
 
-DEFAULT_HIGH_VALUE_THRESHOLD = 100_000.00
 
 st.markdown(
     """
@@ -144,7 +143,7 @@ st.markdown(
     div[data-testid="stHorizontalBlock"] > div:nth-child(2) div.stButton > button:hover {
         border-color: #EF4444 !important;
         background: rgba(239, 68, 68, 0.08) !important;
-        color: #FCA5A5 !important;
+        color: #C4B5FD !important;
         box-shadow: 0 8px 18px rgba(239, 68, 68, 0.16) !important;
     }
 
