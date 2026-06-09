@@ -1640,6 +1640,20 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
     df = pd.DataFrame(st.session_state.results) if st.session_state.results else pd.DataFrame()
 
     if not df.empty:
+
+        st.markdown(
+            """
+            <style>
+            .stDataFrame div[role="columnheader"] p {
+                text-align: center !important;
+                justify-content: center !important;
+                display: flex;
+            }
+            </style>
+            """,
+            unsafe_html=True
+        )
+        
         # 1. Define the columns you want
         requested_cols = ["date", "description", "debit", "credit", "balance"]
         
@@ -1651,11 +1665,11 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             df[display_cols], 
             use_container_width=True,
             column_config={
-                "date": st.column_config.TextColumn("Transaction Date", alignment="center"),
-                "description": st.column_config.TextColumn("Description", alignment="center"),
-                "debit": st.column_config.NumberColumn("Debit (RM)", alignment="center"),
-                "credit": st.column_config.NumberColumn("Credit (RM)", alignment="center"),
-                "balance": st.column_config.NumberColumn("Running Balance", alignment="center")
+                "date": "Transaction Date",
+                "description": "Description",
+                "debit": "Debit (RM)",
+                "credit": "Credit (RM)",
+                "balance": "Running Balance"
             }
         )
     else:
