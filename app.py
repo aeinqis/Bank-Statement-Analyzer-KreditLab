@@ -60,6 +60,18 @@ st.markdown(
         color: #FFFFFF;
     }
 
+    h1 {
+        margin-bottom: 0.35rem;
+    }
+
+    [data-testid="stMarkdownContainer"] p {
+        margin-bottom: 0.2rem;
+    }
+
+    div[data-testid="stSelectbox"] {
+        margin-top: -0.25rem;
+    }
+
     [data-testid="stWidgetLabel"] label,
     [data-testid="stWidgetLabel"] p,
     [data-testid="stFileUploader"] label {
