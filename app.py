@@ -1640,32 +1640,36 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
     df = pd.DataFrame(st.session_state.results) if st.session_state.results else pd.DataFrame()
 
     if not df.empty:
-        # Inject standard HTML CSS targeting table headers only
+        # 1. Inject the header alignment CSS securely
         st.markdown(
             """
             <style>
-            th {
+            .stDataFrame div[role="columnheader"] p {
                 text-align: center !important;
+                justify-content: center !important;
+                display: flex !important;
             }
             </style>
             """,
             unsafe_allow_html=True
         )
 
+        # 2. Define the columns you want
         requested_cols = ["date", "description", "debit", "credit", "balance"]
         display_cols = [c for c in requested_cols if c in df.columns]
 
-        # Rename columns via dataframe copy so st.table picks up the names
-        df_display = df[display_cols].rename(columns={
-            "date": "Transaction Date",
-            "description": "Description",
-            "debit": "Debit (RM)",
-            "credit": "Credit (RM)",
-            "balance": "Running Balance"
-        })
-
-        # Render as a static HTML table where headers will center perfectly
-        st.table(df_display)
+        # 3. Render table (Titles will be centered by CSS, content follows defaults)
+        st.dataframe(
+            df[display_cols], 
+            use_container_width=True,
+            column_config={
+                "date": "Transaction Date",
+                "description": "Description",
+                "debit": "Debit (RM)",
+                "credit": "Credit (RM)",
+                "balance": "Running Balance"
+            }
+        )
     else:
         st.info("No line-item transactions extracted.")
 
