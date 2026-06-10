@@ -39,6 +39,11 @@ from bank_totals import (
     extract_rhb_statement_totals,
     extract_bank_islam_statement_month
 )
+from fraud_logic import (
+    analyze_pdf_batch,
+    build_display_summary,
+    detect_font_anomalies,
+)
 
 
 st.set_page_config(page_title="Bank Statement Parser", layout="wide")
@@ -68,6 +73,80 @@ st.markdown(
 
     [data-testid="stMarkdownContainer"] p {
         margin-bottom: 0.2rem;
+    }
+
+    div[data-testid="stSelectbox"] {
+        margin-top: -0.25rem;
+    }
+
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+        min-height: 54px !important;
+        align-items: center !important;
+        padding-left: 15px !important;
+        padding-right: 32px !important;
+        border-radius: 8px !important;
+        background: #0B0F16 !important;
+        border: 1px solid #334155 !important;
+    }
+
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
+        font-size: 15px !important;
+        font-weight: 500 !important;
+        line-height: 22px !important;
+        -webkit-font-smoothing: antialiased !important;
+        -moz-osx-font-smoothing: grayscale !important;
+        text-rendering: optimizeLegibility !important;
+        color: #F3F4F6 !important;
+    }
+
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
+        font-size: 15px !important;
+        font-weight: 500 !important;
+        line-height: 22px !important;
+        -webkit-font-smoothing: antialiased !important;
+        -moz-osx-font-smoothing: grayscale !important;
+        text-rendering: optimizeLegibility !important;
+        color: #F3F4F6 !important;
+    }
+
+    div[data-testid="stSelectbox"] [data-baseweb="tag"] {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+    }
+
+    div[data-testid="stSelectbox"] svg {
+        width: 16px !important;
+        height: 16px !important;
+        fill: #9CA3AF !important;
+    }
+
+    div[role="listbox"] {
+        padding: 6px !important;
+        border: 1px solid #374151 !important;
+        border-radius: 10px !important;
+        background: #0B0F16 !important;
+    }
+
+    div[role="option"] {
+        min-height: 42px !important;
+        padding: 10px 14px !important;
+        border-radius: 7px !important;
+        color: #E5E7EB !important;
+        font-size: 14px !important;
+        font-weight: 500 !important;
+        line-height: 20px !important;
+        -webkit-font-smoothing: antialiased !important;
+        -moz-osx-font-smoothing: grayscale !important;
+        text-rendering: optimizeLegibility !important;
+        display: flex !important;
+        align-items: center !important;
+    }
+
+    div[role="option"]:hover,
+    div[aria-selected="true"] {
+        background: #2D3340 !important;
+        color: #FFFFFF !important;
     }
 
     [data-testid="stWidgetLabel"] label,
@@ -133,6 +212,7 @@ st.markdown(
         transform: translateY(1px);
     }
 
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
     div[data-testid="stTextInput"] div[data-baseweb="input"] {
         min-height: 3rem;
         box-sizing: border-box;
@@ -226,6 +306,54 @@ st.markdown(
             grid-template-columns: 1fr;
         }
     }
+
+    .integrity-card {
+        padding: 1rem 1.1rem;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.28), rgba(15, 23, 42, 0.16));
+        margin-bottom: 0.75rem;
+    }
+    .integrity-card.low {
+        border-color: rgba(74, 222, 128, 0.38);
+        background: linear-gradient(180deg, rgba(20, 83, 45, 0.32), rgba(15, 23, 42, 0.18));
+    }
+    .integrity-card.medium {
+        border-color: rgba(250, 204, 21, 0.38);
+        background: linear-gradient(180deg, rgba(113, 63, 18, 0.32), rgba(15, 23, 42, 0.18));
+    }
+    .integrity-card.high {
+        border-color: rgba(248, 113, 113, 0.38);
+        background: linear-gradient(180deg, rgba(127, 29, 29, 0.34), rgba(15, 23, 42, 0.18));
+    }
+    .integrity-label {
+        font-size: 0.95rem;
+        color: #cbd5e1;
+        margin-bottom: 0.35rem;
+    }
+    .integrity-card.low .integrity-value {
+        color: #86efac;
+    }
+    .integrity-card.medium .integrity-value {
+        color: #fde68a;
+    }
+    .integrity-card.high .integrity-value {
+        color: #fca5a5;
+    }
+    .integrity-value {
+        font-size: 2.2rem;
+        font-weight: 700;
+        line-height: 1;
+    }
+    .integrity-title {
+        font-size: 2rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+    }
+    .integrity-subtitle {
+        color: #94a3b8;
+        margin-bottom: 1rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -314,7 +442,7 @@ if "rhb_file_transactions" not in st.session_state:
 if "bank_islam_file_month" not in st.session_state:
     st.session_state.bank_islam_file_month = {}
 
-# ✅ password + company name tracking
+# password + company name tracking
 if "pdf_password" not in st.session_state:
     st.session_state.pdf_password = ""
 
@@ -353,7 +481,237 @@ if "file_account_no" not in st.session_state:
 
 
 # -----------------------------
-# Fraud/Pattern Analysis Functions
+# Fraud/Integrity Constants and Functions
+# -----------------------------
+FRAUD_LAYER_ORDER = [
+    ("metadata", "Layer 1: Metadata"),
+    ("fonts", "Layer 2: Fonts"),
+    ("text_layers", "Layer 3: Text Layers"),
+    ("visual", "Layer 4: Visual"),
+    ("cross_validation", "Layer 5: Cross Validation"),
+    ("bank_profile", "Layer 6: Bank Profile"),
+    ("structural", "Layer 7: Structural"),
+    ("arithmetic", "Layer 8: Arithmetic"),
+]
+
+
+def severity_badge(severity: str) -> str:
+    severity = (severity or "").upper()
+    if severity == "HIGH":
+        return "🔴 HIGH"
+    if severity == "MEDIUM":
+        return "🟠 MEDIUM"
+    return "🟢 LOW"
+
+
+def severity_dot(severity: str) -> str:
+    severity = (severity or "").upper()
+    if severity == "HIGH":
+        return "🔴"
+    if severity == "MEDIUM":
+        return "🟡"
+    return "🟢"
+
+
+def render_integrity_report_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .integrity-card {
+            padding: 1rem 1.1rem;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.28), rgba(15, 23, 42, 0.16));
+            margin-bottom: 0.75rem;
+        }
+        .integrity-card.low {
+            border-color: rgba(74, 222, 128, 0.38);
+            background: linear-gradient(180deg, rgba(20, 83, 45, 0.32), rgba(15, 23, 42, 0.18));
+        }
+        .integrity-card.medium {
+            border-color: rgba(250, 204, 21, 0.38);
+            background: linear-gradient(180deg, rgba(113, 63, 18, 0.32), rgba(15, 23, 42, 0.18));
+        }
+        .integrity-card.high {
+            border-color: rgba(248, 113, 113, 0.38);
+            background: linear-gradient(180deg, rgba(127, 29, 29, 0.34), rgba(15, 23, 42, 0.18));
+        }
+        .integrity-label {
+            font-size: 0.95rem;
+            color: #cbd5e1;
+            margin-bottom: 0.35rem;
+        }
+        .integrity-card.low .integrity-value {
+            color: #86efac;
+        }
+        .integrity-card.medium .integrity-value {
+            color: #fde68a;
+        }
+        .integrity-card.high .integrity-value {
+            color: #fca5a5;
+        }
+        .integrity-value {
+            font-size: 2.2rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .integrity-title {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+        .integrity-subtitle {
+            color: #94a3b8;
+            margin-bottom: 1rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_integrity_metric(label: str, value, dot: str | None = None, tone: str | None = None) -> None:
+    dot_html = f"<span>{dot}</span> " if dot else ""
+    tone_class = f" {tone.lower()}" if tone and tone.lower() in {"low", "medium", "high"} else ""
+    st.markdown(
+        f"""
+        <div class="integrity-card{tone_class}">
+            <div class="integrity-label">{dot_html}{label}</div>
+            <div class="integrity-value">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_integrity_overview(analysis_results: dict) -> None:
+    total_files = len(analysis_results)
+    clean_count = sum(1 for result in analysis_results.values() if result.get("overall_risk") == "LOW")
+    medium_count = sum(1 for result in analysis_results.values() if result.get("overall_risk") == "MEDIUM")
+    high_count = sum(1 for result in analysis_results.values() if result.get("overall_risk") == "HIGH")
+
+    st.markdown('<div class="integrity-title">🛡️ Document Integrity Scan</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="integrity-subtitle">Multi-layer fraud screening across all uploaded statements.</div>',
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        render_integrity_metric("Files Scanned", total_files)
+    with c2:
+        render_integrity_metric("Clean", clean_count, "🟢")
+    with c3:
+        render_integrity_metric("Medium Risk", medium_count, "🟡")
+    with c4:
+        render_integrity_metric("High Risk", high_count, "🔴")
+
+
+def file_risk_label(file_name: str, result: dict) -> str:
+    risk = (result.get("overall_risk") or "LOW").upper()
+    counts = integrity_layer_counts(result.get("layer_results", {}))
+    return (
+        f"{severity_dot(risk)} {file_name} - Risk: {risk} "
+        f"({counts.get('high', 0)}H / {counts.get('medium', 0)}M / {counts.get('low', 0)}L)"
+    )
+
+
+def integrity_layer_counts(layer_results: dict) -> dict:
+    counts = {"high": 0, "medium": 0, "low": 0, "total": 0}
+    for layer_key, _ in FRAUD_LAYER_ORDER:
+        findings = (layer_results or {}).get(layer_key, [])
+        highest = next(
+            (
+                level.lower()
+                for level in ("HIGH", "MEDIUM", "LOW")
+                if any((item.get("severity") or "").upper() == level for item in findings)
+            ),
+            "low",
+        )
+        counts[highest] += 1
+        counts["total"] += 1
+    return counts
+
+
+def render_fraud_summary(summary: dict, layer_results: dict | None = None):
+    risk = summary.get("overall_risk", "LOW")
+    counts = summary.get("counts", {})
+    headline = summary.get("headline", "Analysis complete")
+    if layer_results:
+        counts = integrity_layer_counts(layer_results)
+
+    if risk == "HIGH":
+        st.error(f"Overall Risk: {risk}")
+    elif risk == "MEDIUM":
+        st.warning(f"Overall Risk: {risk}")
+    else:
+        st.success(f"Overall Risk: {risk}")
+
+    st.write(headline)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("High", counts.get("high", 0))
+    c2.metric("Medium", counts.get("medium", 0))
+    c3.metric("Low", counts.get("low", 0))
+    c4.metric("Total Findings", counts.get("total", 0))
+
+    top_findings = summary.get("top_findings", [])
+    if top_findings or layer_results:
+        st.markdown("**Top Findings**")
+
+    top_finding_by_layer = {
+        finding.get("layer", ""): finding
+        for finding in top_findings
+        if finding.get("layer")
+    }
+
+    if not layer_results and top_findings:
+        for finding in top_findings:
+            st.write(
+                f"{severity_badge(finding.get('severity'))} "
+                f"**[{finding.get('layer', 'unknown')}]** {finding.get('message', '')}"
+            )
+    elif not layer_results:
+        st.info("No findings returned.")
+
+    if layer_results:
+        for layer_key, layer_label in FRAUD_LAYER_ORDER:
+            findings = layer_results.get(layer_key, [])
+            if findings:
+                highest = next(
+                    (
+                        level
+                        for level in ("HIGH", "MEDIUM", "LOW")
+                        if any((item.get("severity") or "").upper() == level for item in findings)
+                    ),
+                    "LOW",
+                )
+                anomaly_count = sum(1 for finding in findings if not is_benign_integrity_finding(finding))
+                summary_finding = top_finding_by_layer.get(layer_key) or (findings[0] if findings else None)
+                message = summary_finding.get("message", "") if summary_finding else "No findings."
+                st.write(
+                    f"{severity_badge(highest)} **{layer_label}** "
+                    f"{message} ({anomaly_count} anomalies detected)"
+                )
+            else:
+                st.write(f"{severity_badge('LOW')} **{layer_label}** (0 anomalies detected)")
+
+
+def is_benign_integrity_finding(finding: dict) -> bool:
+    message = str(finding.get("message", "") or "").lower()
+    benign_patterns = [
+        "no anomalies detected",
+        "verified",
+        "matches known",
+        "hashes computed",
+        "pdf version",
+        "font consistency",
+    ]
+    return any(pattern in message for pattern in benign_patterns)
+
+
+# -----------------------------
+# Pattern Analysis Functions
 # -----------------------------
 def normalize_text(text: str) -> str:
     """Normalize text for comparison"""
@@ -365,14 +723,6 @@ def normalize_text(text: str) -> str:
 def is_round_number(amount: float, round_thresholds: List[float] = None, tolerance: float = 0.01) -> bool:
     """
     Check if amount is a round number (multiple of significant thresholds like 10,000, 50,000, 100,000, etc.)
-    
-    Args:
-        amount: The transaction amount to check
-        round_thresholds: List of thresholds to check (default: [10000, 50000, 100000, 500000, 1000000])
-        tolerance: Tolerance for floating point precision (default: 0.01)
-    
-    Returns:
-        True if amount is a multiple of any threshold, False otherwise
     """
     if amount is None or amount == 0:
         return False
@@ -435,7 +785,6 @@ def detect_rapid_repeat_transactions(df: pd.DataFrame, days_window: int = 30) ->
         
         for i in range(len(dates)):
             if i < len(dates) - 1:
-                # Convert to Timestamp to access .days attribute
                 days_diff = (pd.Timestamp(dates[i + 1]) - pd.Timestamp(dates[i])).days
                 if days_diff <= days_window:
                     idx = group_sorted.iloc[i].name
@@ -449,10 +798,7 @@ def detect_rapid_repeat_transactions(df: pd.DataFrame, days_window: int = 30) ->
 # Statutory Payment Detection Functions
 # -----------------------------
 def compute_epf_payments(df: pd.DataFrame) -> Tuple[int, float]:
-    """
-    Detect EPF / KWSP contributions from transaction descriptions.
-    Returns: (count, total_amount)
-    """
+    """Detect EPF / KWSP contributions"""
     if df.empty:
         return 0, 0.0
     
@@ -496,12 +842,8 @@ def compute_epf_payments(df: pd.DataFrame) -> Tuple[int, float]:
     return count, total_amount
 
 
-
 def compute_socso_payments(df: pd.DataFrame) -> Tuple[int, float]:
-    """
-    Detect SOCSO / PERKESO / EIS contributions from transaction descriptions.
-    Returns: (count, total_amount)
-    """
+    """Detect SOCSO / PERKESO / EIS contributions"""
     if df.empty:
         return 0, 0.0
     
@@ -539,10 +881,7 @@ def compute_socso_payments(df: pd.DataFrame) -> Tuple[int, float]:
 
 
 def compute_lhdn_tax_payments(df: pd.DataFrame) -> Tuple[int, float]:
-    """
-    Detect LHDN / tax payments from transaction descriptions.
-    Returns: (count, total_amount)
-    """
+    """Detect LHDN / tax payments"""
     if df.empty:
         return 0, 0.0
     
@@ -583,10 +922,7 @@ def compute_lhdn_tax_payments(df: pd.DataFrame) -> Tuple[int, float]:
 
 
 def compute_hrdf_payments(df: pd.DataFrame) -> Tuple[int, float]:
-    """
-    Detect HRDF / PSMB levy payments from transaction descriptions.
-    Returns: (count, total_amount)
-    """
+    """Detect HRDF / PSMB levy payments"""
     if df.empty:
         return 0, 0.0
     
@@ -872,6 +1208,9 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     render_pattern_details(analysis_df, high_value_threshold)
 
 
+# -----------------------------
+# Core Processing Functions
+# -----------------------------
 def clear_processing_outputs() -> None:
     st.session_state.results = []
     st.session_state.affin_statement_totals = []
@@ -1011,16 +1350,199 @@ PARSERS: Dict[str, Callable[[bytes, str], List[dict]]] = {
 }
 
 
-def get_supported_banks() -> List[str]:
-    return list(PARSERS.keys())
+# -----------------------------
+# Monthly Summary Functions
+# -----------------------------
+BALANCE_MARKER_PATTERNS = [
+    r"\bOPENING\s+BAL(?:ANCE)?\b",
+    r"\bCLOSING\s+BAL(?:ANCE)?\b",
+    r"\bBEGINNING\s+BAL(?:ANCE)?\b",
+    r"\bENDING\s+BAL(?:ANCE)?\b",
+    r"\bBALANCE\s+B\/F\b",
+    r"\bBALANCE\s+C\/F\b",
+    r"\bB\/F\s+BALANCE\b",
+    r"\bC\/F\s+BALANCE\b",
+    r"\bBROUGHT\s+FORWARD\b",
+    r"\bCARRIED\s+FORWARD\b",
+    r"\bBAKI\s+AWAL\b",
+    r"\bBAKI\s+AKHIR\b",
+    r"\bBAKI\s+PEMBUKA\b",
+    r"\bBAKI\s+PENUTUP\b",
+    r"\bBAKI\s+B\/B\b",
+    r"\bBAKI\s+C\/F\b",
+]
 
 
+def is_balance_marker_transaction(tx: dict) -> bool:
+    desc = normalize_text(tx.get("description", ""))
+    return any(re.search(pattern, desc, flags=re.IGNORECASE) for pattern in BALANCE_MARKER_PATTERNS)
+
+
+def count_statement_transactions(transactions: List[dict]) -> int:
+    return sum(1 for tx in transactions if not is_balance_marker_transaction(tx))
+
+
+def filter_statement_transactions_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    mask = [
+        not is_balance_marker_transaction(tx)
+        for tx in df.to_dict(orient="records")
+    ]
+    return df.loc[mask].copy()
+
+
+def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
+    if not transactions:
+        return []
+
+    df = pd.DataFrame(transactions)
+    if df.empty:
+        return []
+
+    df = df.reset_index(drop=True)
+    if "__row_order" not in df.columns:
+        df["__row_order"] = range(len(df))
+
+    df["date_parsed"] = df.get("date").apply(parse_any_date_for_summary)
+    df = df.dropna(subset=["date_parsed"])
+    if df.empty:
+        st.warning("⚠️ No valid transaction dates found.")
+        return []
+
+    df["month_period"] = df["date_parsed"].dt.strftime("%Y-%m")
+    df["debit"] = df.get("debit", 0).apply(safe_float)
+    df["credit"] = df.get("credit", 0).apply(safe_float)
+    df["balance"] = df.get("balance", None).apply(lambda x: safe_float(x) if x is not None else None)
+
+    if "page" in df.columns:
+        df["page"] = pd.to_numeric(df["page"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["page"] = 0
+
+    has_seq = "seq" in df.columns
+    if has_seq:
+        df["seq"] = pd.to_numeric(df["seq"], errors="coerce").fillna(0).astype(int)
+
+    df["__row_order"] = pd.to_numeric(df["__row_order"], errors="coerce").fillna(0).astype(int)
+
+    monthly_summary: List[dict] = []
+    for period, group in df.groupby("month_period", sort=True):
+        sort_cols = ["date_parsed", "page"]
+        if has_seq:
+            sort_cols.append("seq")
+        sort_cols.append("__row_order")
+
+        group_sorted = group.sort_values(sort_cols, na_position="last")
+
+        balances = group_sorted["balance"].dropna()
+        ending_balance = round(float(balances.iloc[-1]), 2) if not balances.empty else None
+        highest_balance = round(float(balances.max()), 2) if not balances.empty else None
+        lowest_balance_raw = round(float(balances.min()), 2) if not balances.empty else None
+        lowest_balance = lowest_balance_raw
+        od_flag = bool(lowest_balance is not None and float(lowest_balance) < 0)
+
+        company_vals = [
+            x for x in group_sorted.get("company_name", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist()
+            if x.strip()
+        ]
+        company_name = company_vals[0] if company_vals else None
+
+        acct_vals = [
+            x for x in group_sorted.get("account_no", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist() if x.strip()
+        ]
+        account_no = acct_vals[0] if len(acct_vals) == 1 else (", ".join(acct_vals) if acct_vals else None)
+
+        monthly_summary.append(
+            {
+                "month": period,
+                "company_name": company_name,
+                "account_no": account_no,
+                "transaction_count": int(
+                    sum(
+                        1
+                        for tx in group_sorted.to_dict(orient="records")
+                        if not is_balance_marker_transaction(tx)
+                    )
+                ),
+                "opening_balance": None,
+                "total_debit": round(float(group_sorted["debit"].sum()), 2),
+                "total_credit": round(float(group_sorted["credit"].sum()), 2),
+                "net_change": round(float(group_sorted["credit"].sum() - group_sorted["debit"].sum()), 2),
+                "ending_balance": ending_balance,
+                "lowest_balance": lowest_balance,
+                "lowest_balance_raw": lowest_balance_raw,
+                "highest_balance": highest_balance,
+                "od_flag": od_flag,
+                "source_files": ", ".join(sorted(set(group_sorted.get("source_file", []))))
+                if "source_file" in group_sorted.columns
+                else "",
+            }
+        )
+
+    # Fill opening_balance using prior month's ending_balance when possible
+    monthly_summary_sorted = sorted(monthly_summary, key=lambda x: x["month"])
+    prev_end = None
+    for r in monthly_summary_sorted:
+        if r.get("opening_balance") is None:
+            if prev_end is not None:
+                r["opening_balance"] = round(float(prev_end), 2)
+            else:
+                eb = r.get("ending_balance")
+                nc = r.get("net_change")
+                if eb is not None and nc is not None:
+                    try:
+                        r["opening_balance"] = round(float(safe_float(eb) - safe_float(nc)), 2)
+                    except Exception:
+                        r["opening_balance"] = None
+
+        if r.get("ending_balance") is not None:
+            prev_end = safe_float(r.get("ending_balance"))
+
+    return monthly_summary_sorted
+
+
+def present_monthly_summary_standard(rows: List[dict]) -> List[dict]:
+    out = []
+    for r in rows or []:
+        highest = r.get("highest_balance")
+        lowest = r.get("lowest_balance")
+
+        swing = None
+        try:
+            if highest is not None and lowest is not None:
+                swing = round(float(safe_float(highest) - safe_float(lowest)), 2)
+        except Exception:
+            swing = None
+
+        out.append(
+            {
+                "month": r.get("month"),
+                "company_name": r.get("company_name"),
+                "account_no": r.get("account_no"),
+                "transaction_count": r.get("transaction_count"),
+                "opening_balance": r.get("opening_balance"),
+                "total_debit": r.get("total_debit"),
+                "total_credit": r.get("total_credit"),
+                "highest_balance": highest,
+                "lowest_balance": lowest,
+                "swing": swing,
+                "ending_balance": r.get("ending_balance"),
+                "source_files": r.get("source_files"),
+            }
+        )
+    return out
+
+
+# -----------------------------
+# Main UI and Processing
+# -----------------------------
 if "bank_choice" not in st.session_state:
     st.session_state.bank_choice = None
 
 bank_choice = st.selectbox(
-    "Select Bank",
-    options=sorted(get_supported_banks(), key=str.lower),
+    "Select Bank Format",
+    list(PARSERS.keys()),
     index=None,
     key="bank_choice",
     placeholder="Choose the bank for the uploaded statement(s)",
@@ -1045,7 +1567,7 @@ with input_col3:
     st.text_input(
         "High Value Threshold (RM)",
         key="high_value_threshold_input",
-        placeholder=f"e.g. 10,000",
+        placeholder="e.g. 10,000",
         help="Required. Credits equal to or above this amount are flagged as high value.",
         on_change=clear_high_value_threshold_error,
     )
@@ -1108,6 +1630,7 @@ if uploaded_files and st.session_state.status == "running":
     processing_errors: List[str] = []
     total_extracted = 0
     files_finished = 0
+    resolved_pdf_bytes = {}
 
     progress_text.write(f"Preparing {total_files} file(s) for {bank_choice}.")
 
@@ -1128,6 +1651,8 @@ if uploaded_files and st.session_state.status == "running":
             if is_pdf_encrypted(pdf_bytes):
                 progress_text.write(f"Decrypting {uploaded_file.name}...")
                 pdf_bytes = decrypt_pdf_bytes(pdf_bytes, st.session_state.pdf_password)
+            
+            resolved_pdf_bytes[uploaded_file.name] = pdf_bytes
 
             # extract company name
             company_name = None
@@ -1226,6 +1751,15 @@ if uploaded_files and st.session_state.status == "running":
         progress_bar.progress((file_idx + 1) / total_files)
         files_finished = file_idx + 1
 
+    # Run PDF integrity checks
+    analysis_results = {}
+    if resolved_pdf_bytes:
+        progress_text.write("Running PDF integrity checks...")
+        try:
+            analysis_results = analyze_pdf_batch(resolved_pdf_bytes)
+        except Exception as e:
+            st.warning(f"PDF integrity check failed: {e}")
+
     # After all files are processed - set final progress and show completion
     progress_bar.progress(1.0)
     
@@ -1283,506 +1817,10 @@ if uploaded_files and st.session_state.status == "running":
     st.session_state.results = all_tx
 
 
-# =========================================================
-# Monthly Summary Calculation
-# =========================================================
-BALANCE_MARKER_PATTERNS = [
-    r"\bOPENING\s+BAL(?:ANCE)?\b",
-    r"\bCLOSING\s+BAL(?:ANCE)?\b",
-    r"\bBEGINNING\s+BAL(?:ANCE)?\b",
-    r"\bENDING\s+BAL(?:ANCE)?\b",
-    r"\bBALANCE\s+B\/F\b",
-    r"\bBALANCE\s+C\/F\b",
-    r"\bB\/F\s+BALANCE\b",
-    r"\bC\/F\s+BALANCE\b",
-    r"\bBROUGHT\s+FORWARD\b",
-    r"\bCARRIED\s+FORWARD\b",
-    r"\bBAKI\s+AWAL\b",
-    r"\bBAKI\s+AKHIR\b",
-    r"\bBAKI\s+PEMBUKA\b",
-    r"\bBAKI\s+PENUTUP\b",
-    r"\bBAKI\s+B\/B\b",
-    r"\bBAKI\s+C\/F\b",
-]
-
-
-def is_balance_marker_transaction(tx: dict) -> bool:
-    desc = normalize_text(tx.get("description", ""))
-    return any(re.search(pattern, desc, flags=re.IGNORECASE) for pattern in BALANCE_MARKER_PATTERNS)
-
-
-def count_statement_transactions(transactions: List[dict]) -> int:
-    return sum(1 for tx in transactions if not is_balance_marker_transaction(tx))
-
-
-def filter_statement_transactions_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    mask = [
-        not is_balance_marker_transaction(tx)
-        for tx in df.to_dict(orient="records")
-    ]
-    return df.loc[mask].copy()
-
-
-def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
-    # Affin-only
-    if bank_choice == "Affin Bank" and st.session_state.affin_statement_totals:
-        rows: List[dict] = []
-        for t in st.session_state.affin_statement_totals:
-            month = t.get("statement_month") or "UNKNOWN"
-            fname = t.get("source_file", "") or ""
-            company_name = st.session_state.file_company_name.get(fname)
-            account_no = st.session_state.file_account_no.get(fname)
-
-            opening = t.get("opening_balance")
-            ending = t.get("ending_balance")
-            total_debit = t.get("total_debit")
-            total_credit = t.get("total_credit")
-
-            td = None if total_debit is None else round(float(safe_float(total_debit)), 2)
-            tc = None if total_credit is None else round(float(safe_float(total_credit)), 2)
-
-            opening_balance = round(float(safe_float(opening)), 2) if opening is not None else None
-            ending_balance = round(float(safe_float(ending)), 2) if ending is not None else None
-
-            txs = st.session_state.affin_file_transactions.get(fname, []) if fname else []
-            tx_count = count_statement_transactions(txs) if txs else None
-
-            balances: List[float] = []
-            for x in txs:
-                b = x.get("balance")
-                if b is None:
-                    continue
-                try:
-                    balances.append(float(safe_float(b)))
-                except Exception:
-                    pass
-
-            if ending_balance is None and balances:
-                ending_balance = round(float(balances[-1]), 2)
-
-            lowest_balance = round(min(balances), 2) if balances else None
-            highest_balance = round(max(balances), 2) if balances else None
-
-            net_change = None
-            if td is not None and tc is not None:
-                net_change = round(float(tc - td), 2)
-
-            if opening_balance is None and ending_balance is not None and td is not None and tc is not None:
-                opening_balance = round(float(ending_balance - (tc - td)), 2)
-
-            rows.append(
-                {
-                    "month": month,
-                    "company_name": company_name,
-                    "account_no": account_no,
-                    "transaction_count": tx_count,
-                    "opening_balance": opening_balance,
-                    "total_debit": td,
-                    "total_credit": tc,
-                    "net_change": net_change,
-                    "ending_balance": ending_balance,
-                    "lowest_balance": lowest_balance,
-                    "lowest_balance_raw": lowest_balance,
-                    "highest_balance": highest_balance,
-                    "od_flag": bool(lowest_balance is not None and float(lowest_balance) < 0),
-                    "source_files": fname,
-                }
-            )
-        return sorted(rows, key=lambda r: str(r.get("month", "9999-99")))
-
-    # Ambank-only
-    if bank_choice == "Ambank" and st.session_state.ambank_statement_totals:
-        rows: List[dict] = []
-        for t in st.session_state.ambank_statement_totals:
-            month = t.get("statement_month") or "UNKNOWN"
-            fname = t.get("source_file", "") or ""
-            company_name = st.session_state.file_company_name.get(fname)
-            account_no = st.session_state.file_account_no.get(fname)
-
-            opening = t.get("opening_balance")
-            ending = t.get("ending_balance")
-            total_debit = t.get("total_debit")
-            total_credit = t.get("total_credit")
-
-            td = None if total_debit is None else round(float(safe_float(total_debit)), 2)
-            tc = None if total_credit is None else round(float(safe_float(total_credit)), 2)
-
-            opening_balance = round(float(safe_float(opening)), 2) if opening is not None else None
-            ending_balance = round(float(safe_float(ending)), 2) if ending is not None else None
-
-            txs = st.session_state.ambank_file_transactions.get(fname, []) if fname else []
-            tx_count = count_statement_transactions(txs) if txs else None
-
-            balances: List[float] = []
-            for x in txs:
-                b = x.get("balance")
-                if b is None:
-                    continue
-                try:
-                    balances.append(float(safe_float(b)))
-                except Exception:
-                    pass
-
-            lowest_balance = round(min(balances), 2) if balances else None
-            highest_balance = round(max(balances), 2) if balances else None
-
-            net_change = None
-            if td is not None and tc is not None:
-                net_change = round(float(tc - td), 2)
-
-            if opening_balance is None and ending_balance is not None and td is not None and tc is not None:
-                opening_balance = round(float(ending_balance - (tc - td)), 2)
-
-            rows.append(
-                {
-                    "month": month,
-                    "company_name": company_name,
-                    "account_no": account_no,
-                    "transaction_count": tx_count,
-                    "opening_balance": opening_balance,
-                    "total_debit": td,
-                    "total_credit": tc,
-                    "net_change": net_change,
-                    "ending_balance": ending_balance,
-                    "lowest_balance": lowest_balance,
-                    "lowest_balance_raw": lowest_balance,
-                    "highest_balance": highest_balance,
-                    "od_flag": bool(lowest_balance is not None and float(lowest_balance) < 0),
-                    "source_files": fname,
-                }
-            )
-        return sorted(rows, key=lambda r: str(r.get("month", "9999-99")))
-
-    # CIMB-only
-    if bank_choice == "CIMB Bank" and st.session_state.cimb_statement_totals:
-        rows: List[dict] = []
-        for t in st.session_state.cimb_statement_totals:
-            month = t.get("statement_month") or "UNKNOWN"
-            fname = t.get("source_file", "") or ""
-            company_name = st.session_state.file_company_name.get(fname)
-            account_no = st.session_state.file_account_no.get(fname)
-
-            ending = t.get("ending_balance")
-            total_debit = t.get("total_debit")
-            total_credit = t.get("total_credit")
-
-            td = None if total_debit is None else round(float(safe_float(total_debit)), 2)
-            tc = None if total_credit is None else round(float(safe_float(total_credit)), 2)
-            ending_balance = round(float(safe_float(ending)), 2) if ending is not None else None
-
-            net_change = None
-            opening_balance = None
-            if td is not None and tc is not None:
-                net_change = round(float(tc - td), 2)
-                if ending_balance is not None:
-                    opening_balance = round(float(ending_balance - (tc - td)), 2)
-
-            txs = st.session_state.cimb_file_transactions.get(fname, []) if fname else []
-            tx_count = count_statement_transactions(txs) if txs else None
-
-            balances: List[float] = []
-            for x in txs:
-                desc = str(x.get("description") or "")
-                if re.search(r"CLOSING\s+BALANCE\s*/\s*BAKI\s+PENUTUP", desc, flags=re.IGNORECASE):
-                    continue
-                b = x.get("balance")
-                if b is None:
-                    continue
-                try:
-                    balances.append(float(safe_float(b)))
-                except Exception:
-                    pass
-
-            lowest_balance = round(min(balances), 2) if balances else None
-            highest_balance = round(max(balances), 2) if balances else None
-
-            rows.append(
-                {
-                    "month": month,
-                    "company_name": company_name,
-                    "account_no": account_no,
-                    "transaction_count": tx_count,
-                    "opening_balance": opening_balance,
-                    "total_debit": td,
-                    "total_credit": tc,
-                    "net_change": net_change,
-                    "ending_balance": ending_balance,
-                    "lowest_balance": lowest_balance,
-                    "lowest_balance_raw": lowest_balance,
-                    "highest_balance": highest_balance,
-                    "od_flag": bool(lowest_balance is not None and float(lowest_balance) < 0),
-                    "source_files": fname,
-                }
-            )
-        return sorted(rows, key=lambda r: str(r.get("month", "9999-99")))
-
-    # RHB-only
-    if bank_choice == "RHB Bank" and st.session_state.rhb_statement_totals:
-        rows: List[dict] = []
-        for t in st.session_state.rhb_statement_totals:
-            month = t.get("statement_month") or "UNKNOWN"
-            fname = t.get("source_file", "") or ""
-            company_name = st.session_state.file_company_name.get(fname)
-            account_no = st.session_state.file_account_no.get(fname)
-
-            opening = t.get("opening_balance")
-            ending = t.get("ending_balance")
-            total_debit = t.get("total_debit")
-            total_credit = t.get("total_credit")
-
-            td = None if total_debit is None else round(float(safe_float(total_debit)), 2)
-            tc = None if total_credit is None else round(float(safe_float(total_credit)), 2)
-            opening_balance = round(float(safe_float(opening)), 2) if opening is not None else None
-            ending_balance = round(float(safe_float(ending)), 2) if ending is not None else None
-
-            txs = st.session_state.rhb_file_transactions.get(fname, []) if fname else []
-            tx_count = count_statement_transactions(txs) if txs else None
-
-            balances: List[float] = []
-            for x in txs:
-                b = x.get("balance")
-                if b is None:
-                    continue
-                try:
-                    balances.append(float(safe_float(b)))
-                except Exception:
-                    pass
-
-            lowest_balance = round(min(balances), 2) if balances else None
-            highest_balance = round(max(balances), 2) if balances else None
-
-            net_change = None
-            if td is not None and tc is not None:
-                net_change = round(float(tc - td), 2)
-
-            if opening_balance is None and ending_balance is not None and td is not None and tc is not None:
-                opening_balance = round(float(ending_balance - (tc - td)), 2)
-
-            rows.append(
-                {
-                    "month": month,
-                    "company_name": company_name,
-                    "account_no": account_no,
-                    "transaction_count": tx_count,
-                    "opening_balance": opening_balance,
-                    "total_debit": td,
-                    "total_credit": tc,
-                    "net_change": net_change,
-                    "ending_balance": ending_balance,
-                    "lowest_balance": lowest_balance,
-                    "lowest_balance_raw": lowest_balance,
-                    "highest_balance": highest_balance,
-                    "od_flag": bool(lowest_balance is not None and float(lowest_balance) < 0),
-                    "source_files": fname,
-                }
-            )
-        return sorted(rows, key=lambda r: str(r.get("month", "9999-99")))
-
-    # Default banks
-    if not transactions:
-        if bank_choice == "Bank Islam" and getattr(st.session_state, "bank_islam_file_month", {}):
-            rows: List[dict] = []
-            for fname, month in sorted(st.session_state.bank_islam_file_month.items(), key=lambda x: x[1]):
-                company_name = st.session_state.file_company_name.get(fname)
-                account_no = st.session_state.file_account_no.get(fname)
-                rows.append(
-                    {
-                        "month": month,
-                        "company_name": company_name,
-                        "account_no": account_no,
-                        "transaction_count": 0,
-                        "opening_balance": None,
-                        "total_debit": 0.0,
-                        "total_credit": 0.0,
-                        "net_change": 0.0,
-                        "ending_balance": None,
-                        "lowest_balance": None,
-                        "lowest_balance_raw": None,
-                        "highest_balance": None,
-                        "od_flag": False,
-                        "source_files": fname,
-                    }
-                )
-            return rows
-        return []
-
-    df = pd.DataFrame(transactions)
-    if df.empty:
-        return []
-
-    df = df.reset_index(drop=True)
-    if "__row_order" not in df.columns:
-        df["__row_order"] = range(len(df))
-
-    df["date_parsed"] = df.get("date").apply(parse_any_date_for_summary)
-    df = df.dropna(subset=["date_parsed"])
-    if df.empty:
-        st.warning("⚠️ No valid transaction dates found.")
-        return []
-
-    df["month_period"] = df["date_parsed"].dt.strftime("%Y-%m")
-    df["debit"] = df.get("debit", 0).apply(safe_float)
-    df["credit"] = df.get("credit", 0).apply(safe_float)
-    df["balance"] = df.get("balance", None).apply(lambda x: safe_float(x) if x is not None else None)
-
-    if "page" in df.columns:
-        df["page"] = pd.to_numeric(df["page"], errors="coerce").fillna(0).astype(int)
-    else:
-        df["page"] = 0
-
-    has_seq = "seq" in df.columns
-    if has_seq:
-        df["seq"] = pd.to_numeric(df["seq"], errors="coerce").fillna(0).astype(int)
-
-    df["__row_order"] = pd.to_numeric(df["__row_order"], errors="coerce").fillna(0).astype(int)
-
-    monthly_summary: List[dict] = []
-    for period, group in df.groupby("month_period", sort=True):
-        sort_cols = ["date_parsed", "page"]
-        if has_seq:
-            sort_cols.append("seq")
-        sort_cols.append("__row_order")
-
-        group_sorted = group.sort_values(sort_cols, na_position="last")
-
-        balances = group_sorted["balance"].dropna()
-        ending_balance = round(float(balances.iloc[-1]), 2) if not balances.empty else None
-        highest_balance = round(float(balances.max()), 2) if not balances.empty else None
-        lowest_balance_raw = round(float(balances.min()), 2) if not balances.empty else None
-        lowest_balance = lowest_balance_raw
-        od_flag = bool(lowest_balance is not None and float(lowest_balance) < 0)
-
-        company_vals = [
-            x for x in group_sorted.get("company_name", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist()
-            if x.strip()
-        ]
-        company_name = company_vals[0] if company_vals else None
-
-        acct_vals = [
-            x for x in group_sorted.get("account_no", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist() if x.strip()
-        ]
-        account_no = acct_vals[0] if len(acct_vals) == 1 else (", ".join(acct_vals) if acct_vals else None)
-
-        monthly_summary.append(
-            {
-                "month": period,
-                "company_name": company_name,
-                "account_no": account_no,
-                "transaction_count": int(
-                    sum(
-                        1
-                        for tx in group_sorted.to_dict(orient="records")
-                        if not is_balance_marker_transaction(tx)
-                    )
-                ),
-                "opening_balance": None,
-                "total_debit": round(float(group_sorted["debit"].sum()), 2),
-                "total_credit": round(float(group_sorted["credit"].sum()), 2),
-                "net_change": round(float(group_sorted["credit"].sum() - group_sorted["debit"].sum()), 2),
-                "ending_balance": ending_balance,
-                "lowest_balance": lowest_balance,
-                "lowest_balance_raw": lowest_balance_raw,
-                "highest_balance": highest_balance,
-                "od_flag": od_flag,
-                "source_files": ", ".join(sorted(set(group_sorted.get("source_file", []))))
-                if "source_file" in group_sorted.columns
-                else "",
-            }
-        )
-
-    # Bank Islam ensure statement months with zero tx still appear
-    if bank_choice == "Bank Islam" and getattr(st.session_state, "bank_islam_file_month", {}):
-        existing_months = {r.get("month") for r in monthly_summary}
-        for fname, month in st.session_state.bank_islam_file_month.items():
-            if month in existing_months:
-                continue
-            company_name = st.session_state.file_company_name.get(fname)
-            account_no = st.session_state.file_account_no.get(fname)
-            monthly_summary.append(
-                {
-                    "month": month,
-                    "company_name": company_name,
-                    "account_no": account_no,
-                    "transaction_count": 0,
-                    "opening_balance": None,
-                    "total_debit": 0.0,
-                    "total_credit": 0.0,
-                    "net_change": 0.0,
-                    "ending_balance": None,
-                    "lowest_balance": None,
-                    "lowest_balance_raw": None,
-                    "highest_balance": None,
-                    "od_flag": False,
-                    "source_files": fname,
-                }
-            )
-
-    # Fill opening_balance for default banks using prior month's ending_balance when possible.
-    monthly_summary_sorted = sorted(monthly_summary, key=lambda x: x["month"])
-    prev_end = None
-    for r in monthly_summary_sorted:
-        if r.get("opening_balance") is None:
-            if prev_end is not None:
-                r["opening_balance"] = round(float(prev_end), 2)
-            else:
-                # best-effort fallback: opening = ending - net_change
-                eb = r.get("ending_balance")
-                nc = r.get("net_change")
-                if eb is not None and nc is not None:
-                    try:
-                        r["opening_balance"] = round(float(safe_float(eb) - safe_float(nc)), 2)
-                    except Exception:
-                        r["opening_balance"] = None
-
-        # update prev_end for next month
-        if r.get("ending_balance") is not None:
-            prev_end = safe_float(r.get("ending_balance"))
-
-    return monthly_summary_sorted
-
-
-def present_monthly_summary_standard(rows: List[dict]) -> List[dict]:
-    out = []
-    for r in rows or []:
-        highest = r.get("highest_balance")
-        lowest = r.get("lowest_balance")
-
-        swing = None
-        try:
-            if highest is not None and lowest is not None:
-                swing = round(float(safe_float(highest) - safe_float(lowest)), 2)
-        except Exception:
-            swing = None
-
-        out.append(
-            {
-                "month": r.get("month"),
-                "company_name": r.get("company_name"),
-                "account_no": r.get("account_no"),
-                "transaction_count": r.get("transaction_count"),
-                "opening_balance": r.get("opening_balance"),
-                "total_debit": r.get("total_debit"),
-                "total_credit": r.get("total_credit"),
-                "highest_balance": highest,
-                "lowest_balance": lowest,
-                "swing": swing,
-                "ending_balance": r.get("ending_balance"),
-                "source_files": r.get("source_files"),
-            }
-        )
-    return out
-
-
 # ---------------------------------------------------
 # DISPLAY
 # ---------------------------------------------------
-if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state.affin_statement_totals) or (
-    bank_choice == "Ambank" and st.session_state.ambank_statement_totals
-) or (bank_choice == "CIMB Bank" and st.session_state.cimb_statement_totals) or (
-    bank_choice == "RHB Bank" and st.session_state.rhb_statement_totals
-):
+if st.session_state.results:
     high_value_threshold = get_high_value_threshold()
     
     # Convert results to DataFrame
@@ -1813,6 +1851,34 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
         )
     else:
         st.info("No line-item transactions extracted.")
+    
+    # Display Document Integrity Scan
+    if analysis_results:
+        st.markdown("---")
+        render_integrity_report_styles()
+        render_integrity_overview(analysis_results)
+
+        for file_name, result in analysis_results.items():
+            summary = build_display_summary(result)
+            layer_results = result.get("layer_results", {})
+            with st.expander(file_risk_label(file_name, result)):
+                render_fraud_summary(summary, layer_results)
+
+                if layer_results:
+                    for layer_name, findings in layer_results.items():
+                        st.markdown(f"**{layer_name}**")
+                        if not findings:
+                            st.write("No findings.")
+                            continue
+
+                        for finding in findings:
+                            st.write(
+                                f"{severity_badge(finding.get('severity'))} "
+                                f"{finding.get('message', '')}"
+                            )
+                            detail = finding.get("detail")
+                            if detail:
+                                st.json(detail)
     
     # Original transaction analysis from existing code
     transaction_analysis_report = parse_top_parties_and_high_value(
@@ -1879,7 +1945,7 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             return str(obj)
         elif pd.isna(obj):
             return None
-        elif hasattr(obj, 'isoformat'):  # For datetime objects
+        elif hasattr(obj, 'isoformat'):
             return obj.isoformat()
         else:
             return obj
@@ -1908,22 +1974,11 @@ if st.session_state.results or (bank_choice == "Affin Bank" and st.session_state
             date_max_str = date_max.isoformat() if isinstance(date_max, pd.Timestamp) else str(date_max)
             date_range_str = f"{date_min_str} to {date_max_str}"
         else:
-            date_min_str = None
-            date_max_str = None
             date_range_str = None
 
         total_files_processed = None
         if "source_file" in df_download.columns and not df_download.empty:
             total_files_processed = int(df_download["source_file"].nunique())
-        else:
-            if bank_choice == "Affin Bank":
-                total_files_processed = len(st.session_state.affin_statement_totals)
-            elif bank_choice == "Ambank":
-                total_files_processed = len(st.session_state.ambank_statement_totals)
-            elif bank_choice == "CIMB Bank":
-                total_files_processed = len(st.session_state.cimb_statement_totals)
-            elif bank_choice == "RHB Bank":
-                total_files_processed = len(st.session_state.rhb_statement_totals)
 
         company_names = sorted(
             {x for x in df_download.get("company_name", pd.Series([], dtype=object)).dropna().astype(str).tolist() if x.strip()}
@@ -1989,4 +2044,3 @@ else:
         and not st.session_state.bank_choice_error
     ):
         st.warning("⚠️ No transactions found — click **Start Processing**.")
-
