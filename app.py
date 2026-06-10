@@ -345,17 +345,24 @@ st.markdown(
         display: flex !important;
         align-items: center !important;
         list-style: none !important;
-        font-weight: 600 !important;
+        list-style-type: none !important;
+        font-weight: 500 !important;
     }
 
     div[data-testid="stExpander"] details > summary::marker {
-        content: "";
+        content: "" !important;
+        color: transparent !important;
+        font-size: 0 !important;
     }
 
     div[data-testid="stExpander"] details > summary::-webkit-details-marker {
-        display: none;
+        display: none !important;
+        color: transparent !important;
+        font-size: 0 !important;
     }
 
+    div[data-testid="stExpander"] details > summary [data-testid="stExpanderToggleIcon"],
+    div[data-testid="stExpander"] details > summary > div:first-child:has(svg),
     div[data-testid="stExpander"] details > summary svg {
         display: none !important;
     }
@@ -366,7 +373,7 @@ st.markdown(
         right: 1.2rem;
         top: 50%;
         width: 0.45rem;
-        height: 0.45rem;
+        height: 0.40rem;
         border-right: 2px solid #F3F4F6;
         border-bottom: 2px solid #F3F4F6;
         transform: translateY(-60%) rotate(45deg);
