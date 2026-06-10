@@ -861,54 +861,113 @@ def is_benign_integrity_finding(finding: dict) -> bool:
 # -----------------------------
 # Counterparty Ledger Functions
 # -----------------------------
+UNKNOWN_COUNTERPARTY_VALUES = {"", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
+
+
+def normalize_counterparty_value(value) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = re.sub(r"\s+", " ", str(value).strip().upper())
+    if text in UNKNOWN_COUNTERPARTY_VALUES:
+        return ""
+    return text
+
+
+def extract_counterparty_from_description(description: str) -> str:
+    try:
+        if pd.isna(description):
+            return "UNKNOWN"
+    except Exception:
+        pass
+    if not description:
+        return "UNKNOWN"
+
+    desc = str(description).upper()
+
+    # Look for REMITTANCE patterns
+    remittance_match = re.search(r'REMITTANCE\s+(?:CR\s+)?([A-Z\s]+?)(?:\s+\d|$)', desc, re.IGNORECASE)
+    if remittance_match:
+        counterparty = remittance_match.group(1).strip()
+        if len(counterparty) > 3:
+            return counterparty
+
+    # Look for AUTOPAY patterns
+    autopay_match = re.search(r'AUTOPAY\s+([A-Z\s]+?)(?:\s+RTB|\s+\d|$)', desc, re.IGNORECASE)
+    if autopay_match:
+        counterparty = autopay_match.group(1).strip()
+        if counterparty:
+            return counterparty
+
+    # Look for IBG patterns
+    ibg_match = re.search(r'IBG\s+(?:CREDIT\s+)?([A-Z\s]+?)(?:\s+[A-Z]|\s+\d|$)', desc, re.IGNORECASE)
+    if ibg_match:
+        return ibg_match.group(1).strip()
+
+    # Clean up and take first few words
+    cleaned = re.sub(r'\d{10,}', '', desc)
+    cleaned = re.sub(r'CR\d+', '', cleaned)
+    cleaned = re.sub(r'RTB\d+', '', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    words = cleaned.split()
+    if len(words) > 5:
+        cleaned = ' '.join(words[:5])
+
+    return cleaned if len(cleaned) > 3 else "UNKNOWN"
+
+
+def resolve_transaction_counterparty(row: pd.Series) -> str:
+    """
+    Prefer counterparty values extracted by bank parsers, then fall back to
+    parser-specific helpers and the older UI description regex.
+    """
+    for column in (
+        "party_name",
+        "counterparty",
+        "counterparty_name",
+        "party",
+        "merchant",
+        "merchant_name",
+        "recipient",
+        "beneficiary",
+        "payer",
+        "payee",
+    ):
+        if column in row:
+            counterparty = normalize_counterparty_value(row.get(column))
+            if counterparty:
+                return counterparty
+
+    description = row.get("description", "")
+    try:
+        if pd.isna(description):
+            description = ""
+    except Exception:
+        pass
+    bank = normalize_counterparty_value(row.get("bank"))
+    if "CIMB" in bank:
+        counterparty = normalize_counterparty_value(extract_cimb_party_name(description))
+        if counterparty:
+            return counterparty
+
+    return extract_counterparty_from_description(description)
+
+
 def build_counterparty_ledger_from_transactions(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Build counterparty ledger summary from transaction dataframe by extracting counterparty from description
+    Build counterparty ledger summary using parser-extracted counterparty data
+    where available, falling back to description extraction.
     """
     if df.empty:
         return pd.DataFrame()
     
     df = df.copy()
-    
-    # Extract counterparty name from description
-    def extract_counterparty(description: str) -> str:
-        if not description:
-            return "UNKNOWN"
-        
-        desc = str(description).upper()
-        
-        # Look for REMITTANCE patterns
-        remittance_match = re.search(r'REMITTANCE\s+(?:CR\s+)?([A-Z\s]+?)(?:\s+\d|$)', desc, re.IGNORECASE)
-        if remittance_match:
-            counterparty = remittance_match.group(1).strip()
-            if len(counterparty) > 3:
-                return counterparty
-        
-        # Look for AUTOPAY patterns
-        autopay_match = re.search(r'AUTOPAY\s+([A-Z\s]+?)(?:\s+RTB|\s+\d|$)', desc, re.IGNORECASE)
-        if autopay_match:
-            counterparty = autopay_match.group(1).strip()
-            if counterparty:
-                return counterparty
-        
-        # Look for IBG patterns
-        ibg_match = re.search(r'IBG\s+(?:CREDIT\s+)?([A-Z\s]+?)(?:\s+[A-Z]|\s+\d|$)', desc, re.IGNORECASE)
-        if ibg_match:
-            return ibg_match.group(1).strip()
-        
-        # Clean up and take first few words
-        cleaned = re.sub(r'\d{10,}', '', desc)
-        cleaned = re.sub(r'CR\d+', '', cleaned)
-        cleaned = re.sub(r'RTB\d+', '', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        
-        words = cleaned.split()
-        if len(words) > 5:
-            cleaned = ' '.join(words[:5])
-        
-        return cleaned if len(cleaned) > 3 else "UNKNOWN"
-    
-    df['counterparty'] = df['description'].apply(extract_counterparty)
+    df['counterparty'] = df.apply(resolve_transaction_counterparty, axis=1)
     
     # Group by counterparty
     summary_data = []
@@ -997,37 +1056,8 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     
     # Show transactions for selected counterparty
     if selected_counterparty:
-        # Extract counterparty from df
         df_copy = df.copy()
-        
-        # Extract counterparty for filtering
-        def extract_counterparty(description: str) -> str:
-            if not description:
-                return "UNKNOWN"
-            desc = str(description).upper()
-            remittance_match = re.search(r'REMITTANCE\s+(?:CR\s+)?([A-Z\s]+?)(?:\s+\d|$)', desc, re.IGNORECASE)
-            if remittance_match:
-                counterparty = remittance_match.group(1).strip()
-                if len(counterparty) > 3:
-                    return counterparty
-            autopay_match = re.search(r'AUTOPAY\s+([A-Z\s]+?)(?:\s+RTB|\s+\d|$)', desc, re.IGNORECASE)
-            if autopay_match:
-                counterparty = autopay_match.group(1).strip()
-                if counterparty:
-                    return counterparty
-            ibg_match = re.search(r'IBG\s+(?:CREDIT\s+)?([A-Z\s]+?)(?:\s+[A-Z]|\s+\d|$)', desc, re.IGNORECASE)
-            if ibg_match:
-                return ibg_match.group(1).strip()
-            cleaned = re.sub(r'\d{10,}', '', desc)
-            cleaned = re.sub(r'CR\d+', '', cleaned)
-            cleaned = re.sub(r'RTB\d+', '', cleaned)
-            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-            words = cleaned.split()
-            if len(words) > 5:
-                cleaned = ' '.join(words[:5])
-            return cleaned if len(cleaned) > 3 else "UNKNOWN"
-        
-        df_copy['counterparty'] = df_copy['description'].apply(extract_counterparty)
+        df_copy['counterparty'] = df_copy.apply(resolve_transaction_counterparty, axis=1)
         counterparty_tx = df_copy[df_copy['counterparty'] == selected_counterparty].copy()
         
         if not counterparty_tx.empty:
