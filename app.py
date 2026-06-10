@@ -1036,22 +1036,6 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
                     'balance': 'Balance'
                 }
             )
-            
-            # Summary stats for selected counterparty
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Transactions", len(counterparty_tx))
-            with col2:
-                credits_total = counterparty_tx['credit'].sum()
-                st.metric("Total Credits", f"RM {credits_total:,.2f}")
-            with col3:
-                debits_total = counterparty_tx['debit'].sum()
-                st.metric("Total Debits", f"RM {debits_total:,.2f}")
-            with col4:
-                net = credits_total - debits_total
-                st.metric("Net Position", f"RM {net:,.2f}", 
-                         delta="Inflow" if net > 0 else "Outflow" if net < 0 else "Neutral")
-
 
 # -----------------------------
 # Pattern Analysis Functions
