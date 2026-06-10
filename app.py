@@ -1571,12 +1571,12 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     
     net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
     net_border = "#2e7d32" if net_position >= 0 else "#c62828"
-    net_icon = "📈" if net_position >= 0 else "📉"
-    net_label = "NET POSITION" if net_position >= 0 else "NET LOSS"
+
+    net_label = "Net Position" if net_position >= 0 else "Net Loss"
     
     cards.append(
         f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
-        f'<div class="kl-metric-label">{net_icon} {net_label}</div>'
+        f'<div class="kl-metric-label">{net_label}</div>'
         f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
         '</div>'
     )
