@@ -267,6 +267,144 @@ st.markdown(
         transform: translateY(1px);
     }
 
+    .kl-progress-divider {
+        height: 1px;
+        margin: 0.75rem 0 0.75rem;
+        background: linear-gradient(90deg, rgba(51, 65, 85, 0), rgba(71, 85, 105, 0.75), rgba(51, 65, 85, 0));
+    }
+
+    .kl-progress-panel {
+        margin-top: 0.75rem;
+        padding: 0.95rem 1rem;
+        border: 1px solid rgba(59, 130, 246, 0.36);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.72);
+        box-shadow: 0 0 8px rgba(0, 123, 255, 0.24);
+    }
+
+    .kl-progress-panel.success {
+        border-color: rgba(34, 197, 94, 0.38);
+        background: rgba(20, 83, 45, 0.55);
+        box-shadow: 0 0 8px rgba(40, 167, 69, 0.28);
+    }
+
+    .kl-progress-panel.warning {
+        border-color: rgba(250, 204, 21, 0.38);
+        background: rgba(113, 63, 18, 0.42);
+        box-shadow: 0 0 8px rgba(250, 204, 21, 0.18);
+    }
+
+    .kl-progress-panel.error {
+        border-color: rgba(248, 113, 113, 0.42);
+        background: rgba(127, 29, 29, 0.45);
+        box-shadow: 0 0 8px rgba(248, 113, 113, 0.22);
+    }
+
+    .kl-progress-topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.45rem;
+    }
+
+    .kl-progress-status {
+        min-width: 0;
+        color: #CBD5E1;
+        font-size: 0.88rem;
+        font-weight: 500;
+        line-height: 1.3;
+    }
+
+    .kl-progress-percent {
+        flex: 0 0 auto;
+        color: #E5F2FF;
+        font-size: 0.82rem;
+        font-weight: 600;
+        line-height: 1.3;
+    }
+
+    .kl-progress-filename,
+    .kl-progress-eta {
+        color: #94A3B8;
+        font-size: 0.8rem;
+        line-height: 1.35;
+    }
+
+    .kl-progress-filename {
+        margin-bottom: 0.5rem;
+    }
+
+    .kl-progress-track {
+        position: relative;
+        height: 0.62rem;
+        overflow: hidden;
+        border-radius: 6px;
+        background: #111827;
+        border: 1px solid rgba(51, 65, 85, 0.9);
+    }
+
+    .kl-progress-fill {
+        position: relative;
+        height: 100%;
+        border-radius: 6px;
+        background: linear-gradient(90deg, #007BFF, #00C6FF);
+        box-shadow: 0 0 8px rgba(0, 123, 255, 0.4);
+        transition: width 0.4s ease-in-out, background-color 0.3s ease, box-shadow 0.3s ease;
+        overflow: hidden;
+        animation: kl-progress-pulse 1.3s ease-in-out infinite;
+    }
+
+    .kl-progress-fill::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image: linear-gradient(
+            45deg,
+            rgba(255, 255, 255, 0.18) 25%,
+            transparent 25%,
+            transparent 50%,
+            rgba(255, 255, 255, 0.18) 50%,
+            rgba(255, 255, 255, 0.18) 75%,
+            transparent 75%,
+            transparent
+        );
+        background-size: 1rem 1rem;
+        animation: kl-progress-stripes 0.9s linear infinite;
+    }
+
+    .kl-progress-panel.success .kl-progress-fill {
+        background: #28A745;
+        box-shadow: 0 0 8px rgba(40, 167, 69, 0.4);
+        animation: none;
+    }
+
+    .kl-progress-panel.success .kl-progress-fill::after,
+    .kl-progress-panel.warning .kl-progress-fill::after,
+    .kl-progress-panel.error .kl-progress-fill::after {
+        display: none;
+    }
+
+    .kl-progress-panel.warning .kl-progress-fill {
+        background: linear-gradient(90deg, #F59E0B, #FACC15);
+        box-shadow: 0 0 8px rgba(250, 204, 21, 0.28);
+    }
+
+    .kl-progress-panel.error .kl-progress-fill {
+        background: linear-gradient(90deg, #EF4444, #F97316);
+        box-shadow: 0 0 8px rgba(248, 113, 113, 0.32);
+    }
+
+    @keyframes kl-progress-stripes {
+        from { background-position: 1rem 0; }
+        to { background-position: 0 0; }
+    }
+
+    @keyframes kl-progress-pulse {
+        0%, 100% { filter: brightness(1); }
+        50% { filter: brightness(1.12); }
+    }
+
     .kl-analysis-title {
         display: flex;
         align-items: center;
@@ -1735,6 +1873,91 @@ def get_high_value_threshold() -> float:
     return 0.0
 
 
+def truncate_filename(filename: str, max_chars: int = 34) -> str:
+    filename = str(filename or "")
+    if len(filename) <= max_chars:
+        return filename
+
+    keep_left = max(8, (max_chars - 3) // 2)
+    keep_right = max(8, max_chars - keep_left - 3)
+    return f"{filename[:keep_left]}...{filename[-keep_right:]}"
+
+
+def format_eta(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "Estimating time remaining"
+
+    seconds = max(0, int(round(seconds)))
+    if seconds < 1:
+        return "Less than 1s left"
+    if seconds < 60:
+        return f"~{seconds}s left"
+
+    minutes, remaining_seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"~{minutes}m {remaining_seconds}s left"
+
+    hours, remaining_minutes = divmod(minutes, 60)
+    return f"~{hours}h {remaining_minutes}m left"
+
+
+def estimate_remaining_time(started_at: datetime, completed_steps: int, total_steps: int) -> Optional[float]:
+    if completed_steps <= 0:
+        return None
+
+    elapsed = (datetime.now() - started_at).total_seconds()
+    remaining_steps = max(total_steps - completed_steps, 0)
+    if elapsed <= 0 or remaining_steps <= 0:
+        return 0
+
+    return (elapsed / completed_steps) * remaining_steps
+
+
+def render_processing_progress(
+    container,
+    *,
+    status: str,
+    progress: float,
+    variant: str = "active",
+    file_name: str = "",
+    eta: str = "",
+) -> None:
+    progress = min(max(float(progress or 0), 0.0), 1.0)
+    percent = int(round(progress * 100))
+    safe_status = escape(str(status or ""))
+    safe_file_name = escape(str(file_name or ""), quote=True)
+    short_file_name = escape(truncate_filename(str(file_name or "")))
+    variant_class = variant if variant in {"active", "success", "warning", "error"} else "active"
+    icon = "✅ " if variant_class == "success" else ""
+
+    file_line = ""
+    if file_name:
+        file_line = (
+            '<div class="kl-progress-filename">'
+            f'Current file: <span title="{safe_file_name}">{short_file_name}</span>'
+            "</div>"
+        )
+
+    eta_line = f'<div class="kl-progress-eta">{escape(str(eta))}</div>' if eta else ""
+
+    container.markdown(
+        f"""
+        <div class="kl-progress-panel {variant_class}">
+            <div class="kl-progress-topline">
+                <div class="kl-progress-status">{icon}{safe_status}</div>
+                <div class="kl-progress-percent">{percent}% completed</div>
+            </div>
+            {file_line}
+            <div class="kl-progress-track" aria-label="Processing progress">
+                <div class="kl-progress-fill" style="width: {percent}%;"></div>
+            </div>
+            {eta_line}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -2052,35 +2275,66 @@ if st.session_state.validation_toast_message:
 all_tx: List[dict] = []
 
 if uploaded_files and st.session_state.status == "running":
-    status_box = st.empty()
-    progress_bar = st.progress(0)
+    st.markdown('<div class="kl-progress-divider"></div>', unsafe_allow_html=True)
+    progress_panel = st.empty()
 
     total_files = len(uploaded_files)
     total_steps = total_files + 1
+    processing_started_at = datetime.now()
     parser = PARSERS[bank_choice]
     processing_errors: List[str] = []
     total_extracted = 0
     files_finished = 0
     resolved_pdf_bytes = {}
 
-    status_box.info(f"Preparing {total_files} file(s) for {bank_choice}.")
+    def update_processing_progress(
+        status: str,
+        completed_steps: int,
+        *,
+        variant: str = "active",
+        file_name: str = "",
+    ) -> None:
+        eta = ""
+        if variant == "active":
+            eta = format_eta(estimate_remaining_time(processing_started_at, completed_steps, total_steps))
+        render_processing_progress(
+            progress_panel,
+            status=status,
+            progress=completed_steps / total_steps,
+            variant=variant,
+            file_name=file_name,
+            eta=eta,
+        )
+
+    update_processing_progress(f"Preparing {total_files} file(s) for {bank_choice}.", 0)
 
     for file_idx, uploaded_file in enumerate(uploaded_files):
         if st.session_state.get("stop_requested"):
             st.session_state.status = "stopped"
-            status_box.warning(f"Stopped after {files_finished} of {total_files} file(s).")
+            update_processing_progress(
+                f"Stopped after {files_finished} of {total_files} file(s).",
+                files_finished,
+                variant="warning",
+            )
             break
 
         current_file = file_idx + 1
-        progress_bar.progress(files_finished / total_steps)
-        status_box.info(f"Processing file {current_file} of {total_files}: {uploaded_file.name}")
+        update_processing_progress(
+            f"Processing file {current_file} of {total_files}",
+            files_finished,
+            file_name=uploaded_file.name,
+        )
 
         try:
             pdf_bytes = uploaded_file.getvalue()
 
             # decrypt if encrypted
             if is_pdf_encrypted(pdf_bytes):
-                status_box.info(f"Decrypting file {current_file} of {total_files}: {uploaded_file.name}")
+                update_processing_progress(
+                    f"Decrypting file {current_file} of {total_files}",
+                    files_finished,
+                    file_name=uploaded_file.name,
+                )
                 pdf_bytes = decrypt_pdf_bytes(pdf_bytes, st.session_state.pdf_password)
             
             resolved_pdf_bytes[uploaded_file.name] = pdf_bytes
@@ -2169,54 +2423,65 @@ if uploaded_files and st.session_state.status == "running":
             if tx_norm:
                 all_tx.extend(tx_norm)
                 total_extracted += len(tx_norm)
-                status_box.info(
+                update_processing_progress(
                     f"Processed file {current_file} of {total_files}: "
-                    f"{uploaded_file.name} ({len(tx_norm)} transactions extracted)."
+                    f"{len(tx_norm)} transactions extracted",
+                    current_file,
+                    file_name=uploaded_file.name,
                 )
             else:
-                status_box.info(
-                    f"Processed file {current_file} of {total_files}: "
-                    f"{uploaded_file.name} (no transactions found)."
+                update_processing_progress(
+                    f"Processed file {current_file} of {total_files}: no transactions found",
+                    current_file,
+                    file_name=uploaded_file.name,
                 )
 
         except Exception as e:
             processing_errors.append(uploaded_file.name)
-            status_box.error(f"Error processing {uploaded_file.name}: {str(e)[:100]}")
+            update_processing_progress(
+                f"Error processing file {current_file} of {total_files}: {str(e)[:100]}",
+                current_file,
+                variant="error",
+                file_name=uploaded_file.name,
+            )
             st.error(f"❌ Error processing {uploaded_file.name}: {e}")
             st.exception(e)
 
         files_finished = file_idx + 1
-        progress_bar.progress(files_finished / total_steps)
 
     # Run PDF integrity checks
     analysis_results = {}
     processing_stopped = st.session_state.get("stop_requested")
     if resolved_pdf_bytes and not processing_stopped:
-        status_box.info(f"Running PDF integrity checks for {len(resolved_pdf_bytes)} file(s).")
+        update_processing_progress(
+            f"Running PDF integrity checks for {len(resolved_pdf_bytes)} file(s)",
+            total_files,
+        )
         try:
             analysis_results = analyze_pdf_batch(resolved_pdf_bytes)
         except Exception as e:
             st.warning(f"PDF integrity check failed: {e}")
 
-    # After all files are processed - set final progress and show completion
-    if not processing_stopped:
-        progress_bar.progress(1.0)
-    
     # Display final status message
     if processing_stopped:
         st.session_state.status = "stopped"
-        progress_bar.progress(files_finished / total_steps)
-        status_box.warning(f"Processing stopped at {files_finished} of {total_files} file(s).")
+        update_processing_progress(
+            f"Processing stopped at {files_finished} of {total_files} file(s).",
+            files_finished,
+            variant="warning",
+        )
     elif processing_errors:
         st.session_state.status = "completed_with_errors"
-        status_box.warning(
+        update_processing_progress(
             f"Completed with {len(processing_errors)} error(s). "
-            f"Extracted {total_extracted} transactions from {total_files} file(s)."
+            f"Extracted {total_extracted} transactions from {total_files} file(s).",
+            total_steps,
+            variant="warning",
         )
         st.warning(f"⚠️ Completed with {len(processing_errors)} error(s). Check the errors above.")
     else:
         st.session_state.status = "completed"
-        status_box.info("Finalizing extracted transactions.")
+        update_processing_progress("Finalizing extracted transactions.", total_steps)
     
     st.markdown("---")
     all_tx = dedupe_transactions(all_tx)
@@ -2258,16 +2523,24 @@ if uploaded_files and st.session_state.status == "running":
     final_transaction_count = len(all_tx)
 
     if processing_stopped:
-        status_box.warning(f"Processing stopped at {files_finished} of {total_files} file(s).")
+        update_processing_progress(
+            f"Processing stopped at {files_finished} of {total_files} file(s).",
+            files_finished,
+            variant="warning",
+        )
     elif processing_errors:
-        status_box.warning(
+        update_processing_progress(
             f"Completed with {len(processing_errors)} error(s). "
-            f"Extracted {final_transaction_count} transactions from {total_files} file(s)."
+            f"Extracted {final_transaction_count} transactions from {total_files} file(s).",
+            total_steps,
+            variant="warning",
         )
     else:
-        status_box.success(
+        update_processing_progress(
             f"Successfully processed all {total_files} file(s) and completed extraction of "
-            f"{final_transaction_count} transactions from {total_files} file(s)."
+            f"{final_transaction_count} transactions from {total_files} file(s).",
+            total_steps,
+            variant="success",
         )
 
 
