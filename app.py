@@ -1409,7 +1409,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
                 axis=1
             )
-            with st.expander(f"Repeated transaction ({len(duplicate_hits)})"):
+            with st.expander("Repeated transaction"):
                 st.caption("The following entries share the same date, description, and amount.")
                 duplicate_columns = [c for c in ["date", "description", "amount", "balance"] if c in duplicate_hits.columns]
                 st.dataframe(duplicate_hits[duplicate_columns], use_container_width=True)
@@ -1418,7 +1418,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
     if "is_rapid_repeat_transaction" in df.columns:
         rapid_repeat_hits = df[df["is_rapid_repeat_transaction"] == True].copy()
         if not rapid_repeat_hits.empty:
-            with st.expander(f"High freq transactions ({len(rapid_repeat_hits)})"):
+            with st.expander("High freq transactions"):
                 st.caption(
                     "High frequency transactions are repeated payments to the same merchant "
                     "across multiple days within a short time window."
@@ -1438,7 +1438,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 lambda row: f"+{row['credit']:,.2f}" if row.get('credit', 0) > 0 else f"-{row['debit']:,.2f}",
                 axis=1
             )
-            with st.expander(f"Round-number transactions ({len(round_hits)})"):
+            with st.expander("Round-number transactions"):
                 st.caption("Transactions with round numbers (multiple of 10,000).")
                 cols = [c for c in ["date", "description", "amount", "source_file"] if c in round_hits.columns]
                 st.dataframe(round_hits[cols], use_container_width=True)
@@ -1447,7 +1447,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
     if "is_high_value" in df.columns:
         high_hits = df[df["is_high_value"] == True].copy()
         if not high_hits.empty:
-            with st.expander(f"High-value transactions (>= RM{high_value_threshold:,.2f}) ({len(high_hits)})"):
+            with st.expander("High-value transactions"):
                 high_value_columns = [c for c in ["date", "description", "credit", "balance"] if c in high_hits.columns]
                 st.dataframe(high_hits[high_value_columns], use_container_width=True)
     
@@ -1465,7 +1465,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 lambda row: f"-{row['debit']:,.2f}" if row.get('debit', 0) > 0 else f"+{row['credit']:,.2f}",
                 axis=1
             )
-            with st.expander(f"🏦 EPF / KWSP Contributions ({epf_count} payments, RM {epf_total:,.2f})"):
+            with st.expander("EPF / KWSP Contributions"):
                 st.caption("Employee Provident Fund (EPF) / KWSP contributions detected.")
                 display_cols = [c for c in ["date", "description", "amount"] if c in epf_hits.columns]
                 st.dataframe(epf_hits[display_cols], use_container_width=True)
@@ -1478,7 +1478,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 lambda row: f"-{row['debit']:,.2f}" if row.get('debit', 0) > 0 else f"+{row['credit']:,.2f}",
                 axis=1
             )
-            with st.expander(f"🛡️ SOCSO / PERKESO Contributions ({socso_count} payments, RM {socso_total:,.2f})"):
+            with st.expander("SOCSO / PERKESO Contributions"):
                 st.caption("Social Security Organization (SOCSO/PERKESO) contributions including EIS/SIP.")
                 display_cols = [c for c in ["date", "description", "amount"] if c in socso_hits.columns]
                 st.dataframe(socso_hits[display_cols], use_container_width=True)
@@ -1491,7 +1491,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 lambda row: f"-{row['debit']:,.2f}" if row.get('debit', 0) > 0 else f"+{row['credit']:,.2f}",
                 axis=1
             )
-            with st.expander(f"📋 LHDN / Tax Payments ({lhdn_count} payments, RM {lhdn_total:,.2f})"):
+            with st.expander("LHDN / Tax Payments"):
                 st.caption("Inland Revenue Board (LHDN) / Income tax payments detected.")
                 display_cols = [c for c in ["date", "description", "amount"] if c in lhdn_hits.columns]
                 st.dataframe(lhdn_hits[display_cols], use_container_width=True)
@@ -1504,7 +1504,7 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 lambda row: f"-{row['debit']:,.2f}" if row.get('debit', 0) > 0 else f"+{row['credit']:,.2f}",
                 axis=1
             )
-            with st.expander(f"🎓 HRDF / PSMB Levies ({hrdf_count} payments, RM {hrdf_total:,.2f})"):
+            with st.expander("HRDF / PSMB Levies"):
                 st.caption("Human Resource Development Fund (HRDF/PSMB) levy payments detected.")
                 display_cols = [c for c in ["date", "description", "amount"] if c in hrdf_hits.columns]
                 st.dataframe(hrdf_hits[display_cols], use_container_width=True)
