@@ -90,8 +90,8 @@ st.markdown(
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
-        font-size: 15px !important;
-        font-weight: 400 !important;
+        font-size: 18px !important;
+        font-weight: 500 !important;
         line-height: 22px !important;
         -webkit-font-smoothing: antialiased !important;
         -moz-osx-font-smoothing: grayscale !important;
