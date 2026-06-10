@@ -340,7 +340,7 @@ st.markdown(
 
     div[data-testid="stExpander"] details > summary {
         min-height: 3.25rem !important;
-        padding: 0.8rem 3rem 0.8rem 1rem !important;
+        padding: 0.8rem 1.25rem !important;
         position: relative !important;
         display: flex !important;
         align-items: center !important;
@@ -363,22 +363,22 @@ st.markdown(
 
     div[data-testid="stExpander"] details > summary [data-testid="stExpanderToggleIcon"],
     div[data-testid="stExpander"] details > summary > svg:first-child,
+    div[data-testid="stExpander"] details > summary > span:first-child:has(svg),
     div[data-testid="stExpander"] details > summary > div:first-child:has(svg),
     div[data-testid="stExpander"] details > summary > div:first-child:has([data-testid="stExpanderToggleIcon"]) {
         display: flex !important;
-        position: absolute !important;
-        right: 1.2rem !important;
-        left: auto !important;
-        top: 50% !important;
+        order: 2 !important;
+        position: static !important;
         width: 1rem !important;
         height: 1rem !important;
-        margin: 0 !important;
+        margin: 0 0 0 auto !important;
         padding: 0 !important;
-        transform: translateY(-50%) !important;
+        transform: none !important;
     }
 
     div[data-testid="stExpander"] details > summary [data-testid="stExpanderToggleIcon"] svg,
     div[data-testid="stExpander"] details > summary > svg:first-child,
+    div[data-testid="stExpander"] details > summary > span:first-child:has(svg) svg,
     div[data-testid="stExpander"] details > summary > div:first-child:has(svg) svg,
     div[data-testid="stExpander"] details > summary > div:first-child:has([data-testid="stExpanderToggleIcon"]) svg {
         display: block !important;
@@ -390,6 +390,8 @@ st.markdown(
 
     div[data-testid="stExpander"] details > summary > [data-testid="stMarkdownContainer"],
     div[data-testid="stExpander"] details > summary [data-testid="stExpanderToggleIcon"] + [data-testid="stMarkdownContainer"] {
+        order: 1 !important;
+        flex: 1 1 auto !important;
         margin-left: 0 !important;
     }
 
