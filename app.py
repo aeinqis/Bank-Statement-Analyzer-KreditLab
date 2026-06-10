@@ -70,85 +70,6 @@ st.markdown(
         margin-bottom: 0.2rem;
     }
 
-    div[data-testid="stSelectbox"] {
-        margin-top: -0.25rem;
-    }
-
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-    min-height: 54px !important;      /* 3.35rem */
-    align-items: center !important;
-    padding-left: 15px !important;    /* 0.95rem */
-    padding-right: 32px !important;   /* 2rem */
-    border-radius: 8px !important;
-    background: #0B0F16 !important;
-    border: 1px solid #334155 !important;
-}
-
-div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
-    font-size: 15px !important;       /* 0.95rem */
-    font-weight: 500 !important;
-    line-height: 22px !important;     /* 1.4 */
-    -webkit-font-smoothing: antialiased !important;
-    -moz-osx-font-smoothing: grayscale !important;
-    text-rendering: optimizeLegibility !important;
-    color: #F3F4F6 !important;
-}
-
-div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
-    font-size: 15px !important;
-    font-weight: 500 !important;
-    line-height: 22px !important;
-    -webkit-font-smoothing: antialiased !important;
-    -moz-osx-font-smoothing: grayscale !important;
-    text-rendering: optimizeLegibility !important;
-    color: #F3F4F6 !important;
-}
-
-div[data-testid="stSelectbox"] [data-baseweb="tag"] {
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
-}
-
-div[data-testid="stSelectbox"] svg {
-    width: 16px !important;
-    height: 16px !important;
-    fill: #9CA3AF !important;
-}
-
-div[data-testid="stSelectbox"] * {
-    font-family: "Inter", sans-serif !important;
-    transform: none !important;
-}
-
-div[role="listbox"] {
-    padding: 6px !important;          /* 0.4rem */
-    border: 1px solid #374151 !important;
-    border-radius: 10px !important;
-    background: #0B0F16 !important;
-}
-
-div[role="option"] {
-    min-height: 42px !important;      /* 2.6rem */
-    padding: 10px 14px !important;    /* 0.6rem 0.85rem */
-    border-radius: 7px !important;
-    color: #E5E7EB !important;
-    font-size: 14px !important;       /* 0.9rem */
-    font-weight: 500 !important;
-    line-height: 20px !important;
-    -webkit-font-smoothing: antialiased !important;
-    -moz-osx-font-smoothing: grayscale !important;
-    text-rendering: optimizeLegibility !important;
-    display: flex !important;
-    align-items: center !important;
-}
-
-div[role="option"]:hover,
-div[aria-selected="true"] {
-    background: #2D3340 !important;
-    color: #FFFFFF !important;
-}
-
     [data-testid="stWidgetLabel"] label,
     [data-testid="stWidgetLabel"] p,
     [data-testid="stFileUploader"] label {
@@ -212,7 +133,6 @@ div[aria-selected="true"] {
         transform: translateY(1px);
     }
 
-    div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
     div[data-testid="stTextInput"] div[data-baseweb="input"] {
         min-height: 3rem;
         box-sizing: border-box;
@@ -1091,12 +1011,16 @@ PARSERS: Dict[str, Callable[[bytes, str], List[dict]]] = {
 }
 
 
+def get_supported_banks() -> List[str]:
+    return list(PARSERS.keys())
+
+
 if "bank_choice" not in st.session_state:
     st.session_state.bank_choice = None
 
 bank_choice = st.selectbox(
-    "Select Bank Format",
-    list(PARSERS.keys()),
+    "Select Bank",
+    options=sorted(get_supported_banks(), key=str.lower),
     index=None,
     key="bank_choice",
     placeholder="Choose the bank for the uploaded statement(s)",
