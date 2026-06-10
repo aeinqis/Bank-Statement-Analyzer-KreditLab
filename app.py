@@ -450,6 +450,16 @@ st.markdown(
         color: #94a3b8;
         margin-bottom: 1rem;
     }
+
+    /* Counterparty table styling */
+    .counterparty-net-positive {
+        color: #4CAF50;
+        font-weight: 600;
+    }
+    .counterparty-net-negative {
+        color: #F44336;
+        font-weight: 600;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -829,6 +839,215 @@ def is_benign_integrity_finding(finding: dict) -> bool:
         "font consistency",
     ]
     return any(pattern in message for pattern in benign_patterns)
+
+
+# -----------------------------
+# Counterparty Ledger Functions
+# -----------------------------
+def build_counterparty_ledger_from_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build counterparty ledger summary from transaction dataframe by extracting counterparty from description
+    """
+    if df.empty:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    
+    # Extract counterparty name from description
+    def extract_counterparty(description: str) -> str:
+        if not description:
+            return "UNKNOWN"
+        
+        desc = str(description).upper()
+        
+        # Look for REMITTANCE patterns
+        remittance_match = re.search(r'REMITTANCE\s+(?:CR\s+)?([A-Z\s]+?)(?:\s+\d|$)', desc, re.IGNORECASE)
+        if remittance_match:
+            counterparty = remittance_match.group(1).strip()
+            if len(counterparty) > 3:
+                return counterparty
+        
+        # Look for AUTOPAY patterns
+        autopay_match = re.search(r'AUTOPAY\s+([A-Z\s]+?)(?:\s+RTB|\s+\d|$)', desc, re.IGNORECASE)
+        if autopay_match:
+            counterparty = autopay_match.group(1).strip()
+            if counterparty:
+                return counterparty
+        
+        # Look for IBG patterns
+        ibg_match = re.search(r'IBG\s+(?:CREDIT\s+)?([A-Z\s]+?)(?:\s+[A-Z]|\s+\d|$)', desc, re.IGNORECASE)
+        if ibg_match:
+            return ibg_match.group(1).strip()
+        
+        # Clean up and take first few words
+        cleaned = re.sub(r'\d{10,}', '', desc)
+        cleaned = re.sub(r'CR\d+', '', cleaned)
+        cleaned = re.sub(r'RTB\d+', '', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        words = cleaned.split()
+        if len(words) > 5:
+            cleaned = ' '.join(words[:5])
+        
+        return cleaned if len(cleaned) > 3 else "UNKNOWN"
+    
+    df['counterparty'] = df['description'].apply(extract_counterparty)
+    
+    # Group by counterparty
+    summary_data = []
+    for counterparty, group in df.groupby('counterparty'):
+        credit_transactions = group[group['credit'] > 0]
+        debit_transactions = group[group['debit'] > 0]
+        
+        total_credits = credit_transactions['credit'].sum() if not credit_transactions.empty else 0
+        total_debits = debit_transactions['debit'].sum() if not debit_transactions.empty else 0
+        net_position = total_credits - total_debits
+        
+        summary_data.append({
+            'counterparty_name': counterparty,
+            'transaction_count': len(group),
+            'credit_count': len(credit_transactions),
+            'debit_count': len(debit_transactions),
+            'total_credits': round(total_credits, 2),
+            'total_debits': round(total_debits, 2),
+            'net_position': round(net_position, 2)
+        })
+    
+    summary_df = pd.DataFrame(summary_data)
+    
+    # Sort by absolute net position
+    summary_df['abs_net_position'] = summary_df['net_position'].abs()
+    summary_df = summary_df.sort_values('abs_net_position', ascending=False)
+    summary_df = summary_df.drop('abs_net_position', axis=1)
+    
+    return summary_df
+
+
+def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
+    """
+    Render counterparty ledger as a table with transaction details on selection
+    """
+    if df.empty:
+        st.info("No counterparty data available.")
+        return
+    
+    # Build counterparty summary
+    counterparty_summary = build_counterparty_ledger_from_transactions(df)
+    
+    if counterparty_summary.empty:
+        st.info("No counterparty data available.")
+        return
+    
+    st.markdown("## 💼 Counterparty Ledger")
+    st.markdown("*Top counterparties by absolute net position. Green indicates net inflows; red indicates net outflows.*")
+    
+    # Display summary table
+    display_df = counterparty_summary.copy()
+    display_df['total_credits'] = display_df['total_credits'].apply(lambda x: f"RM {x:,.2f}")
+    display_df['total_debits'] = display_df['total_debits'].apply(lambda x: f"RM {x:,.2f}")
+    
+    # Format net position with color indicators using column config
+    def format_net_position(val):
+        if val > 0:
+            return f"🟢 RM {val:,.2f}"
+        elif val < 0:
+            return f"🔴 RM {abs(val):,.2f}"
+        return f"⚪ RM {val:,.2f}"
+    
+    display_df['net_position_display'] = counterparty_summary['net_position'].apply(format_net_position)
+    
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            'counterparty_name': 'Counterparty',
+            'transaction_count': 'Transactions',
+            'credit_count': 'Credits',
+            'debit_count': 'Debits',
+            'total_credits': 'Total Credits',
+            'total_debits': 'Total Debits',
+            'net_position_display': 'Net Position'
+        }
+    )
+    
+    # Selection dropdown
+    selected_counterparty = st.selectbox(
+        "Select a counterparty to inspect transaction lines",
+        options=[''] + counterparty_summary['counterparty_name'].tolist(),
+        format_func=lambda x: x if x else "Choose a counterparty..."
+    )
+    
+    # Show transactions for selected counterparty
+    if selected_counterparty:
+        # Extract counterparty from df
+        df_copy = df.copy()
+        
+        # Extract counterparty for filtering
+        def extract_counterparty(description: str) -> str:
+            if not description:
+                return "UNKNOWN"
+            desc = str(description).upper()
+            remittance_match = re.search(r'REMITTANCE\s+(?:CR\s+)?([A-Z\s]+?)(?:\s+\d|$)', desc, re.IGNORECASE)
+            if remittance_match:
+                counterparty = remittance_match.group(1).strip()
+                if len(counterparty) > 3:
+                    return counterparty
+            autopay_match = re.search(r'AUTOPAY\s+([A-Z\s]+?)(?:\s+RTB|\s+\d|$)', desc, re.IGNORECASE)
+            if autopay_match:
+                counterparty = autopay_match.group(1).strip()
+                if counterparty:
+                    return counterparty
+            ibg_match = re.search(r'IBG\s+(?:CREDIT\s+)?([A-Z\s]+?)(?:\s+[A-Z]|\s+\d|$)', desc, re.IGNORECASE)
+            if ibg_match:
+                return ibg_match.group(1).strip()
+            cleaned = re.sub(r'\d{10,}', '', desc)
+            cleaned = re.sub(r'CR\d+', '', cleaned)
+            cleaned = re.sub(r'RTB\d+', '', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            words = cleaned.split()
+            if len(words) > 5:
+                cleaned = ' '.join(words[:5])
+            return cleaned if len(cleaned) > 3 else "UNKNOWN"
+        
+        df_copy['counterparty'] = df_copy['description'].apply(extract_counterparty)
+        counterparty_tx = df_copy[df_copy['counterparty'] == selected_counterparty].copy()
+        
+        if not counterparty_tx.empty:
+            # Format for display
+            display_tx = counterparty_tx[['date', 'description', 'credit', 'debit', 'balance']].copy()
+            display_tx['credit'] = display_tx['credit'].apply(lambda x: f"RM {x:,.2f}" if x and x > 0 else "")
+            display_tx['debit'] = display_tx['debit'].apply(lambda x: f"RM {x:,.2f}" if x and x > 0 else "")
+            display_tx['balance'] = display_tx['balance'].apply(lambda x: f"RM {x:,.2f}" if x and str(x) != 'nan' else "")
+            
+            st.markdown(f"### Transaction Details: {selected_counterparty}")
+            st.dataframe(
+                display_tx,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'date': 'Date',
+                    'description': 'Description',
+                    'credit': 'Credit (RM)',
+                    'debit': 'Debit (RM)',
+                    'balance': 'Balance'
+                }
+            )
+            
+            # Summary stats for selected counterparty
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Transactions", len(counterparty_tx))
+            with col2:
+                credits_total = counterparty_tx['credit'].sum()
+                st.metric("Total Credits", f"RM {credits_total:,.2f}")
+            with col3:
+                debits_total = counterparty_tx['debit'].sum()
+                st.metric("Total Debits", f"RM {debits_total:,.2f}")
+            with col4:
+                net = credits_total - debits_total
+                st.metric("Net Position", f"RM {net:,.2f}", 
+                         delta="Inflow" if net > 0 else "Outflow" if net < 0 else "Neutral")
 
 
 # -----------------------------
@@ -1933,6 +2152,7 @@ if uploaded_files and st.session_state.status == "running":
         progress_text.write(f"✅ Completed! Extracted {total_extracted} transactions from {total_files} file(s).")
         st.success(f"🎉 Successfully processed all {total_files} file(s)!")
     
+    st.markdown("---")
     all_tx = dedupe_transactions(all_tx)
 
     # Stable ordering
@@ -1986,6 +2206,10 @@ if st.session_state.results:
         
         # Display transaction pattern overview
         render_transaction_overview(df, high_value_threshold)
+        
+        # Display Counterparty Ledger Table
+        st.markdown("---")
+        render_counterparty_ledger_table(df)
         
         # Display basic transaction table
         st.markdown("#### All Transactions")
