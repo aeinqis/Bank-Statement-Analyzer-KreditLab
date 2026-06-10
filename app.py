@@ -82,14 +82,14 @@ st.markdown(
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
-        font-size: 18px !important;
+        font-size: 14px !important;
         font-weight: 600 !important;
         line-height: 24px !important;
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
     div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
-        font-size: 18px !important;
+        font-size: 14px !important;
         font-weight: 600 !important;
         line-height: 24px !important;
     }
@@ -102,6 +102,7 @@ st.markdown(
     div[data-testid="stSelectbox"] svg {
         width: 1rem;
         height: 1rem;
+        fill: #9CA3AF !important;
     }
 
     div[role="listbox"] {
