@@ -1550,6 +1550,12 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     
     # Add Financial Summary Cards
     cards.append(
+       '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">Transactions</div>'
+        f'<div class="kl-metric-value">{item_map.get("Total Transactions", 0)}</div>'
+        '</div>',
+    )
+    cards.append(
         '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
         '<div class="kl-metric-label">💰 TOTAL CREDITS</div>'
         f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
@@ -1577,34 +1583,28 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     
     # Add existing pattern cards
     cards.extend([
-        '<div class="kl-metric-card">'
-        '<div class="kl-metric-label">📋 Transactions</div>'
-        f'<div class="kl-metric-value">{item_map.get("Total Transactions", 0)}</div>'
-        '</div>',
         
         '<div class="kl-metric-card">'
-        '<div class="kl-metric-label">⚠️ High-Value Flags</div>'
+        '<div class="kl-metric-label">High-Value Flags</div>'
         f'<div class="kl-metric-value">{item_map.get("High-Value Flags", 0)}</div>'
         '</div>',
         
         '<div class="kl-metric-card">'
-        '<div class="kl-metric-label">🔢 Round-Number</div>'
+        '<div class="kl-metric-label">Round-Number</div>'
         f'<div class="kl-metric-value">{item_map.get("Round-Number", 0)}</div>'
         '</div>',
         
         '<div class="kl-metric-card">'
-        '<div class="kl-metric-label">🔄 Repeated</div>'
+        '<div class="kl-metric-label">Repeated</div>'
         f'<div class="kl-metric-value">{item_map.get("Repeated", 0)}</div>'
         '</div>',
-    ])
-    
-    # Add wide card for High Frequency Flags
-    cards.append(
-        '<div class="kl-metric-card kl-metric-card-wide">'
-        '<div class="kl-metric-label">⚡ High Frequency Flags</div>'
+
+        '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">High Frequency Flags</div>'
         f'<div class="kl-metric-value">{item_map.get("High Frequency Flags", 0)}</div>'
-        '</div>'
-    )
+        '</div>',
+    ])
+
     
     # Add statutory payment cards
     if statutory_items:
