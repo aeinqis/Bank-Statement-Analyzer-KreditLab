@@ -86,7 +86,7 @@ st.markdown(
         padding-right: 32px !important;
         border-radius: 8px !important;
         background: #262730 !important;
-        border: 1px solid #334155 !important;
+        border: 1.5px solid #334155 !important;
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
@@ -227,6 +227,26 @@ st.markdown(
     div.stButton > button:not([kind="primary"]):not([type="primary"]):active {
         box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
         transform: translateY(1px);
+    }
+
+    section[data-testid="stFileUploaderDropzone"],
+    div[data-testid="stFileUploaderDropzone"],
+    div[data-testid="stTextInput"] div[data-baseweb="input"] {
+        background: #262730 !important;
+        border: 1.5px solid #334155 !important;
+        border-radius: 8px !important;
+        box-sizing: border-box;
+    }
+
+    section[data-testid="stFileUploaderDropzone"]:hover,
+    div[data-testid="stFileUploaderDropzone"]:hover,
+    div[data-testid="stTextInput"] div[data-baseweb="input"]:hover {
+        border-color: #475569 !important;
+    }
+
+    div[data-testid="stTextInput"] input {
+        background: transparent !important;
+        color: #F3F4F6 !important;
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
