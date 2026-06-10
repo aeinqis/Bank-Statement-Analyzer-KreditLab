@@ -318,20 +318,6 @@ st.markdown(
         font-weight: 800;
     }
 
-    div[data-testid="stExpander"] {
-        border: 1px solid #374151;
-        border-radius: 6px;
-        background: #0B0F16;
-        overflow: hidden;
-        margin-bottom: 0.45rem;
-    }
-
-    div[data-testid="stExpander"] details summary {
-        min-height: 2.35rem;
-        padding: 0.45rem 0.8rem;
-        font-weight: 600;
-    }
-
     @media (max-width: 900px) {
         .kl-metric-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
