@@ -85,13 +85,13 @@ st.markdown(
         padding-left: 15px !important;
         padding-right: 32px !important;
         border-radius: 8px !important;
-        background: #0B0F16 !important;
+        background: #262730 !important;
         border: 1px solid #334155 !important;
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
         font-size: 15px !important;
-        font-weight: 500 !important;
+        font-weight: 400 !important;
         line-height: 22px !important;
         -webkit-font-smoothing: antialiased !important;
         -moz-osx-font-smoothing: grayscale !important;
@@ -102,7 +102,7 @@ st.markdown(
     div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
     div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
         font-size: 15px !important;
-        font-weight: 500 !important;
+        font-weight: 400 !important;
         line-height: 22px !important;
         -webkit-font-smoothing: antialiased !important;
         -moz-osx-font-smoothing: grayscale !important;
@@ -138,7 +138,7 @@ st.markdown(
         border-radius: 0 !important;
         color: #F3F4F6 !important;
         font-size: 18px !important;
-        font-weight: 600 !important;
+        font-weight: 400 !important;
         line-height: 24px !important;
         -webkit-font-smoothing: antialiased !important;
         -moz-osx-font-smoothing: grayscale !important;
@@ -300,16 +300,16 @@ st.markdown(
 
     div[data-testid="stExpander"] {
         border: 1px solid #374151;
-        border-radius: 8px;
+        border-radius: 6px;
         background: #0B0F16;
         overflow: hidden;
-        margin-bottom: 1rem;
+        margin-bottom: 0.45rem;
     }
 
     div[data-testid="stExpander"] details summary {
-        min-height: 3.2rem;
-        padding: 0.85rem 1rem;
-        font-weight: 700;
+        min-height: 2.35rem;
+        padding: 0.45rem 0.8rem;
+        font-weight: 600;
     }
 
     @media (max-width: 900px) {
