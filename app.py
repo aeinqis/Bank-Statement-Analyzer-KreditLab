@@ -1530,28 +1530,107 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     """Render the transaction pattern overview dashboard"""
     analysis_df = filter_statement_transactions_df(df)
     pattern_summary = summarize_transaction_patterns(analysis_df)
-
+    
     st.html(
         '<div class="kl-analysis-title">📊 Transactional Pattern Analysis</div>'
         '<div class="kl-analysis-subtitle">The story of the money and whether the financial behavior makes sense.</div>',
     )
-    # Display pattern metrics in two rows
+    
+    # Calculate total credits and debits
+    total_credits = analysis_df['credit'].sum() if 'credit' in analysis_df.columns else 0
+    total_debits = analysis_df['debit'].sum() if 'debit' in analysis_df.columns else 0
+    net_position = total_credits - total_debits
+    
+    # Display summary metrics with financial cards added
     item_map = dict(pattern_summary.get("items", []))
     statutory_items = pattern_summary.get("statutory_items", [])
-
-    render_metric_cards(
-        [
-            ("Transactions", item_map.get("Total Transactions", 0)),
-            ("High-Value Flags", item_map.get("High-Value Flags", 0)),
-            ("Round-Number", item_map.get("Round-Number", 0)),
-            ("Repeated", item_map.get("Repeated", 0)),
-        ],
-        [("High Frequency Flags", item_map.get("High Frequency Flags", 0))],
-        statutory_metrics=statutory_items if statutory_items else None,
+    
+    # Create cards including financial summary
+    cards = []
+    
+    # Add Financial Summary Cards
+    cards.append(
+        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
+        '<div class="kl-metric-label">💰 TOTAL CREDITS</div>'
+        f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
+        '</div>'
     )
+    
+    cards.append(
+        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
+        '<div class="kl-metric-label">💸 TOTAL DEBITS</div>'
+        f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
+        '</div>'
+    )
+    
+    net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
+    net_border = "#2e7d32" if net_position >= 0 else "#c62828"
+    net_icon = "📈" if net_position >= 0 else "📉"
+    net_label = "NET POSITION" if net_position >= 0 else "NET LOSS"
+    
+    cards.append(
+        f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
+        f'<div class="kl-metric-label">{net_icon} {net_label}</div>'
+        f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
+        '</div>'
+    )
+    
+    # Add existing pattern cards
+    cards.extend([
+        '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">📋 Transactions</div>'
+        f'<div class="kl-metric-value">{item_map.get("Total Transactions", 0)}</div>'
+        '</div>',
+        
+        '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">⚠️ High-Value Flags</div>'
+        f'<div class="kl-metric-value">{item_map.get("High-Value Flags", 0)}</div>'
+        '</div>',
+        
+        '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">🔢 Round-Number</div>'
+        f'<div class="kl-metric-value">{item_map.get("Round-Number", 0)}</div>'
+        '</div>',
+        
+        '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">🔄 Repeated</div>'
+        f'<div class="kl-metric-value">{item_map.get("Repeated", 0)}</div>'
+        '</div>',
+    ])
+    
+    # Add wide card for High Frequency Flags
+    cards.append(
+        '<div class="kl-metric-card kl-metric-card-wide">'
+        '<div class="kl-metric-label">⚡ High Frequency Flags</div>'
+        f'<div class="kl-metric-value">{item_map.get("High Frequency Flags", 0)}</div>'
+        '</div>'
+    )
+    
+    # Add statutory payment cards
+    if statutory_items:
+        for label, count, total in statutory_items:
+            icon_map = {
+                "EPF / KWSP": "🏦",
+                "SOCSO / PERKESO": "🛡️",
+                "LHDN / Tax": "📋",
+                "HRDF / PSMB": "🎓"
+            }
+            icon = icon_map.get(label, "📊")
+            cards.append(
+                '<div class="kl-metric-card">'
+                f'<div class="kl-metric-label">{icon} {label}</div>'
+                f'<div class="kl-metric-value">{count}</div>'
+                f'<div style="font-size: 0.85rem; color: #A9C1DD; margin-top: 0.35rem;">{total}</div>'
+                '</div>'
+            )
+    
+    # Display all cards in the grid
+    st.html(
+        f'<div class="kl-metric-grid">{"".join(cards)}</div>',
+    )
+    
     # Render detailed expandable sections
     render_pattern_details(analysis_df, high_value_threshold)
-
 
 # -----------------------------
 # Core Processing Functions
