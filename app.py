@@ -1104,7 +1104,7 @@ def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
 
 def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> None:
     """Render expandable sections for each pattern type"""
-    st.markdown("### Pattern Details")
+    st.markdown("#### Pattern Details")
     
     # Duplicate transactions
     if "is_duplicate_transaction" in df.columns:
@@ -1116,17 +1116,24 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
             )
             with st.expander(f"Repeated transaction ({len(duplicate_hits)})"):
                 st.caption("The following entries share the same date, description, and amount.")
-                display_cols = [c for c in ["date", "description", "amount", "balance"] if c in duplicate_hits.columns]
-                st.dataframe(duplicate_hits[display_cols], use_container_width=True)
+                duplicate_columns = [c for c in ["date", "description", "amount", "balance"] if c in duplicate_hits.columns]
+                st.dataframe(duplicate_hits[duplicate_columns], use_container_width=True)
     
     # Rapid repeat transactions
     if "is_rapid_repeat_transaction" in df.columns:
         rapid_repeat_hits = df[df["is_rapid_repeat_transaction"] == True].copy()
         if not rapid_repeat_hits.empty:
             with st.expander(f"High freq transactions ({len(rapid_repeat_hits)})"):
-                st.caption("Transactions repeated to the same merchant within a short time window.")
-                display_cols = [c for c in ["date", "description", "credit", "debit", "repeat_days_in_window"] if c in rapid_repeat_hits.columns]
-                st.dataframe(rapid_repeat_hits[display_cols], use_container_width=True)
+                st.caption(
+                    "High frequency transactions are repeated payments to the same merchant "
+                    "across multiple days within a short time window."
+                )
+                display_df = rapid_repeat_hits
+                display_columns = [
+                    c for c in ["date", "description", "credit", "debit", "repeat_days_in_window"]
+                    if c in display_df.columns
+                ]
+                st.dataframe(display_df[display_columns], use_container_width=True, hide_index=True)
     
     # Round number transactions
     if "is_round" in df.columns:
@@ -1138,16 +1145,16 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
             )
             with st.expander(f"Round-number transactions ({len(round_hits)})"):
                 st.caption("Transactions with round numbers (multiple of 10,000).")
-                display_cols = [c for c in ["date", "description", "amount", "source_file"] if c in round_hits.columns]
-                st.dataframe(round_hits[display_cols], use_container_width=True)
+                cols = [c for c in ["date", "description", "amount", "source_file"] if c in round_hits.columns]
+                st.dataframe(round_hits[cols], use_container_width=True)
     
     # High value transactions
     if "is_high_value" in df.columns:
         high_hits = df[df["is_high_value"] == True].copy()
         if not high_hits.empty:
             with st.expander(f"High-value transactions (>= RM{high_value_threshold:,.2f}) ({len(high_hits)})"):
-                display_cols = [c for c in ["date", "description", "credit", "balance"] if c in high_hits.columns]
-                st.dataframe(high_hits[display_cols], use_container_width=True)
+                high_value_columns = [c for c in ["date", "description", "credit", "balance"] if c in high_hits.columns]
+                st.dataframe(high_hits[high_value_columns], use_container_width=True)
     
     # Statutory payments sections
     epf_count, epf_total = compute_epf_payments(df)
