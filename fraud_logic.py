@@ -43,11 +43,11 @@ from core_utils import sanitize_transaction_description
 # Optional OCR dependencies
 try:
     import pytesseract
-    from pdf2image import convert_from_bytes
+    from PIL import Image
     OCR_AVAILABLE = True
 except Exception:
     pytesseract = None
-    convert_from_bytes = None
+    Image = None
     OCR_AVAILABLE = False
 
 
@@ -82,19 +82,21 @@ def _finding(layer: str, severity: str, message: str, detail: Any = None) -> Dic
 # ---------------------------------------------------------------------------
 def detect_font_manipulation(pdf_bytes: bytes) -> str:
     """
-    Converts PDF to images and runs OCR to reveal visible text that may differ
+    Renders PDF pages and runs OCR to reveal visible text that may differ
     from embedded digital text. Useful for spotting painted-over or hidden layers.
 
     Returns OCR text only. This function does not raise if OCR dependencies are
     unavailable; it returns an explanatory message instead.
     """
     if not OCR_AVAILABLE:
-        return "OCR dependencies are not available. Install pytesseract and pdf2image."
+        return "OCR dependencies are not available. Install pytesseract and Pillow."
 
-    images = convert_from_bytes(pdf_bytes)
     ocr_text = ""
-    for img in images:
-        ocr_text += pytesseract.image_to_string(img)
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for page in doc:
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            img = Image.open(BytesIO(pix.tobytes("png")))
+            ocr_text += pytesseract.image_to_string(img)
     return ocr_text
 
 

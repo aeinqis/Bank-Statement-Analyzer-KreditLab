@@ -369,6 +369,25 @@ def filter_affin_balance_outliers(transactions: List[Dict[str, Any]]) -> List[Di
 
     return out
 
+def sanitize_transaction_description(description: Any) -> str:
+    """Remove statement footer/header sentences accidentally appended to descriptions."""
+    text = normalize_text(description)
+    if not text:
+        return ""
+
+    upper_text = text.upper()
+    cut_index: Optional[int] = None
+    for marker in DESCRIPTION_FOOTER_MARKERS:
+        marker_index = upper_text.find(marker.upper())
+        if marker_index >= 0 and (cut_index is None or marker_index < cut_index):
+            cut_index = marker_index
+
+    if cut_index is not None:
+        text = text[:cut_index]
+
+    text = re.sub(r"\s*[-=/,:;|]+\s*$", "", text)
+    return normalize_text(text)
+
 
 # =========================================================
 # Monthly Summary - PRESENTATION STANDARDIZATION ONLY

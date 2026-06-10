@@ -121,21 +121,25 @@ st.markdown(
         fill: #9CA3AF !important;
     }
 
-    div[role="listbox"] {
-        padding: 6px !important;
-        border: 1px solid #374151 !important;
-        border-radius: 10px !important;
+    div[role="listbox"],
+    ul[role="listbox"] {
+        padding: 0 !important;
+        border: 0 !important;
+        border-radius: 0 !important;
         background: #0B0F16 !important;
+        box-shadow: none !important;
     }
 
-    div[role="option"] {
-        min-height: 42px !important;
-        padding: 10px 14px !important;
-        border-radius: 7px !important;
-        color: #E5E7EB !important;
-        font-size: 14px !important;
-        font-weight: 500 !important;
-        line-height: 20px !important;
+    div[role="option"],
+    li[role="option"] {
+        min-height: 50px !important;
+        padding: 0 20px !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        color: #F3F4F6 !important;
+        font-size: 18px !important;
+        font-weight: 600 !important;
+        line-height: 24px !important;
         -webkit-font-smoothing: antialiased !important;
         -moz-osx-font-smoothing: grayscale !important;
         text-rendering: optimizeLegibility !important;
@@ -143,9 +147,19 @@ st.markdown(
         align-items: center !important;
     }
 
+    div[role="option"] *,
+    li[role="option"] * {
+        color: inherit !important;
+        font-size: inherit !important;
+        font-weight: inherit !important;
+        line-height: inherit !important;
+    }
+
     div[role="option"]:hover,
-    div[aria-selected="true"] {
-        background: #2D3340 !important;
+    li[role="option"]:hover,
+    div[role="option"][aria-selected="true"],
+    li[role="option"][aria-selected="true"] {
+        background: #2A2B34 !important;
         color: #FFFFFF !important;
     }
 
@@ -1350,6 +1364,10 @@ PARSERS: Dict[str, Callable[[bytes, str], List[dict]]] = {
 }
 
 
+def get_supported_banks() -> List[str]:
+    return list(PARSERS.keys())
+
+
 # -----------------------------
 # Monthly Summary Functions
 # -----------------------------
@@ -1541,8 +1559,8 @@ if "bank_choice" not in st.session_state:
     st.session_state.bank_choice = None
 
 bank_choice = st.selectbox(
-    "Select Bank Format",
-    list(PARSERS.keys()),
+    "Select Bank",
+    options=sorted(get_supported_banks(), key=str.lower),
     index=None,
     key="bank_choice",
     placeholder="Choose the bank for the uploaded statement(s)",
