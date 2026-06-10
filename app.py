@@ -878,53 +878,10 @@ def normalize_counterparty_value(value) -> str:
     return text
 
 
-def extract_counterparty_from_description(description: str) -> str:
-    try:
-        if pd.isna(description):
-            return "UNKNOWN"
-    except Exception:
-        pass
-    if not description:
-        return "UNKNOWN"
-
-    desc = str(description).upper()
-
-    # Look for REMITTANCE patterns
-    remittance_match = re.search(r'REMITTANCE\s+(?:CR\s+)?([A-Z\s]+?)(?:\s+\d|$)', desc, re.IGNORECASE)
-    if remittance_match:
-        counterparty = remittance_match.group(1).strip()
-        if len(counterparty) > 3:
-            return counterparty
-
-    # Look for AUTOPAY patterns
-    autopay_match = re.search(r'AUTOPAY\s+([A-Z\s]+?)(?:\s+RTB|\s+\d|$)', desc, re.IGNORECASE)
-    if autopay_match:
-        counterparty = autopay_match.group(1).strip()
-        if counterparty:
-            return counterparty
-
-    # Look for IBG patterns
-    ibg_match = re.search(r'IBG\s+(?:CREDIT\s+)?([A-Z\s]+?)(?:\s+[A-Z]|\s+\d|$)', desc, re.IGNORECASE)
-    if ibg_match:
-        return ibg_match.group(1).strip()
-
-    # Clean up and take first few words
-    cleaned = re.sub(r'\d{10,}', '', desc)
-    cleaned = re.sub(r'CR\d+', '', cleaned)
-    cleaned = re.sub(r'RTB\d+', '', cleaned)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-
-    words = cleaned.split()
-    if len(words) > 5:
-        cleaned = ' '.join(words[:5])
-
-    return cleaned if len(cleaned) > 3 else "UNKNOWN"
-
-
 def resolve_transaction_counterparty(row: pd.Series) -> str:
     """
-    Prefer counterparty values extracted by bank parsers, then fall back to
-    parser-specific helpers and the older UI description regex.
+    Prefer counterparty values extracted by bank parsers. Parser-specific
+    helpers may be used, but the UI does not extract counterparties itself.
     """
     for column in (
         "party_name",
@@ -955,13 +912,12 @@ def resolve_transaction_counterparty(row: pd.Series) -> str:
         if counterparty:
             return counterparty
 
-    return extract_counterparty_from_description(description)
+    return "UNKNOWN"
 
 
 def build_counterparty_ledger_from_transactions(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Build counterparty ledger summary using parser-extracted counterparty data
-    where available, falling back to description extraction.
+    Build counterparty ledger summary using parser-extracted counterparty data.
     """
     if df.empty:
         return pd.DataFrame()
