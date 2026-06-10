@@ -362,9 +362,16 @@ st.markdown(
     }
 
     div[data-testid="stExpander"] details > summary [data-testid="stExpanderToggleIcon"],
+    div[data-testid="stExpander"] details > summary > span:first-child,
+    div[data-testid="stExpander"] details > summary > svg:first-child,
     div[data-testid="stExpander"] details > summary > div:first-child:has(svg),
+    div[data-testid="stExpander"] details > summary > div:first-child:has([data-testid="stExpanderToggleIcon"]),
     div[data-testid="stExpander"] details > summary svg {
         display: none !important;
+    }
+
+    div[data-testid="stExpander"] details > summary > [data-testid="stMarkdownContainer"] {
+        margin-left: 0 !important;
     }
 
     div[data-testid="stExpander"] details > summary::after {
