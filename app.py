@@ -90,7 +90,7 @@ st.markdown(
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
-        font-size: 15px !important;
+        font-size: 14px !important;
         font-weight: 400 !important;
         line-height: 22px !important;
         -webkit-font-smoothing: antialiased !important;
@@ -101,7 +101,7 @@ st.markdown(
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
     div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
-        font-size: 15px !important;
+        font-size: 14px !important;
         font-weight: 400 !important;
         line-height: 22px !important;
         -webkit-font-smoothing: antialiased !important;
@@ -137,9 +137,9 @@ st.markdown(
         border: 0 !important;
         border-radius: 0 !important;
         color: #F3F4F6 !important;
-        font-size: 18px !important;
+        font-size: 14px !important;
         font-weight: 400 !important;
-        line-height: 24px !important;
+        line-height: 20px !important;
         -webkit-font-smoothing: antialiased !important;
         -moz-osx-font-smoothing: grayscale !important;
         text-rendering: optimizeLegibility !important;
@@ -321,7 +321,7 @@ st.markdown(
     .kl-pattern-details-heading {
         color: #FFFFFF;
         font-size: 1.5rem;
-        font-weight: 800;
+        font-weight: 500;
         line-height: 1.2;
         margin: 0.25rem 0 1rem;
     }
@@ -386,7 +386,7 @@ st.markdown(
     div[data-testid="stExpander"] details > summary [data-testid="stMarkdownContainer"] p {
         color: #FFFFFF;
         font-size: 0.95rem;
-        font-weight: 600;
+        font-weight: 500;
         line-height: 1.2;
         margin: 0;
     }
