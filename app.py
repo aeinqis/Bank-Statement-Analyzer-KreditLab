@@ -438,7 +438,7 @@ if st.session_state.get("pdf_upload_error"):
         """
         section[data-testid="stFileUploaderDropzone"],
         div[data-testid="stFileUploaderDropzone"] {
-            border: 2px solid #F04438 !important;
+            border: 1.5px solid #F04438 !important;
             box-shadow: inset 0 0 0 1px #F04438 !important;
             border-radius: 8px !important;
             box-sizing: border-box !important;
