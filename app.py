@@ -1530,134 +1530,25 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     """Render the transaction pattern overview dashboard"""
     analysis_df = filter_statement_transactions_df(df)
     pattern_summary = summarize_transaction_patterns(analysis_df)
-    
+
     st.html(
         '<div class="kl-analysis-title">📊 Transactional Pattern Analysis</div>'
         '<div class="kl-analysis-subtitle">The story of the money and whether the financial behavior makes sense.</div>',
     )
-    
-    # Calculate total credits and debits
-    total_credits = analysis_df['credit'].sum() if 'credit' in analysis_df.columns else 0
-    total_debits = analysis_df['debit'].sum() if 'debit' in analysis_df.columns else 0
-    net_position = total_credits - total_debits
-    
-    # Display Credit/Debit summary cards in a row
-    st.markdown("#### Financial Summary")
-    credit_col, debit_col, net_col = st.columns(3)
-    
-    with credit_col:
-        st.markdown(
-            f"""
-            <div style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); 
-                        border-radius: 12px; 
-                        padding: 1rem 1.15rem; 
-                        border: 1px solid #2e7d32;
-                        text-align: center;">
-                <div style="color: #a5d6a7; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">💰 TOTAL CREDITS</div>
-                <div style="color: #69f0ae; font-size: 2rem; font-weight: 800;">RM {total_credits:,.2f}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    
-    with debit_col:
-        st.markdown(
-            f"""
-            <div style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); 
-                        border-radius: 12px; 
-                        padding: 1rem 1.15rem; 
-                        border: 1px solid #c62828;
-                        text-align: center;">
-                <div style="color: #ef9a9a; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">💸 TOTAL DEBITS</div>
-                <div style="color: #ff8a80; font-size: 2rem; font-weight: 800;">RM {total_debits:,.2f}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    
-    with net_col:
-        net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
-        net_bg = "linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%)"
-        net_border = "#2e7d32" if net_position >= 0 else "#c62828"
-        net_icon = "📈" if net_position >= 0 else "📉"
-        net_label = "NET POSITION" if net_position >= 0 else "NET LOSS"
-        
-        st.markdown(
-            f"""
-            <div style="background: {net_bg}; 
-                        border-radius: 12px; 
-                        padding: 1rem 1.15rem; 
-                        border: 1px solid {net_border};
-                        text-align: center;">
-                <div style="color: #b0bec5; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">{net_icon} {net_label}</div>
-                <div style="color: {net_color}; font-size: 2rem; font-weight: 800;">RM {abs(net_position):,.2f}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    
-    st.markdown("---")
-    
     # Display pattern metrics in two rows
     item_map = dict(pattern_summary.get("items", []))
     statutory_items = pattern_summary.get("statutory_items", [])
-    
-    # Row 1: Pattern flags
-    st.markdown("#### Pattern Detection")
-    pattern_col1, pattern_col2, pattern_col3, pattern_col4, pattern_col5 = st.columns(5)
-    
-    with pattern_col1:
-        st.metric(
-            "📋 Total Transactions", 
-            item_map.get("Total Transactions", 0)
-        )
-    with pattern_col2:
-        st.metric(
-            "⚠️ High-Value Flags", 
-            item_map.get("High-Value Flags", 0),
-            help=f"Transactions >= RM {high_value_threshold:,.2f}"
-        )
-    with pattern_col3:
-        st.metric(
-            "🔢 Round-Number", 
-            item_map.get("Round-Number", 0),
-            help="Transactions with round numbers (multiple of 10,000)"
-        )
-    with pattern_col4:
-        st.metric(
-            "🔄 Repeated", 
-            item_map.get("Repeated", 0),
-            help="Duplicate transactions with same date, description, and amount"
-        )
-    with pattern_col5:
-        st.metric(
-            "⚡ High Frequency Flags", 
-            item_map.get("High Frequency Flags", 0),
-            help="Repeated payments to same merchant within short time window"
-        )
-    
-    # Row 2: Statutory payments
-    if statutory_items:
-        st.markdown("#### Statutory Payments")
-        statutory_cols = st.columns(len(statutory_items))
-        
-        for idx, (label, count, total) in enumerate(statutory_items):
-            icon_map = {
-                "EPF / KWSP": "🏦",
-                "SOCSO / PERKESO": "🛡️",
-                "LHDN / Tax": "📋",
-                "HRDF / PSMB": "🎓"
-            }
-            icon = icon_map.get(label, "📊")
-            
-            with statutory_cols[idx]:
-                st.metric(
-                    f"{icon} {label}", 
-                    count,
-                    delta=total,
-                    delta_color="off"
-                )
-    
+
+    render_metric_cards(
+        [
+            ("Transactions", item_map.get("Total Transactions", 0)),
+            ("High-Value Flags", item_map.get("High-Value Flags", 0)),
+            ("Round-Number", item_map.get("Round-Number", 0)),
+            ("Repeated", item_map.get("Repeated", 0)),
+        ],
+        [("High Frequency Flags", item_map.get("High Frequency Flags", 0))],
+        statutory_metrics=statutory_items if statutory_items else None,
+    )
     # Render detailed expandable sections
     render_pattern_details(analysis_df, high_value_threshold)
 
