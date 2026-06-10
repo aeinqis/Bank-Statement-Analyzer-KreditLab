@@ -82,14 +82,14 @@ st.markdown(
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
-        font-size: 16px !important;
+        font-size: 18px !important;
         font-weight: 600 !important;
         line-height: 24px !important;
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
     div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
-        font-size: 16px !important;
+        font-size: 18px !important;
         font-weight: 600 !important;
         line-height: 24px !important;
     }
