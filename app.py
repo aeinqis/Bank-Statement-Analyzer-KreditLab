@@ -267,12 +267,6 @@ st.markdown(
         transform: translateY(1px);
     }
 
-    .kl-progress-divider {
-        height: 1px;
-        margin: 0.75rem 0 0.75rem;
-        background: linear-gradient(90deg, rgba(51, 65, 85, 0), rgba(71, 85, 105, 0.75), rgba(51, 65, 85, 0));
-    }
-
     .kl-progress-panel {
         margin-top: 0.75rem;
         padding: 0.95rem 1rem;
@@ -324,14 +318,10 @@ st.markdown(
         line-height: 1.3;
     }
 
-    .kl-progress-filename,
-    .kl-progress-eta {
+    .kl-progress-filename {
         color: #94A3B8;
         font-size: 0.8rem;
         line-height: 1.35;
-    }
-
-    .kl-progress-filename {
         margin-bottom: 0.5rem;
     }
 
@@ -1883,36 +1873,6 @@ def truncate_filename(filename: str, max_chars: int = 34) -> str:
     return f"{filename[:keep_left]}...{filename[-keep_right:]}"
 
 
-def format_eta(seconds: Optional[float]) -> str:
-    if seconds is None:
-        return "Estimating time remaining"
-
-    seconds = max(0, int(round(seconds)))
-    if seconds < 1:
-        return "Less than 1s left"
-    if seconds < 60:
-        return f"~{seconds}s left"
-
-    minutes, remaining_seconds = divmod(seconds, 60)
-    if minutes < 60:
-        return f"~{minutes}m {remaining_seconds}s left"
-
-    hours, remaining_minutes = divmod(minutes, 60)
-    return f"~{hours}h {remaining_minutes}m left"
-
-
-def estimate_remaining_time(started_at: datetime, completed_steps: int, total_steps: int) -> Optional[float]:
-    if completed_steps <= 0:
-        return None
-
-    elapsed = (datetime.now() - started_at).total_seconds()
-    remaining_steps = max(total_steps - completed_steps, 0)
-    if elapsed <= 0 or remaining_steps <= 0:
-        return 0
-
-    return (elapsed / completed_steps) * remaining_steps
-
-
 def render_processing_progress(
     container,
     *,
@@ -1920,7 +1880,6 @@ def render_processing_progress(
     progress: float,
     variant: str = "active",
     file_name: str = "",
-    eta: str = "",
 ) -> None:
     progress = min(max(float(progress or 0), 0.0), 1.0)
     percent = int(round(progress * 100))
@@ -1938,24 +1897,19 @@ def render_processing_progress(
             "</div>"
         )
 
-    eta_line = f'<div class="kl-progress-eta">{escape(str(eta))}</div>' if eta else ""
-
-    container.markdown(
-        f"""
-        <div class="kl-progress-panel {variant_class}">
-            <div class="kl-progress-topline">
-                <div class="kl-progress-status">{icon}{safe_status}</div>
-                <div class="kl-progress-percent">{percent}% completed</div>
-            </div>
-            {file_line}
-            <div class="kl-progress-track" aria-label="Processing progress">
-                <div class="kl-progress-fill" style="width: {percent}%;"></div>
-            </div>
-            {eta_line}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    html = (
+        f'<div class="kl-progress-panel {variant_class}">'
+        '<div class="kl-progress-topline">'
+        f'<div class="kl-progress-status">{icon}{safe_status}</div>'
+        f'<div class="kl-progress-percent">{percent}% completed</div>'
+        '</div>'
+        f'{file_line}'
+        '<div class="kl-progress-track" aria-label="Processing progress">'
+        f'<div class="kl-progress-fill" style="width: {percent}%;"></div>'
+        '</div>'
+        '</div>'
     )
+    container.markdown(html, unsafe_allow_html=True)
 
 
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -2275,12 +2229,10 @@ if st.session_state.validation_toast_message:
 all_tx: List[dict] = []
 
 if uploaded_files and st.session_state.status == "running":
-    st.markdown('<div class="kl-progress-divider"></div>', unsafe_allow_html=True)
     progress_panel = st.empty()
 
     total_files = len(uploaded_files)
     total_steps = total_files + 1
-    processing_started_at = datetime.now()
     parser = PARSERS[bank_choice]
     processing_errors: List[str] = []
     total_extracted = 0
@@ -2294,16 +2246,12 @@ if uploaded_files and st.session_state.status == "running":
         variant: str = "active",
         file_name: str = "",
     ) -> None:
-        eta = ""
-        if variant == "active":
-            eta = format_eta(estimate_remaining_time(processing_started_at, completed_steps, total_steps))
         render_processing_progress(
             progress_panel,
             status=status,
             progress=completed_steps / total_steps,
             variant=variant,
             file_name=file_name,
-            eta=eta,
         )
 
     update_processing_progress(f"Preparing {total_files} file(s) for {bank_choice}.", 0)
