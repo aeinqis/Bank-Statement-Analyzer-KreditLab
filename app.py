@@ -433,6 +433,28 @@ if st.session_state.get("high_value_threshold_error"):
         }
         """
     )
+if st.session_state.get("pdf_upload_error"):
+    validation_css_parts.append(
+        """
+        section[data-testid="stFileUploaderDropzone"],
+        div[data-testid="stFileUploaderDropzone"] {
+            border: 2px solid #F04438 !important;
+            box-shadow: inset 0 0 0 1px #F04438 !important;
+            border-radius: 8px !important;
+            box-sizing: border-box !important;
+        }
+
+        section[data-testid="stFileUploaderDropzone"]:hover,
+        div[data-testid="stFileUploaderDropzone"]:hover {
+            border-color: #F04438 !important;
+        }
+
+        div[data-testid="stFileUploader"] label,
+        div[data-testid="stFileUploader"] p {
+            color: #F04438 !important;
+        }
+        """
+    )
 st.markdown(
     f"""
     <style>
@@ -497,6 +519,9 @@ if "high_value_threshold_error" not in st.session_state:
 
 if "bank_choice_error" not in st.session_state:
     st.session_state.bank_choice_error = ""
+
+if "pdf_upload_error" not in st.session_state:
+    st.session_state.pdf_upload_error = ""
 
 if "validation_toast_message" not in st.session_state:
     st.session_state.validation_toast_message = ""
@@ -1281,6 +1306,22 @@ def clear_high_value_threshold_error() -> None:
     st.session_state.validation_toast_message = ""
 
 
+def get_upload_widget_key() -> str:
+    return f"pdf_upload_{st.session_state.upload_widget_reset_id}"
+
+
+def validate_pdf_upload() -> Optional[str]:
+    uploaded_file_values = st.session_state.get(get_upload_widget_key())
+    if not uploaded_file_values:
+        return "Please upload at least one PDF file."
+    return None
+
+
+def clear_pdf_upload_error() -> None:
+    st.session_state.pdf_upload_error = ""
+    st.session_state.validation_toast_message = ""
+
+
 def validate_bank_choice() -> Optional[str]:
     bank_choice_value = st.session_state.get("bank_choice")
     if not bank_choice_value:
@@ -1296,12 +1337,16 @@ def clear_bank_choice_error() -> None:
 def start_processing() -> None:
     threshold, threshold_error = parse_high_value_threshold()
     bank_choice_error = validate_bank_choice()
+    pdf_upload_error = validate_pdf_upload()
 
     st.session_state.high_value_threshold_error = threshold_error or ""
     st.session_state.bank_choice_error = bank_choice_error or ""
+    st.session_state.pdf_upload_error = pdf_upload_error or ""
 
-    if threshold_error or bank_choice_error:
-        validation_messages = [msg for msg in (bank_choice_error, threshold_error) if msg]
+    if threshold_error or bank_choice_error or pdf_upload_error:
+        validation_messages = [
+            msg for msg in (bank_choice_error, pdf_upload_error, threshold_error) if msg
+        ]
         st.session_state.validation_toast_message = " ".join(validation_messages)
         st.session_state.status = "idle"
         return
@@ -1329,6 +1374,7 @@ def reset_app_inputs() -> None:
     st.session_state.high_value_threshold_input = ""
     st.session_state.high_value_threshold_error = ""
     st.session_state.bank_choice_error = ""
+    st.session_state.pdf_upload_error = ""
     st.session_state.validation_toast_message = ""
     st.session_state.active_high_value_threshold = None
     st.session_state.upload_widget_reset_id += 1
@@ -1594,7 +1640,8 @@ uploaded_files = st.file_uploader(
     "Upload PDF files",
     type=["pdf"],
     accept_multiple_files=True,
-    key=f"pdf_upload_{st.session_state.upload_widget_reset_id}",
+    key=get_upload_widget_key(),
+    on_change=clear_pdf_upload_error,
 )
 if uploaded_files:
     uploaded_files = sorted(uploaded_files, key=lambda x: x.name)
@@ -2083,5 +2130,6 @@ else:
         and st.session_state.status == "idle"
         and not st.session_state.high_value_threshold_error
         and not st.session_state.bank_choice_error
+        and not st.session_state.pdf_upload_error
     ):
         st.warning("⚠️ No transactions found — click **Start Processing**.")
