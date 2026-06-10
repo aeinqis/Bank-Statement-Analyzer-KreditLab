@@ -69,6 +69,7 @@ st.markdown(
     [data-testid="stMarkdownContainer"] p {
         margin-bottom: 0.2rem;
     }
+
     div[data-testid="stSelectbox"] {
         margin-top: -0.25rem;
     }
@@ -77,31 +78,20 @@ st.markdown(
         min-height: 3.35rem !important;
         align-items: center !important;
         padding-left: 0.95rem !important;
-        padding-right: 2rem !important;
         border-radius: 8px !important;
-        background: #0B0F16 !important;
-        border: 1px solid #334155 !important;
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
-        font-size: 0.95rem !important;
-        font-weight: 500 !important;
-        line-height: 1.4 !important;
-        -webkit-font-smoothing: antialiased !important;
-        -moz-osx-font-smoothing: grayscale !important;
-        text-rendering: optimizeLegibility !important;
-        color: #F3F4F6 !important;
+        font-size: 16px !important;
+        font-weight: 600 !important;
+        line-height: 24px !important;
     }
 
     div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
     div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
-        font-size: 0.95rem !important;
-        font-weight: 500 !important;
-        line-height: 1.4 !important;
-        -webkit-font-smoothing: antialiased !important;
-        -moz-osx-font-smoothing: grayscale !important;
-        text-rendering: optimizeLegibility !important;
-        color: #F3F4F6 !important;
+        font-size: 16px !important;
+        font-weight: 600 !important;
+        line-height: 24px !important;
     }
 
     div[data-testid="stSelectbox"] [data-baseweb="tag"] {
@@ -112,7 +102,6 @@ st.markdown(
     div[data-testid="stSelectbox"] svg {
         width: 1rem;
         height: 1rem;
-        fill: #9CA3AF !important;
     }
 
     div[role="listbox"] {
@@ -123,14 +112,12 @@ st.markdown(
     }
 
     div[role="option"] {
-        min-height: 2.6rem !important;
-        padding: 0.6rem 0.85rem !important;
+        min-height: 2.9rem !important;
+        padding: 0.7rem 0.85rem !important;
         border-radius: 7px !important;
         color: #E5E7EB !important;
-        font-size: 0.9rem !important;
-        font-weight: 500 !important;
-        -webkit-font-smoothing: antialiased !important;
-        -moz-osx-font-smoothing: grayscale !important;
+        font-size: 1.05rem !important;
+        font-weight: 700 !important;
         display: flex !important;
         align-items: center !important;
     }
@@ -2057,3 +2044,4 @@ else:
         and not st.session_state.bank_choice_error
     ):
         st.warning("⚠️ No transactions found — click **Start Processing**.")
+
