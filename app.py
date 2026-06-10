@@ -1557,14 +1557,14 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     )
     cards.append(
         '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
-        '<div class="kl-metric-label">💰 TOTAL CREDITS</div>'
+        '<div class="kl-metric-label">Net Credits</div>'
         f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
         '</div>'
     )
     
     cards.append(
         '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
-        '<div class="kl-metric-label">💸 TOTAL DEBITS</div>'
+        '<div class="kl-metric-label">Net Debits</div>'
         f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
         '</div>'
     )
@@ -1609,16 +1609,9 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     # Add statutory payment cards
     if statutory_items:
         for label, count, total in statutory_items:
-            icon_map = {
-                "EPF / KWSP": "🏦",
-                "SOCSO / PERKESO": "🛡️",
-                "LHDN / Tax": "📋",
-                "HRDF / PSMB": "🎓"
-            }
-            icon = icon_map.get(label, "📊")
             cards.append(
                 '<div class="kl-metric-card">'
-                f'<div class="kl-metric-label">{icon} {label}</div>'
+                f'<div class="kl-metric-label">{label}</div>'
                 f'<div class="kl-metric-value">{count}</div>'
                 f'<div style="font-size: 0.85rem; color: #A9C1DD; margin-top: 0.35rem;">{total}</div>'
                 '</div>'
