@@ -116,6 +116,11 @@ div[data-testid="stSelectbox"] svg {
     fill: #9CA3AF !important;
 }
 
+div[data-testid="stSelectbox"] * {
+    font-family: "Inter", sans-serif !important;
+    transform: none !important;
+}
+
 div[role="listbox"] {
     padding: 6px !important;          /* 0.4rem */
     border: 1px solid #374151 !important;
