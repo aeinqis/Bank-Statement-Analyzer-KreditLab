@@ -153,6 +153,9 @@ st.markdown(
         font-size: inherit !important;
         font-weight: inherit !important;
         line-height: inherit !important;
+        background: transparent !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
     }
 
     div[role="option"]:hover,
