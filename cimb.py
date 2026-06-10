@@ -13,6 +13,7 @@
 #   (plus optional statement totals metadata on the closing row)
 
 import re
+from collections import defaultdict
 from datetime import datetime
 
 
@@ -33,6 +34,110 @@ _CLOSING_RE = re.compile(
 )
 
 _OPENING_LINE_RE = re.compile(r"^\s*OPENING\s+BALANCE\b", re.IGNORECASE)
+
+CIMB_PARTY_TRAILING_RE = re.compile(
+    r"\b(?:REF(?:ERENCE)?|TRACE|ID|NO|TXN|TRANSACTION|ACC(?:OUNT)?|A/C|PAYMENT|INVOICE|INV)\b.*$",
+    re.I,
+)
+
+CIMB_SKIP_PARTY_LINES_RE = re.compile(
+    r"""(?ix)
+    ^(?:IBG\ CREDIT|AUTOPAY\ CR|AUTOPAY\ DR|AUTOPAY\ CHARGES|
+       DUITNOW\ TO\ ACCOUNT|TR\ TO\ SAVINGS|TR\ TO\ C/A|TR\ IBG|
+       REMITTANCE\ CR|I-PAYMENT|JOMPAY|OTHER\ TRANSFER\ FEE|
+       HOUSE\ CHQ\ DR|HSE\ CHQ\ DEPOSIT|2D\ LOCAL\ CHQ|
+       CHQ\ PROCESSING\ FEE|ACCOUNT\ STATUS\ CONFIRMATION\ CHARGE|
+       IBG\ INWARD\ RETURN|I-FUNDS\ TR\ FROM\ SA)$
+    |^\d{4,}$
+    |^[A-Z0-9]{8,}$
+    |.*\.TXT$
+    """
+)
+
+CIMB_COUNTERPARTY_RULES = [
+    (re.compile(r"\b(?:CHQ|CHEQUE)\b", re.I), "CHEQUE"),
+    (re.compile(r"^(?:CDM\s+)?CASH\s+DEPOSIT$", re.I), "CASH DEPOSIT"),
+    (re.compile(r"^JOMPAY\s+(?P<counterparty>\S+).*$", re.I), None),
+    (
+        re.compile(
+            r"^TR IBG\s+(?P<counterparty>.+?)(?:\s+(?:CLAIM|GENERAL LABOUR|AC|DET\s+\d+|ROADTAX.*|INSURANCE.*|HOUSE\s+RENTAL.*|RENTAL.*|SEWA.*|PAYMENT.*|INVOICE.*|PETTY\s+CASH.*|EC\s+EXCEL.*))?$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^TR TO\s+(?:C/A|SAVINGS)\s+(?P<counterparty>.+?)(?:\s+(?:AC|FROM\s+.+|GENERAL LABOUR|SPONSER.*))?$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^TR FROM\s+(?:CA|SA)\s+.+?\s+(?P<counterparty>[A-Z][A-Z0-9&()./\- ]{3,})$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^DUITNOW TO ACCOUNT\s+\S+\s+(?P<counterparty>[A-Z][A-Z0-9&()./\- ]{3,})$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^IBG CREDIT\s+(?:\S+\s+\S+\s+)?(?P<counterparty>[A-Z][A-Z0-9&()./\- ]+)$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^I-FUNDS TR FROM\s+(?:CA|SA)\s+.+?\s+(?P<counterparty>[A-Z][A-Z0-9&()./\- ]{3,})$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^I-PAYMENT\s+FPXPAY\s+(?P<counterparty>.+?)(?:\s+[A-Z]?\d{6,}.*)?$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^REMITTANCE CR(?:\s+(?P<counterparty>[A-Z][A-Z .&()/-]{3,}))?$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^(?P<counterparty>DEBIT ADVICE(?: LETTER SUPPORT FEES?)?|BIZCHANNEL MTHLY FEE|COMMISSION - CO|STAMP DUTY - CO|ACCOUNT STATUS CONFIRMATION CHARGE CHARGES|SERVICE CHARGE CANCELLATION BCQ|CLOSING BALANCE / BAKI PENUTUP)$",
+            re.I,
+        ),
+        None,
+    ),
+    (re.compile(r"^ATM TRANSFER FROM\s+(?:CA|SA)$", re.I), "ATM TRANSFER"),
+    (re.compile(r"^IBG INWARD RETURN .+$", re.I), "IBG RETURN"),
+]
+
+CIMB_PERSON_NAME_MARKER_RE = re.compile(r"\b(?:BIN|BINTI|BT|B|ANAK)\b", re.I)
+CIMB_PERSON_PURPOSE_SUFFIX_RE = re.compile(
+    r"\s+(?:HOUSE\s+RENTAL|GENERAL\s+LABOUR|PETTY\s+CASH|EC\s+EXCEL|"
+    r"CLAIM|MILEAGE|LOAN|ROADTAX|INSURANCE|RENTAL|TENDER|FAREWELL|"
+    r"PERUNTUKAN(?:\s+BAJET)?|BAJET)\b.*$",
+    re.I,
+)
+CIMB_TRANSFER_LEADING_CONTEXT_RE = re.compile(
+    r"^(?:HOSPITAL\s+\S+|KLINIK\s+\S+|CLINIC\s+\S+|PUSAT\s+\S+|"
+    r"SEKOLAH\s+\S+|SCHOOL\s+\S+)\s+",
+    re.I,
+)
+CIMB_COMPANY_HINT_TOKENS = {"SDN", "BHD", "BERHAD", "PLT", "LLP", "PL", "ENTERPRISE", "TRADING"}
 
 
 # -----------------------------
@@ -59,6 +164,284 @@ def clean_text(text):
     if not text:
         return ""
     return str(text).replace("\n", " ").strip()
+
+
+def normalize_cimb_party_name(name: str) -> str:
+    cleaned = clean_text(name).upper()
+    cleaned = CIMB_PARTY_TRAILING_RE.sub("", cleaned)
+    cleaned = re.sub(r"[^A-Z0-9/&().\s-]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    # Common OCR/truncation normalisation.
+    cleaned = re.sub(r"\bSDN\.?\s*BH?$", "SDN BHD", cleaned)
+    cleaned = re.sub(r"\bSDN\.?\s*BHD\.?$", "SDN BHD", cleaned)
+    cleaned = strip_cimb_person_purpose_suffix(cleaned)
+
+    return cleaned or "UNKNOWN"
+
+
+def strip_cimb_person_purpose_suffix(name: str) -> str:
+    cleaned = clean_text(name).upper()
+    if not CIMB_PERSON_NAME_MARKER_RE.search(cleaned):
+        return cleaned
+
+    stripped = CIMB_PERSON_PURPOSE_SUFFIX_RE.sub("", cleaned).strip()
+    if stripped and CIMB_PERSON_NAME_MARKER_RE.search(stripped):
+        return stripped
+
+    return cleaned
+
+
+def normalize_cimb_rule_party_name(name: str) -> str:
+    cleaned = clean_text(name).upper()
+    cleaned = re.sub(r"[^A-Z0-9/&().\s-]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    cleaned = re.sub(r"\bSDN\.?\s*BH?$", "SDN BHD", cleaned)
+    cleaned = re.sub(r"\bSDN\.?\s*BHD\.?$", "SDN BHD", cleaned)
+    cleaned = strip_cimb_person_purpose_suffix(cleaned)
+
+    return cleaned or "UNKNOWN"
+
+
+def extract_cimb_trailing_uppercase_party(text: str) -> str:
+    raw = clean_text(text)
+    if not raw or not re.search(r"[a-z]", raw):
+        return ""
+
+    match = re.search(
+        r"\b(?P<counterparty>[A-Z][A-Z0-9&()./\-]*(?:\s+[A-Z][A-Z0-9&()./\-]*)*)\s*$",
+        raw,
+    )
+    if not match:
+        return ""
+
+    party = normalize_cimb_rule_party_name(match.group("counterparty"))
+    if len(party) < 4 or party in {"CA", "SA"}:
+        return ""
+
+    return party
+
+
+def is_cimb_party_candidate_line(part: str) -> bool:
+    part = clean_text(part).upper()
+    if not part:
+        return False
+    if CIMB_SKIP_PARTY_LINES_RE.search(part):
+        return False
+    if re.fullmatch(r"[\d/., -]+", part):
+        return False
+    if re.search(r"\d{5,}", part):
+        return False
+    return bool(re.search(r"[A-Z]", part))
+
+
+def extract_cimb_duitnow_party(line_parts) -> str:
+    if not line_parts:
+        return ""
+
+    first_line = clean_text(line_parts[0]).upper()
+    if not re.match(r"^DUITNOW TO ACCOUNT(?:\s+|$)", first_line, re.I):
+        return ""
+
+    if len(line_parts) > 1:
+        for part in reversed(line_parts[1:]):
+            if is_cimb_party_candidate_line(part):
+                return normalize_cimb_rule_party_name(part)
+
+    match = re.match(
+        r"^DUITNOW TO ACCOUNT\s+\S+\s+(?P<counterparty>[A-Z][A-Z0-9&()./\- ]{3,})$",
+        first_line,
+        re.I,
+    )
+    if not match:
+        return ""
+
+    return normalize_cimb_rule_party_name(match.group("counterparty"))
+
+
+def extract_cimb_tr_from_party(line_parts, raw_description: str) -> str:
+    if not line_parts:
+        return ""
+
+    first_line = clean_text(line_parts[0]).upper()
+    if not re.match(r"^TR FROM\s+(?:CA|SA)(?:\s+|$)", first_line, re.I):
+        return ""
+
+    if len(line_parts) > 1:
+        for part in reversed(line_parts[1:]):
+            if is_cimb_party_candidate_line(part):
+                return normalize_cimb_rule_party_name(part)
+
+    trailing_party = extract_cimb_trailing_uppercase_party(raw_description)
+    if trailing_party:
+        return trailing_party
+
+    match = re.match(
+        r"^TR FROM\s+(?:CA|SA)\s+.+?\s+(?P<counterparty>[A-Z][A-Z0-9&()./\- ]{3,})$",
+        first_line,
+        re.I,
+    )
+    if not match:
+        return ""
+
+    return normalize_cimb_rule_party_name(match.group("counterparty"))
+
+
+def strip_cimb_transfer_leading_context(text: str) -> str:
+    cleaned = clean_text(text).upper()
+    stripped = CIMB_TRANSFER_LEADING_CONTEXT_RE.sub("", cleaned).strip()
+    return stripped or cleaned
+
+
+def extract_cimb_person_transfer_party(body: str) -> str:
+    cleaned = normalize_cimb_rule_party_name(body)
+    if not cleaned:
+        return ""
+
+    without_purpose = CIMB_PERSON_PURPOSE_SUFFIX_RE.sub("", cleaned).strip()
+    context_stripped = strip_cimb_transfer_leading_context(without_purpose)
+    had_leading_context = context_stripped != without_purpose
+
+    if CIMB_PERSON_NAME_MARKER_RE.search(context_stripped):
+        return normalize_cimb_rule_party_name(context_stripped)
+
+    if without_purpose == cleaned:
+        return ""
+
+    tokens = context_stripped.split()
+    if len(tokens) < 2:
+        return ""
+
+    if not had_leading_context:
+        if len(tokens) > 3:
+            return ""
+        if any(token in CIMB_COMPANY_HINT_TOKENS for token in tokens):
+            return ""
+
+    if len(tokens) > 3:
+        tokens = tokens[-3:]
+
+    party = normalize_cimb_rule_party_name(" ".join(tokens))
+    if re.fullmatch(r"(?:PERUNTUKAN|BAJET|HOSPITAL|KLINIK|CLINIC|PUSAT|SEKOLAH|SCHOOL)(?:\s+.*)?", party):
+        return ""
+
+    return party
+
+
+def extract_cimb_tr_to_party(line_parts, raw_description: str) -> str:
+    if not line_parts:
+        return ""
+
+    flattened = clean_text(re.sub(r"\s*\|\s*|\n+", " ", str(raw_description)))
+    match = re.match(
+        r"^TR TO\s+(?:C/A|SAVINGS)\s+(?P<body>.+)$",
+        flattened,
+        re.I,
+    )
+    if not match:
+        return ""
+
+    return extract_cimb_person_transfer_party(match.group("body"))
+
+
+def extract_cimb_party_name_by_rule(description: str) -> str:
+    if not description:
+        return ""
+
+    raw = str(description)
+    normalized_full = clean_text(re.sub(r"\s*\|\s*", " ", raw)).upper()
+    line_parts = [
+        clean_text(p)
+        for p in re.split(r"\s*\|\s*|\n+", raw)
+        if clean_text(p)
+    ]
+
+    duitnow_party = extract_cimb_duitnow_party(line_parts)
+    if duitnow_party:
+        return duitnow_party
+
+    tr_from_party = extract_cimb_tr_from_party(line_parts, raw)
+    if tr_from_party:
+        return tr_from_party
+
+    tr_to_party = extract_cimb_tr_to_party(line_parts, raw)
+    if tr_to_party:
+        return tr_to_party
+
+    candidates = []
+    for candidate in [normalized_full, *(part.upper() for part in line_parts)]:
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    for candidate in candidates:
+        for pattern, fixed_party in CIMB_COUNTERPARTY_RULES:
+            match = pattern.search(candidate)
+            if not match:
+                continue
+
+            party = fixed_party or match.groupdict().get("counterparty")
+            if party:
+                return normalize_cimb_rule_party_name(party)
+
+    return ""
+
+
+def extract_cimb_party_name(description: str) -> str:
+    """
+    CIMB rule:
+    party is usually the last non-reference, non-transaction-type line
+    in the multiline description.
+    """
+    if not description:
+        return "UNKNOWN"
+
+    party_by_rule = extract_cimb_party_name_by_rule(description)
+    if party_by_rule:
+        return party_by_rule
+
+    parts = [
+        clean_text(p).upper()
+        for p in re.split(r"\s*\|\s*|\n+", description)
+        if clean_text(p)
+    ]
+
+    candidates = []
+    for part in parts:
+        part = clean_text(part).upper()
+
+        if not is_cimb_party_candidate_line(part):
+            continue
+
+        candidates.append(part)
+
+    if not candidates:
+        return "UNKNOWN"
+
+    return normalize_cimb_party_name(candidates[-1])
+
+
+def group_cimb_by_party(transactions):
+    grouped = defaultdict(lambda: {
+        "party_name": "",
+        "count": 0,
+        "total_debit": 0.0,
+        "total_credit": 0.0,
+        "transactions": [],
+    })
+
+    for tx in transactions:
+        party = tx.get("party_name") or extract_cimb_party_name(tx.get("description", ""))
+        tx["party_name"] = party
+
+        g = grouped[party]
+        g["party_name"] = party
+        g["count"] += 1
+        g["total_debit"] += tx.get("debit") or 0.0
+        g["total_credit"] += tx.get("credit") or 0.0
+        g["transactions"].append(tx)
+
+    return list(grouped.values())
 
 
 def format_date(date_str, year):
@@ -275,6 +658,7 @@ def _parse_transactions_cimb_text(pdf, source_filename, detected_year, bank_name
                         raw.append({
                             "date": date_iso,
                             "description": clean_text(desc),
+                            "party_name": extract_cimb_party_name(desc),
                             "balance": round(bal, 2),
                             "page": page_num,
                             "__idx": idx,
@@ -290,12 +674,14 @@ def _parse_transactions_cimb_text(pdf, source_filename, detected_year, bank_name
                 if bal is not None:
                     toks = ln.split()
                     cur["parts"].append(" ".join(toks[:first_money_idx]) if first_money_idx is not None else ln)
+                    desc_source = "\n".join(cur["parts"])
                     date_iso = format_date(cur["date"], detected_year)
                     if date_iso:
                         idx += 1
                         raw.append({
                             "date": date_iso,
                             "description": clean_text(" ".join(cur["parts"])),
+                            "party_name": extract_cimb_party_name(desc_source),
                             "balance": round(bal, 2),
                             "page": cur["page"],
                             "__idx": idx,
@@ -316,6 +702,7 @@ def _parse_transactions_cimb_text(pdf, source_filename, detected_year, bank_name
 
     txs = []
     for r in raw:
+        desc = r.get("description")
         bal = parse_float(r.get("balance"))
         debit = credit = 0.0
         if prev_balance is not None:
@@ -327,7 +714,8 @@ def _parse_transactions_cimb_text(pdf, source_filename, detected_year, bank_name
 
         txs.append({
             "date": r.get("date"),
-            "description": r.get("description"),
+            "description": desc,
+            "party_name": r.get("party_name") or extract_cimb_party_name(desc),
             "debit": round(debit, 2),
             "credit": round(credit, 2),
             "balance": round(bal, 2),
@@ -345,6 +733,7 @@ def _parse_transactions_cimb_text(pdf, source_filename, detected_year, bank_name
         txs.insert(0, {
             "date": opening_date,
             "description": "OPENING BALANCE (PAGE 1)",
+            "party_name": "UNKNOWN",
             "debit": 0.0,
             "credit": 0.0,
             "balance": round(float(opening_balance_value), 2),
@@ -362,6 +751,7 @@ def _parse_transactions_cimb_text(pdf, source_filename, detected_year, bank_name
         txs.append({
             "date": cb_date,
             "description": "CLOSING BALANCE / BAKI PENUTUP",
+            "party_name": "UNKNOWN",
             "debit": 0.0,
             "credit": 0.0,
             "balance": round(float(closing_balance), 2),
@@ -429,7 +819,8 @@ def parse_transactions_cimb(pdf, source_filename=""):
             if "date" in first_col or "tarikh" in first_col:
                 continue
 
-            desc = clean_text(row[1])
+            desc_raw = row[1]
+            desc = clean_text(desc_raw)
             desc_l = desc.lower()
 
             # opening balance row may appear here; capture balance but do not treat as tx
@@ -464,6 +855,7 @@ def parse_transactions_cimb(pdf, source_filename=""):
             rows.append({
                 "date": date_iso,
                 "description": desc,
+                "party_name": extract_cimb_party_name(desc_raw),
                 "ref_no": clean_text(row[2]),
                 "debit": round(debit_val, 2),
                 "credit": round(credit_val, 2),
@@ -495,6 +887,7 @@ def parse_transactions_cimb(pdf, source_filename=""):
         rows.insert(0, {
             "date": opening_date,
             "description": "OPENING BALANCE (PAGE 1)",
+            "party_name": "UNKNOWN",
             "ref_no": "",
             "debit": 0.0,
             "credit": 0.0,
@@ -513,6 +906,7 @@ def parse_transactions_cimb(pdf, source_filename=""):
         rows.append({
             "date": cb_date,
             "description": "CLOSING BALANCE / BAKI PENUTUP",
+            "party_name": "UNKNOWN",
             "ref_no": "",
             "debit": 0.0,
             "credit": 0.0,
