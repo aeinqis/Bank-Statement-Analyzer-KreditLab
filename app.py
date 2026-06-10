@@ -2052,34 +2052,35 @@ if st.session_state.validation_toast_message:
 all_tx: List[dict] = []
 
 if uploaded_files and st.session_state.status == "running":
-    progress_text = st.empty()
+    status_box = st.empty()
     progress_bar = st.progress(0)
 
     total_files = len(uploaded_files)
+    total_steps = total_files + 1
     parser = PARSERS[bank_choice]
     processing_errors: List[str] = []
     total_extracted = 0
     files_finished = 0
     resolved_pdf_bytes = {}
 
-    progress_text.write(f"Preparing {total_files} file(s) for {bank_choice}.")
+    status_box.info(f"Preparing {total_files} file(s) for {bank_choice}.")
 
     for file_idx, uploaded_file in enumerate(uploaded_files):
         if st.session_state.get("stop_requested"):
             st.session_state.status = "stopped"
-            progress_text.write(f"Stopped after {files_finished} of {total_files} file(s).")
+            status_box.warning(f"Stopped after {files_finished} of {total_files} file(s).")
             break
 
         current_file = file_idx + 1
-        progress_bar.progress(file_idx / total_files)
-        progress_text.write(f"Processing {current_file} of {total_files}: {uploaded_file.name}")
+        progress_bar.progress(files_finished / total_steps)
+        status_box.info(f"Processing file {current_file} of {total_files}: {uploaded_file.name}")
 
         try:
             pdf_bytes = uploaded_file.getvalue()
 
             # decrypt if encrypted
             if is_pdf_encrypted(pdf_bytes):
-                progress_text.write(f"Decrypting {uploaded_file.name}...")
+                status_box.info(f"Decrypting file {current_file} of {total_files}: {uploaded_file.name}")
                 pdf_bytes = decrypt_pdf_bytes(pdf_bytes, st.session_state.pdf_password)
             
             resolved_pdf_bytes[uploaded_file.name] = pdf_bytes
@@ -2168,46 +2169,54 @@ if uploaded_files and st.session_state.status == "running":
             if tx_norm:
                 all_tx.extend(tx_norm)
                 total_extracted += len(tx_norm)
-                progress_text.write(f"✓ {uploaded_file.name}: {len(tx_norm)} transactions extracted")
+                status_box.info(
+                    f"Processed file {current_file} of {total_files}: "
+                    f"{uploaded_file.name} ({len(tx_norm)} transactions extracted)."
+                )
             else:
-                progress_text.write(f"⚠ {uploaded_file.name}: No transactions found")
+                status_box.info(
+                    f"Processed file {current_file} of {total_files}: "
+                    f"{uploaded_file.name} (no transactions found)."
+                )
 
         except Exception as e:
             processing_errors.append(uploaded_file.name)
-            progress_text.write(f"✗ Error processing {uploaded_file.name}: {str(e)[:100]}")
+            status_box.error(f"Error processing {uploaded_file.name}: {str(e)[:100]}")
             st.error(f"❌ Error processing {uploaded_file.name}: {e}")
             st.exception(e)
 
-        progress_bar.progress((file_idx + 1) / total_files)
         files_finished = file_idx + 1
+        progress_bar.progress(files_finished / total_steps)
 
     # Run PDF integrity checks
     analysis_results = {}
-    if resolved_pdf_bytes:
-        progress_text.write("Running PDF integrity checks...")
+    processing_stopped = st.session_state.get("stop_requested")
+    if resolved_pdf_bytes and not processing_stopped:
+        status_box.info(f"Running PDF integrity checks for {len(resolved_pdf_bytes)} file(s).")
         try:
             analysis_results = analyze_pdf_batch(resolved_pdf_bytes)
         except Exception as e:
             st.warning(f"PDF integrity check failed: {e}")
 
     # After all files are processed - set final progress and show completion
-    progress_bar.progress(1.0)
+    if not processing_stopped:
+        progress_bar.progress(1.0)
     
     # Display final status message
-    if st.session_state.get("stop_requested"):
+    if processing_stopped:
         st.session_state.status = "stopped"
-        progress_text.write(f"✅ Stopped after {files_finished} of {total_files} file(s).")
-        st.warning(f"⚠️ Processing stopped at {files_finished} of {total_files} files.")
+        progress_bar.progress(files_finished / total_steps)
+        status_box.warning(f"Processing stopped at {files_finished} of {total_files} file(s).")
     elif processing_errors:
         st.session_state.status = "completed_with_errors"
-        progress_text.write(
-            f"⚠️ Finished with {len(processing_errors)} error(s). Extracted {total_extracted} transactions from {total_files} file(s)."
+        status_box.warning(
+            f"Completed with {len(processing_errors)} error(s). "
+            f"Extracted {total_extracted} transactions from {total_files} file(s)."
         )
         st.warning(f"⚠️ Completed with {len(processing_errors)} error(s). Check the errors above.")
     else:
         st.session_state.status = "completed"
-        progress_text.write(f"✅ Completed! Extracted {total_extracted} transactions from {total_files} file(s).")
-        st.success(f"🎉 Successfully processed all {total_files} file(s)!")
+        status_box.info("Finalizing extracted transactions.")
     
     st.markdown("---")
     all_tx = dedupe_transactions(all_tx)
@@ -2246,6 +2255,20 @@ if uploaded_files and st.session_state.status == "running":
 
     all_tx = sorted(all_tx, key=_sort_key)
     st.session_state.results = all_tx
+    final_transaction_count = len(all_tx)
+
+    if processing_stopped:
+        status_box.warning(f"Processing stopped at {files_finished} of {total_files} file(s).")
+    elif processing_errors:
+        status_box.warning(
+            f"Completed with {len(processing_errors)} error(s). "
+            f"Extracted {final_transaction_count} transactions from {total_files} file(s)."
+        )
+    else:
+        status_box.success(
+            f"Successfully processed all {total_files} file(s) and completed extraction of "
+            f"{final_transaction_count} transactions from {total_files} file(s)."
+        )
 
 
 # ---------------------------------------------------
