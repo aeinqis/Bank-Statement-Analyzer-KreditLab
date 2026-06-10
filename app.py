@@ -362,32 +362,40 @@ st.markdown(
     }
 
     div[data-testid="stExpander"] details > summary [data-testid="stExpanderToggleIcon"],
-    div[data-testid="stExpander"] details > summary > span:first-child,
     div[data-testid="stExpander"] details > summary > svg:first-child,
     div[data-testid="stExpander"] details > summary > div:first-child:has(svg),
-    div[data-testid="stExpander"] details > summary > div:first-child:has([data-testid="stExpanderToggleIcon"]),
-    div[data-testid="stExpander"] details > summary svg {
-        display: none !important;
+    div[data-testid="stExpander"] details > summary > div:first-child:has([data-testid="stExpanderToggleIcon"]) {
+        display: flex !important;
+        position: absolute !important;
+        right: 1.2rem !important;
+        left: auto !important;
+        top: 50% !important;
+        width: 1rem !important;
+        height: 1rem !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        transform: translateY(-50%) !important;
     }
 
-    div[data-testid="stExpander"] details > summary > [data-testid="stMarkdownContainer"] {
+    div[data-testid="stExpander"] details > summary [data-testid="stExpanderToggleIcon"] svg,
+    div[data-testid="stExpander"] details > summary > svg:first-child,
+    div[data-testid="stExpander"] details > summary > div:first-child:has(svg) svg,
+    div[data-testid="stExpander"] details > summary > div:first-child:has([data-testid="stExpanderToggleIcon"]) svg {
+        display: block !important;
+        width: 1rem !important;
+        height: 1rem !important;
+        color: #F3F4F6 !important;
+        fill: currentColor !important;
+    }
+
+    div[data-testid="stExpander"] details > summary > [data-testid="stMarkdownContainer"],
+    div[data-testid="stExpander"] details > summary [data-testid="stExpanderToggleIcon"] + [data-testid="stMarkdownContainer"] {
         margin-left: 0 !important;
     }
 
     div[data-testid="stExpander"] details > summary::after {
-        content: "";
-        position: absolute;
-        right: 1.2rem;
-        top: 50%;
-        width: 0.45rem;
-        height: 0.40rem;
-        border-right: 2px solid #F3F4F6;
-        border-bottom: 2px solid #F3F4F6;
-        transform: translateY(-60%) rotate(45deg);
-    }
-
-    div[data-testid="stExpander"] details[open] > summary::after {
-        transform: translateY(-30%) rotate(225deg);
+        content: none !important;
+        display: none !important;
     }
 
     div[data-testid="stExpander"] details > summary [data-testid="stMarkdownContainer"] p {
