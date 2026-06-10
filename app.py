@@ -318,6 +318,72 @@ st.markdown(
         font-weight: 800;
     }
 
+    .kl-pattern-details-heading {
+        color: #FFFFFF;
+        font-size: 1.5rem;
+        font-weight: 800;
+        line-height: 1.2;
+        margin: 0.25rem 0 1rem;
+    }
+
+    div[data-testid="stExpander"] {
+        border: 1px solid #374151 !important;
+        border-radius: 8px !important;
+        background: #0B0F16 !important;
+        overflow: hidden !important;
+    }
+
+    div[data-testid="stExpander"] details {
+        background: transparent !important;
+        border: 0 !important;
+    }
+
+    div[data-testid="stExpander"] details > summary {
+        min-height: 3.25rem !important;
+        padding: 0.8rem 3rem 0.8rem 1rem !important;
+        position: relative !important;
+        display: flex !important;
+        align-items: center !important;
+        list-style: none !important;
+        font-weight: 600 !important;
+    }
+
+    div[data-testid="stExpander"] details > summary::marker {
+        content: "";
+    }
+
+    div[data-testid="stExpander"] details > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    div[data-testid="stExpander"] details > summary svg {
+        display: none !important;
+    }
+
+    div[data-testid="stExpander"] details > summary::after {
+        content: "";
+        position: absolute;
+        right: 1.2rem;
+        top: 50%;
+        width: 0.45rem;
+        height: 0.45rem;
+        border-right: 2px solid #F3F4F6;
+        border-bottom: 2px solid #F3F4F6;
+        transform: translateY(-60%) rotate(45deg);
+    }
+
+    div[data-testid="stExpander"] details[open] > summary::after {
+        transform: translateY(-30%) rotate(225deg);
+    }
+
+    div[data-testid="stExpander"] details > summary [data-testid="stMarkdownContainer"] p {
+        color: #FFFFFF;
+        font-size: 0.95rem;
+        font-weight: 600;
+        line-height: 1.2;
+        margin: 0;
+    }
+
     @media (max-width: 900px) {
         .kl-metric-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1090,7 +1156,7 @@ def summarize_transaction_patterns(df: pd.DataFrame) -> dict:
 
 def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> None:
     """Render expandable sections for each pattern type"""
-    st.markdown("#### Pattern Details")
+    st.markdown('<h3 class="kl-pattern-details-heading">Pattern Details</h3>', unsafe_allow_html=True)
     
     # Duplicate transactions
     if "is_duplicate_transaction" in df.columns:
