@@ -47,6 +47,223 @@ from fraud_logic import (
     detect_font_anomalies,
 )
 
+# ============================================================
+# HTML REPORT GENERATION FUNCTIONS (from your JSON converter)
+# Copy the entire set of functions here
+# ============================================================
+
+def fmt(val, decimals=2):
+    """Format number with commas"""
+    if val is None:
+        return "0.00"
+    return f"{val:,.{decimals}f}"
+
+def normalize_observations(obs):
+    """Coerce observations into {'positive': [...], 'concerns': [...]}."""
+    if isinstance(obs, dict):
+        return {'positive': list(obs.get('positive', []) or []),
+                'concerns': list(obs.get('concerns', []) or [])}
+    pos, con = [], []
+    if isinstance(obs, list):
+        for item in obs:
+            if isinstance(item, str):
+                con.append(item)
+            elif isinstance(item, dict):
+                kind = str(item.get('type') or item.get('category') or item.get('sentiment') or '').lower()
+                text = item.get('text') or item.get('observation') or item.get('message') or item.get('description') or ''
+                if not text:
+                    continue
+                if kind in ('positive', 'pos', 'good', 'strength'):
+                    pos.append(text)
+                else:
+                    con.append(text)
+    return {'positive': pos, 'concerns': con}
+
+def adapt_to_v6(src):
+    """Reshape flat extractor output into v6.3.3 renderer schema."""
+    from collections import defaultdict
+
+    summary = src.get('summary', {}) or {}
+    transactions = src.get('transactions', []) or []
+    monthly_summary = src.get('monthly_summary', []) or []
+    cp_ledger = src.get('counterparty_ledger', {}) or {}
+    pdf_integrity = src.get('pdf_integrity')
+
+    report_info = {
+        'company_name': summary.get('company_names', ['Unknown'])[0] if summary.get('company_names') else 'Unknown',
+        'schema_version': '6.3.5',
+        'period_start': '',
+        'period_end': '',
+        'total_months': len(monthly_summary),
+        'related_parties': [],
+    }
+
+    # accounts aggregation
+    acc_map = defaultdict(lambda: {'credits': 0.0, 'debits': 0.0, 'txn_count': 0, 'bank': '', 'last_bal': None, 'opening_bal': None})
+    for t in transactions:
+        an = t.get('account_no', '')
+        if not an:
+            continue
+        a = acc_map[an]
+        a['txn_count'] += 1
+        cr = float(t.get('credit', 0) or 0)
+        dr = float(t.get('debit', 0) or 0)
+        a['credits'] += cr
+        a['debits'] += dr
+        if not a['bank']:
+            a['bank'] = t.get('bank', '') or ''
+        bal = t.get('balance')
+        if isinstance(bal, (int, float)):
+            if a['opening_bal'] is None:
+                a['opening_bal'] = bal - cr + dr
+            a['last_bal'] = bal
+    
+    accounts = []
+    for an, a in sorted(acc_map.items()):
+        accounts.append({
+            'bank_name': a['bank'],
+            'account_number': an,
+            'account_holder': report_info['company_name'],
+            'account_type': 'Current',
+            'opening_balance': round(a['opening_bal'] or 0.0, 2),
+            'closing_balance': round(a['last_bal'] or 0.0, 2),
+            'total_credits': round(a['credits'], 2),
+            'total_debits': round(a['debits'], 2),
+            'transaction_count': a['txn_count'],
+        })
+
+    # Build monthly analysis from monthly_summary
+    monthly_analysis = []
+    for m in monthly_summary:
+        month = m.get('month', '')
+        highest = float(m.get('highest_balance', 0) or 0)
+        lowest = float(m.get('lowest_balance', 0) or 0)
+        monthly_analysis.append({
+            'month': month,
+            'bank_name': '',
+            'account_number': m.get('account_no', ''),
+            'gross_credits': float(m.get('total_credit', 0) or 0),
+            'gross_debits': float(m.get('total_debit', 0) or 0),
+            'net_credits': float(m.get('total_credit', 0) or 0),
+            'net_debits': float(m.get('total_debit', 0) or 0),
+            'credit_count': m.get('credit_count', 0),
+            'debit_count': m.get('debit_count', 0),
+            'own_party_cr': float(m.get('own_party_cr', 0) or 0),
+            'own_party_dr': float(m.get('own_party_dr', 0) or 0),
+            'related_party_cr': float(m.get('related_party_cr', 0) or 0),
+            'related_party_dr': float(m.get('related_party_dr', 0) or 0),
+            'reversal_cr': float(m.get('reversal_cr', 0) or 0),
+            'loan_disbursement_cr': float(m.get('loan_disbursement_cr', 0) or 0),
+            'fd_interest_cr': float(m.get('fd_interest_cr', 0) or 0),
+            'round_figure_cr': float(m.get('round_figure_cr', 0) or 0),
+            'high_value_cr': float(m.get('high_value_cr', 0) or 0),
+            'cash_deposits_amount': float(m.get('cash_deposits_amount', 0) or 0),
+            'cash_withdrawals_amount': float(m.get('cash_withdrawals_amount', 0) or 0),
+            'cheque_deposits_amount': float(m.get('cheque_deposits_amount', 0) or 0),
+            'cheque_issues_amount': float(m.get('cheque_issues_amount', 0) or 0),
+            'loan_repayment_dr': float(m.get('loan_repayment_dr', 0) or 0),
+            'salary_paid': float(m.get('salary_paid', 0) or 0),
+            'statutory_epf': float(m.get('statutory_epf', 0) or 0),
+            'statutory_socso': float(m.get('statutory_socso', 0) or 0),
+            'statutory_tax': float(m.get('statutory_tax', 0) or 0),
+            'statutory_hrdf': float(m.get('statutory_hrdf', 0) or 0),
+            'returned_cheques_outward_count': m.get('returned_cheques_outward_count', 0),
+            'returned_cheques_outward_amount': float(m.get('returned_cheques_outward_amount', 0) or 0),
+            'eod_lowest': lowest,
+            'eod_highest': highest,
+            'eod_average': (highest + lowest) / 2.0 if (highest or lowest) else 0.0,
+            'opening_balance': float(m.get('opening_balance', 0) or 0),
+            'closing_balance': float(m.get('ending_balance', 0) or 0),
+            'transaction_count': m.get('transaction_count', 0),
+            'fx_credit_amount': 0,
+            'fx_debit_amount': 0,
+            'fx_credit_count': 0,
+            'fx_debit_count': 0,
+            'fx_currencies': [],
+        })
+
+    gross_credits = sum(float(t.get('credit', 0) or 0) for t in transactions)
+    gross_debits = sum(float(t.get('debit', 0) or 0) for t in transactions)
+    
+    consolidated = {
+        'gross_credits': round(gross_credits, 2),
+        'gross_debits': round(gross_debits, 2),
+        'net_credits': round(gross_credits, 2),
+        'net_debits': round(gross_debits, 2),
+        'annualized_net_credits': round(gross_credits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
+        'annualized_net_debits': round(gross_debits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
+        'eod_lowest': 0,
+        'eod_highest': 0,
+        'eod_average': 0,
+        'data_completeness': 'COMPLETE',
+    }
+
+    return {
+        'report_info': report_info,
+        'accounts': accounts,
+        'monthly_analysis': monthly_analysis,
+        'consolidated': consolidated,
+        'top_parties': {'top_payers': [], 'top_payees': []},
+        'large_credits': [],
+        'own_related_transactions': {'transactions': [], 'summary': {}},
+        'loan_transactions': {'transactions': [], 'summary': {}},
+        'flags': {'indicators': []},
+        'observations': {'positive': [], 'concerns': []},
+        'parsing_metadata': {},
+        'counterparty_ledger': cp_ledger,
+        'pdf_integrity': pdf_integrity,
+    }
+
+# Then copy the ENTIRE generate_interactive_html function from your original converter
+# (It's too long to paste here, but you need to copy the complete function 
+# from your first code file - the one with all the HTML/CSS/JS)
+
+def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
+                                   transaction_analysis: dict, high_value_threshold: float) -> str:
+    """Generate interactive HTML report from parsed transactions"""
+    # Build the v6 schema data structure
+    data = {
+        'transactions': transactions,
+        'monthly_summary': monthly_summary,
+        'summary': {
+            'company_names': list(set(t.get('company_name', '') for t in transactions if t.get('company_name'))),
+            'date_range': '',
+            'high_value_threshold': high_value_threshold,
+        },
+        'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
+        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
+    }
+    
+    # Add top parties data if available
+    if 'top_payers' in transaction_analysis:
+        data['top_parties'] = {
+            'top_payers': transaction_analysis.get('top_payers', []),
+            'top_payees': transaction_analysis.get('top_payees', [])
+        }
+    
+    # Adapt to v6 schema
+    adapted_data = adapt_to_v6(data)
+    
+    # Add additional data from transaction_analysis
+    adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])
+    adapted_data['flags'] = transaction_analysis.get('flags', {'indicators': []})
+    adapted_data['observations'] = transaction_analysis.get('observations', {'positive': [], 'concerns': []})
+    
+    # Generate HTML report using the full function
+    return generate_interactive_html(adapted_data)
+
+def convert_json_to_html(json_file) -> str:
+    """Convert uploaded JSON analysis file to HTML report"""
+    data = json.load(json_file)
+    
+    # Adapt to v6 schema if needed
+    if isinstance(data, dict) and 'monthly_analysis' not in data and 'transactions' in data:
+        data = adapt_to_v6(data)
+    elif isinstance(data, dict) and 'monthly_analysis' in data and ('consolidated' not in data or 'top_parties' not in data):
+        # Add normalization for Claude AI output if needed
+        pass
+    
+    return generate_interactive_html(data)
 
 # ============================================================
 # HTML REPORT GENERATION FUNCTIONS (ADDED)
