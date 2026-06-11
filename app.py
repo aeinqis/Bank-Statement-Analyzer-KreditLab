@@ -5712,7 +5712,7 @@ if st.session_state.results:
         }
 
         st.download_button(
-            "📊 Download Full Report (JSON)",
+            "📊 Download Full Transaction (JSON)",
             json.dumps(full_report, indent=4),
             "full_report.json",
             "application/json",
