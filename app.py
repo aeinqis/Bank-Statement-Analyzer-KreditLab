@@ -2257,9 +2257,18 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
     # Generate HTML report using the full function
     return generate_interactive_html(adapted_data)
 
-def convert_json_to_html(json_file) -> str:
+def load_json_payload(json_source):
+    """Load JSON from an uploaded file or reuse an already parsed payload."""
+    if isinstance(json_source, (dict, list)):
+        return json_source
+    if hasattr(json_source, "seek"):
+        json_source.seek(0)
+    return json.load(json_source)
+
+
+def convert_json_to_html(json_source) -> str:
     """Convert uploaded JSON analysis file to HTML report"""
-    data = json.load(json_file)
+    data = load_json_payload(json_source)
     
     # Adapt to v6 schema if needed
     if isinstance(data, dict) and 'monthly_analysis' not in data and 'transactions' in data:
@@ -2301,7 +2310,7 @@ def normalize_observations(obs):
                     con.append(text)
     return {'positive': pos, 'concerns': con}
 
-def adapt_to_v6(src):
+def adapt_to_v6_basic_unused(src):
     """Reshape flat extractor output into v6.3.3 renderer schema."""
     from collections import defaultdict
 
@@ -2405,7 +2414,7 @@ def adapt_to_v6(src):
         'pdf_integrity': pdf_integrity,
     }
 
-def generate_interactive_html(data):
+def generate_interactive_html_basic_unused(data):
     """Generate interactive HTML report for v6 schema"""
     # Simplified version - you can import the full function from your other file
     # For now, create a basic HTML report
@@ -2474,8 +2483,8 @@ def generate_interactive_html(data):
 </html>'''
     return html
 
-def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
-                                   transaction_analysis: dict, high_value_threshold: float) -> str:
+def generate_html_report_from_data_basic_unused(transactions: List[dict], monthly_summary: List[dict], 
+                                                transaction_analysis: dict, high_value_threshold: float) -> str:
     """Generate interactive HTML report from parsed transactions"""
     # Convert transactions to v6.3.3 schema format
     data = adapt_to_v6({
@@ -2492,7 +2501,7 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
     # Generate HTML report
     return generate_interactive_html(data)
 
-def convert_json_to_html(json_file) -> str:
+def convert_json_to_html_basic_unused(json_file) -> str:
     """Convert uploaded JSON analysis file to HTML report"""
     data = json.load(json_file)
     
@@ -2531,11 +2540,11 @@ json_file = st.file_uploader(
 
 if json_file is not None:
     try:
-        html_content = convert_json_to_html(json_file)
+        data = load_json_payload(json_file)
+        html_content = convert_json_to_html(data)
         st.success("✅ Successfully converted JSON to HTML report!")
         
         # Extract company name from JSON for filename
-        data = json.load(json_file)
         company_name = "report"
         if isinstance(data, dict):
             if "report_info" in data and data["report_info"].get("company_name"):
