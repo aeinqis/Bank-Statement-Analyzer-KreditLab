@@ -4632,39 +4632,6 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     # Create cards including financial summary
     cards = []
     
-    # Add Financial Summary Cards
-    cards.append(
-       '<div class="kl-metric-card">'
-        '<div class="kl-metric-label">Transactions</div>'
-        f'<div class="kl-metric-value">{item_map.get("Total Transactions", 0)}</div>'
-        '</div>',
-    )
-    cards.append(
-        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
-        '<div class="kl-metric-label">Net Credits</div>'
-        f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
-        '</div>'
-    )
-    
-    cards.append(
-        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
-        '<div class="kl-metric-label">Net Debits</div>'
-        f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
-        '</div>'
-    )
-    
-    net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
-    net_border = "#2e7d32" if net_position >= 0 else "#c62828"
-
-    net_label = "Net Position" if net_position >= 0 else "Net Loss"
-    
-    cards.append(
-        f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
-        f'<div class="kl-metric-label">{net_label}</div>'
-        f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
-        '</div>'
-    )
-    
     # Add existing pattern cards
     cards.extend([
         
@@ -5660,7 +5627,7 @@ if st.session_state.results:
 
     with col1:
         st.download_button(
-            "📄 Download Transactions (JSON)",
+            "📄 Download Full Transactions (JSON)",
             json.dumps(json_records, indent=4),
             "transactions.json",
             "application/json",
