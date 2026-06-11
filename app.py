@@ -47,510 +47,9 @@ from fraud_logic import (
     detect_font_anomalies,
 )
 
-
-# ============================================================
-# HTML REPORT GENERATION FUNCTIONS
-# ============================================================
-
-def fmt(val, decimals=2):
-    """Format number with commas"""
-    if val is None:
-        return "0.00"
-    return f"{val:,.{decimals}f}"
-
-def normalize_observations(obs):
-    """Coerce observations into {'positive': [...], 'concerns': [...]}."""
-    if isinstance(obs, dict):
-        return {'positive': list(obs.get('positive', []) or []),
-                'concerns': list(obs.get('concerns', []) or [])}
-    pos, con = [], []
-    if isinstance(obs, list):
-        for item in obs:
-            if isinstance(item, str):
-                con.append(item)
-            elif isinstance(item, dict):
-                kind = str(item.get('type') or item.get('category') or item.get('sentiment') or '').lower()
-                text = item.get('text') or item.get('observation') or item.get('message') or item.get('description') or ''
-                if not text:
-                    continue
-                if kind in ('positive', 'pos', 'good', 'strength'):
-                    pos.append(text)
-                else:
-                    con.append(text)
-    return {'positive': pos, 'concerns': con}
-
-def adapt_to_v6(src):
-    """Reshape flat extractor output into v6.3.3 renderer schema."""
-    from collections import defaultdict
-
-    summary = src.get('summary', {}) or {}
-    transactions = src.get('transactions', []) or []
-    monthly_summary = src.get('monthly_summary', []) or []
-    cp_ledger = src.get('counterparty_ledger', {}) or {}
-    pdf_integrity = src.get('pdf_integrity')
-
-    report_info = {
-        'company_name': summary.get('company_names', ['Unknown'])[0] if summary.get('company_names') else 'Unknown',
-        'schema_version': '6.3.5',
-        'period_start': '',
-        'period_end': '',
-        'total_months': len(monthly_summary),
-        'related_parties': [],
-    }
-
-    # accounts aggregation
-    acc_map = defaultdict(lambda: {'credits': 0.0, 'debits': 0.0, 'txn_count': 0, 'bank': '', 'last_bal': None, 'opening_bal': None})
-    for t in transactions:
-        an = t.get('account_no', '')
-        if not an:
-            continue
-        a = acc_map[an]
-        a['txn_count'] += 1
-        cr = float(t.get('credit', 0) or 0)
-        dr = float(t.get('debit', 0) or 0)
-        a['credits'] += cr
-        a['debits'] += dr
-        if not a['bank']:
-            a['bank'] = t.get('bank', '') or ''
-        bal = t.get('balance')
-        if isinstance(bal, (int, float)):
-            if a['opening_bal'] is None:
-                a['opening_bal'] = bal - cr + dr
-            a['last_bal'] = bal
-    
-    accounts = []
-    for an, a in sorted(acc_map.items()):
-        accounts.append({
-            'bank_name': a['bank'],
-            'account_number': an,
-            'account_holder': report_info['company_name'],
-            'account_type': 'Current',
-            'opening_balance': round(a['opening_bal'] or 0.0, 2),
-            'closing_balance': round(a['last_bal'] or 0.0, 2),
-            'total_credits': round(a['credits'], 2),
-            'total_debits': round(a['debits'], 2),
-            'transaction_count': a['txn_count'],
-        })
-
-    # Build monthly analysis from monthly_summary
-    monthly_analysis = []
-    for m in monthly_summary:
-        month = m.get('month', '')
-        highest = float(m.get('highest_balance', 0) or 0)
-        lowest = float(m.get('lowest_balance', 0) or 0)
-        monthly_analysis.append({
-            'month': month,
-            'bank_name': '',
-            'account_number': m.get('account_no', ''),
-            'gross_credits': float(m.get('total_credit', 0) or 0),
-            'gross_debits': float(m.get('total_debit', 0) or 0),
-            'net_credits': float(m.get('total_credit', 0) or 0),
-            'net_debits': float(m.get('total_debit', 0) or 0),
-            'credit_count': m.get('credit_count', 0),
-            'debit_count': m.get('debit_count', 0),
-            'own_party_cr': float(m.get('own_party_cr', 0) or 0),
-            'own_party_dr': float(m.get('own_party_dr', 0) or 0),
-            'related_party_cr': float(m.get('related_party_cr', 0) or 0),
-            'related_party_dr': float(m.get('related_party_dr', 0) or 0),
-            'reversal_cr': float(m.get('reversal_cr', 0) or 0),
-            'loan_disbursement_cr': float(m.get('loan_disbursement_cr', 0) or 0),
-            'fd_interest_cr': float(m.get('fd_interest_cr', 0) or 0),
-            'round_figure_cr': float(m.get('round_figure_cr', 0) or 0),
-            'high_value_cr': float(m.get('high_value_cr', 0) or 0),
-            'cash_deposits_amount': float(m.get('cash_deposits_amount', 0) or 0),
-            'cash_withdrawals_amount': float(m.get('cash_withdrawals_amount', 0) or 0),
-            'cheque_deposits_amount': float(m.get('cheque_deposits_amount', 0) or 0),
-            'cheque_issues_amount': float(m.get('cheque_issues_amount', 0) or 0),
-            'loan_repayment_dr': float(m.get('loan_repayment_dr', 0) or 0),
-            'salary_paid': float(m.get('salary_paid', 0) or 0),
-            'statutory_epf': float(m.get('statutory_epf', 0) or 0),
-            'statutory_socso': float(m.get('statutory_socso', 0) or 0),
-            'statutory_tax': float(m.get('statutory_tax', 0) or 0),
-            'statutory_hrdf': float(m.get('statutory_hrdf', 0) or 0),
-            'returned_cheques_outward_count': m.get('returned_cheques_outward_count', 0),
-            'returned_cheques_outward_amount': float(m.get('returned_cheques_outward_amount', 0) or 0),
-            'eod_lowest': lowest,
-            'eod_highest': highest,
-            'eod_average': (highest + lowest) / 2.0 if (highest or lowest) else 0.0,
-            'opening_balance': float(m.get('opening_balance', 0) or 0),
-            'closing_balance': float(m.get('ending_balance', 0) or 0),
-            'transaction_count': m.get('transaction_count', 0),
-            'fx_credit_amount': 0,
-            'fx_debit_amount': 0,
-            'fx_credit_count': 0,
-            'fx_debit_count': 0,
-            'fx_currencies': [],
-        })
-
-    gross_credits = sum(float(t.get('credit', 0) or 0) for t in transactions)
-    gross_debits = sum(float(t.get('debit', 0) or 0) for t in transactions)
-    
-    consolidated = {
-        'gross_credits': round(gross_credits, 2),
-        'gross_debits': round(gross_debits, 2),
-        'net_credits': round(gross_credits, 2),
-        'net_debits': round(gross_debits, 2),
-        'annualized_net_credits': round(gross_credits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
-        'annualized_net_debits': round(gross_debits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
-        'eod_lowest': 0,
-        'eod_highest': 0,
-        'eod_average': 0,
-        'data_completeness': 'COMPLETE',
-    }
-
-    return {
-        'report_info': report_info,
-        'accounts': accounts,
-        'monthly_analysis': monthly_analysis,
-        'consolidated': consolidated,
-        'top_parties': {'top_payers': [], 'top_payees': []},
-        'large_credits': [],
-        'own_related_transactions': {'transactions': [], 'summary': {}},
-        'loan_transactions': {'transactions': [], 'summary': {}},
-        'flags': {'indicators': []},
-        'observations': {'positive': [], 'concerns': []},
-        'parsing_metadata': {},
-        'counterparty_ledger': cp_ledger,
-        'pdf_integrity': pdf_integrity,
-    }
-
-def _top_parties_from_transaction_analysis(transaction_analysis: dict) -> dict:
-    top_payers = transaction_analysis.get("top_payers") or transaction_analysis.get("top_creditors")
-    top_payees = transaction_analysis.get("top_payees") or transaction_analysis.get("top_debtors")
-
-    if not top_payers:
-        top_payers = [
-            {
-                "rank": idx,
-                "party_name": row.get("party"),
-                "total_amount": row.get("total_credit", 0),
-                "transaction_count": row.get("credit_tx_count", 0),
-            }
-            for idx, row in enumerate(transaction_analysis.get("top_credit_parties", []), start=1)
-        ]
-
-    if not top_payees:
-        top_payees = [
-            {
-                "rank": idx,
-                "party_name": row.get("party"),
-                "total_amount": row.get("total_debit", 0),
-                "transaction_count": row.get("debit_tx_count", 0),
-            }
-            for idx, row in enumerate(transaction_analysis.get("top_debit_parties", []), start=1)
-        ]
-
-    return {"top_payers": top_payers or [], "top_payees": top_payees or []}
-
-
-def build_report_data_from_analysis(
-    transactions: List[dict],
-    monthly_summary: List[dict],
-    transaction_analysis: dict,
-    high_value_threshold: float,
-) -> dict:
-    """Build the v6 report payload shared by HTML and Excel exports."""
-    data = {
-        'transactions': transactions,
-        'monthly_summary': monthly_summary,
-        'summary': {
-            'company_names': list(set(t.get('company_name', '') for t in transactions if t.get('company_name'))),
-            'date_range': '',
-            'high_value_threshold': high_value_threshold,
-        },
-        'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
-        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
-    }
-
-    adapted_data = adapt_to_v6(data)
-    adapted_data['transactions'] = transactions
-    adapted_data['top_parties'] = _top_parties_from_transaction_analysis(transaction_analysis)
-    adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])
-    adapted_data['flags'] = transaction_analysis.get('flags', {'indicators': []})
-    adapted_data['observations'] = transaction_analysis.get('observations', {'positive': [], 'concerns': []})
-    adapted_data['round_figure_credits'] = transaction_analysis.get('round_figure_credits', [])
-    adapted_data['loan_transactions'] = transaction_analysis.get(
-        'loan_transactions',
-        adapted_data.get('loan_transactions', {'transactions': [], 'summary': {}}),
-    )
-    adapted_data['own_related_transactions'] = transaction_analysis.get(
-        'own_related_transactions',
-        adapted_data.get('own_related_transactions', {'transactions': [], 'summary': {}}),
-    )
-    adapted_data['unclassified_transactions'] = transaction_analysis.get('unclassified_transactions', [])
-    adapted_data['classification_config'] = transaction_analysis.get('classification_config', {})
-    adapted_data['parsing_metadata'] = transaction_analysis.get(
-        'parsing_metadata',
-        adapted_data.get('parsing_metadata', {}),
-    )
-    return adapted_data
-
-
-def normalize_report_data_for_export(data: dict) -> dict:
-    """Normalize uploaded JSON or v6 payloads for HTML/XLSX report exports."""
-    if not isinstance(data, dict):
-        return {}
-
-    source = dict(data)
-    transaction_analysis = source.get("transaction_analysis", {})
-    if isinstance(transaction_analysis, dict):
-        source.setdefault("counterparty_ledger", transaction_analysis.get("counterparty_ledger", {}))
-
-    if "monthly_analysis" not in source and "transactions" in source:
-        normalized = adapt_to_v6(source)
-        normalized["transactions"] = source.get("transactions", [])
-    else:
-        normalized = dict(source)
-
-    if isinstance(transaction_analysis, dict):
-        normalized["top_parties"] = _top_parties_from_transaction_analysis(transaction_analysis)
-        normalized["large_credits"] = transaction_analysis.get(
-            "high_value_credits",
-            normalized.get("large_credits", []),
-        )
-        normalized["flags"] = transaction_analysis.get("flags", normalized.get("flags", {"indicators": []}))
-        normalized["observations"] = transaction_analysis.get(
-            "observations",
-            normalized.get("observations", {"positive": [], "concerns": []}),
-        )
-
-    normalized.setdefault("accounts", [])
-    normalized.setdefault("monthly_analysis", [])
-    normalized.setdefault("consolidated", {})
-    normalized.setdefault("top_parties", {"top_payers": [], "top_payees": []})
-    normalized.setdefault("large_credits", [])
-    normalized.setdefault("own_related_transactions", {"transactions": [], "summary": {}})
-    normalized.setdefault("loan_transactions", {"transactions": [], "summary": {}})
-    normalized.setdefault("flags", {"indicators": []})
-    normalized.setdefault("observations", {"positive": [], "concerns": []})
-    normalized.setdefault("counterparty_ledger", {})
-    normalized.setdefault("parsing_metadata", {})
-    return normalized
-
-
-def _excel_safe_value(value):
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    if isinstance(value, pd.Period):
-        return str(value)
-    try:
-        if pd.isna(value):
-            return None
-    except Exception:
-        pass
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return value
-
-
-def _records_to_excel_df(records, columns: List[str] | None = None) -> pd.DataFrame:
-    safe_records = [
-        {key: _excel_safe_value(val) for key, val in dict(record).items()}
-        for record in (records or [])
-        if isinstance(record, dict)
-    ]
-    df = pd.DataFrame(safe_records)
-    if columns and df.empty:
-        df = pd.DataFrame(columns=columns)
-    return df
-
-
-def _write_excel_sheet(writer, sheet_name: str, df: pd.DataFrame, title: str | None = None) -> None:
-    workbook = writer.book
-    safe_sheet_name = sheet_name[:31]
-    startrow = 2 if title else 0
-    
-    df_to_write = df.copy()
-    
-    for col in df_to_write.columns:
-        if pd.api.types.is_numeric_dtype(df_to_write[col]):
-            continue
-        else:
-            df_to_write[col] = df_to_write[col].apply(
-                lambda x: str(x) if x is not None and pd.notna(x) else ""
-            )
-    
-    df_to_write.to_excel(writer, sheet_name=safe_sheet_name, startrow=startrow, index=False)
-    worksheet = writer.sheets[safe_sheet_name]
-
-    header_format = workbook.add_format(
-        {"bold": True, "font_color": "white", "bg_color": "#1B4F72", "border": 1}
-    )
-    title_format = workbook.add_format({"bold": True, "font_size": 14, "font_color": "#1B4F72"})
-    money_format = workbook.add_format({"num_format": "#,##0.00"})
-
-    if title:
-        worksheet.write(0, 0, title, title_format)
-
-    for col_idx, col_name in enumerate(df_to_write.columns):
-        worksheet.write(startrow, col_idx, col_name, header_format)
-        
-        try:
-            col_values = df_to_write[col_name].astype(str).tolist() if not df_to_write.empty else []
-            max_len = len(str(col_name))
-            for val in col_values[:200]:
-                if val:
-                    max_len = max(max_len, len(val))
-            col_width = min(max(max_len + 2, 12), 42)
-        except Exception:
-            col_width = 15
-        
-        worksheet.set_column(col_idx, col_idx, col_width)
-        
-        if any(token in str(col_name).lower() for token in ("amount", "credit", "debit", "balance", "gross", "net")):
-            last_row = startrow + len(df_to_write)
-            if last_row > startrow:
-                worksheet.set_column(col_idx, col_idx, col_width, money_format)
-
-    worksheet.freeze_panes(startrow + 1, 0)
-    if not df_to_write.empty:
-        worksheet.autofilter(startrow, 0, startrow + len(df_to_write), max(len(df_to_write.columns) - 1, 0))
-
-
-def generate_excel_report(data: dict) -> BytesIO:
-    """Generate a multi-sheet XLSX report matching the HTML report tabs."""
-    report_data = normalize_report_data_for_export(data)
-    top_parties = report_data.get("top_parties", {}) or {}
-    own_related = report_data.get("own_related_transactions", {}) or {}
-    if isinstance(own_related, list):
-        own_related = {"transactions": own_related, "summary": {}}
-    loans = report_data.get("loan_transactions", {}) or {}
-    flags = report_data.get("flags", {}) or {}
-    cp_ledger = report_data.get("counterparty_ledger", {}) or {}
-    parsing = report_data.get("parsing_metadata", {}) or {}
-    pdf_integrity = report_data.get("pdf_integrity", {}) or {}
-
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        report_info = report_data.get("report_info", {}) or {}
-        consolidated = report_data.get("consolidated", {}) or {}
-        overview_rows = [
-            {"Section": "Report Info", "Metric": key, "Value": _excel_safe_value(value)}
-            for key, value in report_info.items()
-        ]
-        overview_rows.extend(
-            {"Section": "Consolidated", "Metric": key, "Value": _excel_safe_value(value)}
-            for key, value in consolidated.items()
-        )
-        _write_excel_sheet(writer, "Overview", pd.DataFrame(overview_rows), "Report Overview")
-
-        _write_excel_sheet(
-            writer,
-            "Accounts",
-            _records_to_excel_df(report_data.get("accounts", [])),
-            "Account Details",
-        )
-        _write_excel_sheet(
-            writer,
-            "Cash Flow",
-            _records_to_excel_df(report_data.get("monthly_analysis", [])),
-            "Monthly Cash Flow",
-        )
-
-        party_rows = []
-        for party_type, parties in (
-            ("Top Payer", top_parties.get("top_payers") or top_parties.get("top_creditors") or []),
-            ("Top Payee", top_parties.get("top_payees") or top_parties.get("top_debtors") or []),
-        ):
-            for idx, row in enumerate(parties, start=1):
-                party_rows.append({"type": party_type, "rank": row.get("rank", idx), **row})
-        _write_excel_sheet(writer, "Top Parties", _records_to_excel_df(party_rows), "Top Parties")
-
-        _write_excel_sheet(
-            writer,
-            "Large Credits",
-            _records_to_excel_df(report_data.get("large_credits", [])),
-            "Large Credits",
-        )
-
-        cp_rows = _records_to_excel_df(cp_ledger.get("counterparties", []))
-        if "transactions" in cp_rows.columns:
-            cp_rows = cp_rows.drop(columns=["transactions"])
-        _write_excel_sheet(writer, "Counterparty", cp_rows, "Counterparty Ledger")
-
-        cp_txn_rows = []
-        for cp in cp_ledger.get("counterparties", []) or []:
-            for txn in cp.get("transactions", []) or []:
-                cp_txn_rows.append({"counterparty": cp.get("counterparty_name", ""), **txn})
-        if not cp_txn_rows:
-            cp_txn_rows = own_related.get("transactions", []) or []
-        _write_excel_sheet(writer, "Counterparty Txns", _records_to_excel_df(cp_txn_rows), "Counterparty Transactions")
-
-        loan_rows = []
-        for txn_type, txns in (
-            ("Disbursement", loans.get("disbursements", [])),
-            ("Repayment", loans.get("repayments", [])),
-            ("Transaction", loans.get("transactions", [])),
-        ):
-            for row in txns or []:
-                loan_rows.append({"facility_type": txn_type, **row})
-        _write_excel_sheet(writer, "Facilities", _records_to_excel_df(loan_rows), "Facilities")
-
-        _write_excel_sheet(
-            writer,
-            "Risk Signals",
-            _records_to_excel_df(flags.get("indicators", [])),
-            "Risk Signals",
-        )
-        _write_excel_sheet(
-            writer,
-            "Round Figures",
-            _records_to_excel_df(report_data.get("round_figure_credits", [])),
-            "Round Figure Credits",
-        )
-
-        fx_rows = [
-            row for row in report_data.get("monthly_analysis", [])
-            if any(row.get(key) for key in ("fx_credit_count", "fx_credit_amount", "fx_debit_count", "fx_debit_amount"))
-        ]
-        if fx_rows:
-            _write_excel_sheet(writer, "FX Remittance", _records_to_excel_df(fx_rows), "FX / Remittance")
-
-        unclassified_rows = report_data.get("unclassified_transactions", []) or []
-        if unclassified_rows:
-            _write_excel_sheet(writer, "Unclassified", _records_to_excel_df(unclassified_rows), "Unclassified Transactions")
-
-        if parsing:
-            _write_excel_sheet(
-                writer,
-                "Parsing QC",
-                _records_to_excel_df(parsing.get("account_month_checks", [])),
-                "Parsing Quality Checks",
-            )
-            if parsing.get("extraction_gaps"):
-                _write_excel_sheet(
-                    writer,
-                    "Extraction Gaps",
-                    _records_to_excel_df(parsing.get("extraction_gaps", [])),
-                    "Extraction Gaps",
-                )
-
-        if pdf_integrity:
-            integrity_rows = []
-            for file_name, result in pdf_integrity.items():
-                if isinstance(result, dict):
-                    integrity_rows.append({"file_name": file_name, **result})
-            _write_excel_sheet(writer, "Fraud Detector", _records_to_excel_df(integrity_rows), "Fraud Detector")
-
-        if report_data.get("transactions"):
-            _write_excel_sheet(
-                writer,
-                "Transactions",
-                _records_to_excel_df(report_data.get("transactions", [])),
-                "All Transactions",
-            )
-
-    output.seek(0)
-    return output
-
-
-def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
-                                   transaction_analysis: dict, high_value_threshold: float) -> str:
-    """Generate interactive HTML report from parsed transactions."""
-    def generate_interactive_html(data):
-        """Generate interactive HTML report for v6.0.0 schema"""
+# Function copy from HTML, def generate_interactive_html(data) - you will replace this with the full function from your original converter file
+def generate_interactive_html(data):
+    """Generate interactive HTML report for v6.0.0 schema"""
 
     r = data.get('report_info', {})
     accounts = data.get('accounts', [])
@@ -2056,6 +1555,10 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
         /* Theme toggle */
         .theme-toggle {{ position:absolute; top:1rem; right:1rem; padding:0.4rem 0.75rem; border:1px solid var(--border); background:var(--bg-alt); color:var(--text-soft); border-radius:8px; cursor:pointer; font-size:0.8rem; }}
         .theme-toggle:hover {{ border-color:var(--border-accent); }}
+        .report-actions {{ position:absolute; top:1rem; right:5.5rem; display:flex; gap:0.5rem; }}
+        .excel-btn {{ padding:0.4rem 0.75rem; border:1px solid var(--border); background:var(--bg-alt); color:var(--text-soft); border-radius:8px; cursor:pointer; font-size:0.8rem; font-weight:500; }}
+        .excel-btn:hover {{ border-color:var(--green); color:var(--green); }}
+        .tab-export-bar {{ display:flex; justify-content:flex-end; margin:0 0 1rem; }}
 
         /* Nav */
         .nav {{ display:flex; gap:0.35rem; margin-bottom:1.5rem; flex-wrap:wrap; background:var(--card); padding:0.4rem; border-radius:12px; border:1px solid var(--border); box-shadow:var(--shadow); }}
@@ -2201,7 +1704,7 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
 
         /* Print */
         @media print {{
-            .nav, .theme-toggle {{ display:none; }}
+            .nav, .theme-toggle, .report-actions, .tab-export-bar {{ display:none; }}
             .tab {{ display:block !important; page-break-inside:avoid; }}
             body {{ font-size:11px; }}
         }}
@@ -2210,6 +1713,9 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
 <body>
     <div class="container">
         <div class="header">
+            <div class="report-actions">
+                <button class="excel-btn" onclick="downloadReportExcel()">Download Report Excel</button>
+            </div>
             <button class="theme-toggle" onclick="toggleTheme()">Dark</button>
             <div class="header-grid">
                 <div class="company-info">
@@ -2504,6 +2010,86 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
             // Re-render charts for theme
             renderCharts();
         }}
+        function reportCompanyName() {{
+            const heading = document.querySelector('.company-info h1');
+            if (!heading) return 'kredit_lab_report';
+            return (heading.childNodes[0] && heading.childNodes[0].textContent || 'kredit_lab_report').trim();
+        }}
+        function filenameSafe(value) {{
+            return String(value || 'report')
+                .replace(/[^a-z0-9]+/gi, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 90) || 'report';
+        }}
+        function cleanExportTable(table) {{
+            const clone = table.cloneNode(true);
+            clone.querySelectorAll('button,input,select,textarea,script').forEach(function(el) {{ el.remove(); }});
+            clone.querySelectorAll('tr').forEach(function(row) {{
+                if (row.style && row.style.display === 'none') row.remove();
+            }});
+            return clone.outerHTML;
+        }}
+        function buildExcelHtml(title, tableHtmlParts) {{
+            let body = '<h1>' + title + '</h1>';
+            if (!tableHtmlParts.length) {{
+                body += '<p>No table data available.</p>';
+            }}
+            tableHtmlParts.forEach(function(tableHtml, idx) {{
+                body += '<h2>Table ' + (idx + 1) + '</h2>' + tableHtml;
+            }});
+            return '\\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"><style>body{{font-family:Arial,sans-serif}} table{{border-collapse:collapse;margin-bottom:18px}} th{{background:#1B4F72;color:#fff;font-weight:bold}} th,td{{border:1px solid #d5d8dc;padding:6px 8px;mso-number-format:"\\@"}} .r{{text-align:right}} .credit{{color:#059669}} .debit{{color:#dc2626}}</style></head><body>' + body + '</body></html>';
+        }}
+        function downloadExcelHtml(filename, title, tableHtmlParts) {{
+            const blob = new Blob([buildExcelHtml(title, tableHtmlParts)], {{type:'application/vnd.ms-excel;charset=utf-8;'}});
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filenameSafe(filename) + '.xls';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(function() {{ URL.revokeObjectURL(link.href); }}, 250);
+        }}
+        function getTabTitle(tab) {{
+            const tabName = tab.id.replace(/^tab-/, '');
+            const navButtons = Array.from(document.querySelectorAll('.nav-btn'));
+            const navButton = navButtons.find(function(btn) {{
+                return (btn.getAttribute('onclick') || '').indexOf("'" + tabName + "'") !== -1;
+            }});
+            return navButton ? navButton.textContent.trim() : tabName.replace(/-/g, ' ');
+        }}
+        function downloadTabExcel(tabName) {{
+            const tab = document.getElementById('tab-' + tabName);
+            if (!tab) return;
+            const title = getTabTitle(tab);
+            const tables = Array.from(tab.querySelectorAll('table')).map(cleanExportTable);
+            downloadExcelHtml(reportCompanyName() + '_' + title, title, tables);
+        }}
+        function downloadReportExcel() {{
+            const tables = [];
+            document.querySelectorAll('.tab').forEach(function(tab) {{
+                const title = getTabTitle(tab);
+                tables.push('<table><tr><th>' + title + '</th></tr></table>');
+                tab.querySelectorAll('table').forEach(function(table) {{
+                    tables.push(cleanExportTable(table));
+                }});
+            }});
+            downloadExcelHtml(reportCompanyName() + '_full_html_report', 'Kredit Lab Report - ' + reportCompanyName(), tables);
+        }}
+        function injectExcelButtons() {{
+            document.querySelectorAll('.tab').forEach(function(tab) {{
+                if (tab.firstElementChild && tab.firstElementChild.classList.contains('tab-export-bar')) return;
+                const tabName = tab.id.replace(/^tab-/, '');
+                const bar = document.createElement('div');
+                bar.className = 'tab-export-bar';
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'excel-btn';
+                btn.textContent = 'Download This Tab Excel';
+                btn.addEventListener('click', function() {{ downloadTabExcel(tabName); }});
+                bar.appendChild(btn);
+                tab.insertBefore(bar, tab.firstChild);
+            }});
+        }}
         function renderCharts() {{
             if(typeof Plotly==='undefined'){{console.warn('Plotly not loaded — charts disabled');return;}}
             const isDark = document.documentElement.getAttribute('data-theme')==='dark';
@@ -2546,14 +2132,535 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
                 }}, {{responsive:true,displayModeBar:false}});
             }}
         }}
-        document.addEventListener('DOMContentLoaded', renderCharts);
+        document.addEventListener('DOMContentLoaded', function() {{
+            injectExcelButtons();
+            renderCharts();
+        }});
     </script>
 </body>
 </html>'''
     return html
 
-    return "<html><body><h1>HTML Report Generated</h1></body></html>"
 
+# ============================================================
+# HTML REPORT GENERATION FUNCTIONS (from your JSON converter)
+# Copy the entire set of functions here
+# ============================================================
+
+def fmt(val, decimals=2):
+    """Format number with commas"""
+    if val is None:
+        return "0.00"
+    return f"{val:,.{decimals}f}"
+
+def normalize_observations(obs):
+    """Coerce observations into {'positive': [...], 'concerns': [...]}."""
+    if isinstance(obs, dict):
+        return {'positive': list(obs.get('positive', []) or []),
+                'concerns': list(obs.get('concerns', []) or [])}
+    pos, con = [], []
+    if isinstance(obs, list):
+        for item in obs:
+            if isinstance(item, str):
+                con.append(item)
+            elif isinstance(item, dict):
+                kind = str(item.get('type') or item.get('category') or item.get('sentiment') or '').lower()
+                text = item.get('text') or item.get('observation') or item.get('message') or item.get('description') or ''
+                if not text:
+                    continue
+                if kind in ('positive', 'pos', 'good', 'strength'):
+                    pos.append(text)
+                else:
+                    con.append(text)
+    return {'positive': pos, 'concerns': con}
+
+def adapt_to_v6(src):
+    """Reshape flat extractor output into v6.3.3 renderer schema."""
+    from collections import defaultdict
+
+    summary = src.get('summary', {}) or {}
+    transactions = src.get('transactions', []) or []
+    monthly_summary = src.get('monthly_summary', []) or []
+    cp_ledger = src.get('counterparty_ledger', {}) or {}
+    pdf_integrity = src.get('pdf_integrity')
+
+    report_info = {
+        'company_name': summary.get('company_names', ['Unknown'])[0] if summary.get('company_names') else 'Unknown',
+        'schema_version': '6.3.5',
+        'period_start': '',
+        'period_end': '',
+        'total_months': len(monthly_summary),
+        'related_parties': [],
+    }
+
+    # accounts aggregation
+    acc_map = defaultdict(lambda: {'credits': 0.0, 'debits': 0.0, 'txn_count': 0, 'bank': '', 'last_bal': None, 'opening_bal': None})
+    for t in transactions:
+        an = t.get('account_no', '')
+        if not an:
+            continue
+        a = acc_map[an]
+        a['txn_count'] += 1
+        cr = float(t.get('credit', 0) or 0)
+        dr = float(t.get('debit', 0) or 0)
+        a['credits'] += cr
+        a['debits'] += dr
+        if not a['bank']:
+            a['bank'] = t.get('bank', '') or ''
+        bal = t.get('balance')
+        if isinstance(bal, (int, float)):
+            if a['opening_bal'] is None:
+                a['opening_bal'] = bal - cr + dr
+            a['last_bal'] = bal
+    
+    accounts = []
+    for an, a in sorted(acc_map.items()):
+        accounts.append({
+            'bank_name': a['bank'],
+            'account_number': an,
+            'account_holder': report_info['company_name'],
+            'account_type': 'Current',
+            'opening_balance': round(a['opening_bal'] or 0.0, 2),
+            'closing_balance': round(a['last_bal'] or 0.0, 2),
+            'total_credits': round(a['credits'], 2),
+            'total_debits': round(a['debits'], 2),
+            'transaction_count': a['txn_count'],
+        })
+
+    # Build monthly analysis from monthly_summary
+    monthly_analysis = []
+    for m in monthly_summary:
+        month = m.get('month', '')
+        highest = float(m.get('highest_balance', 0) or 0)
+        lowest = float(m.get('lowest_balance', 0) or 0)
+        monthly_analysis.append({
+            'month': month,
+            'bank_name': '',
+            'account_number': m.get('account_no', ''),
+            'gross_credits': float(m.get('total_credit', 0) or 0),
+            'gross_debits': float(m.get('total_debit', 0) or 0),
+            'net_credits': float(m.get('total_credit', 0) or 0),
+            'net_debits': float(m.get('total_debit', 0) or 0),
+            'credit_count': m.get('credit_count', 0),
+            'debit_count': m.get('debit_count', 0),
+            'own_party_cr': float(m.get('own_party_cr', 0) or 0),
+            'own_party_dr': float(m.get('own_party_dr', 0) or 0),
+            'related_party_cr': float(m.get('related_party_cr', 0) or 0),
+            'related_party_dr': float(m.get('related_party_dr', 0) or 0),
+            'reversal_cr': float(m.get('reversal_cr', 0) or 0),
+            'loan_disbursement_cr': float(m.get('loan_disbursement_cr', 0) or 0),
+            'fd_interest_cr': float(m.get('fd_interest_cr', 0) or 0),
+            'round_figure_cr': float(m.get('round_figure_cr', 0) or 0),
+            'high_value_cr': float(m.get('high_value_cr', 0) or 0),
+            'cash_deposits_amount': float(m.get('cash_deposits_amount', 0) or 0),
+            'cash_withdrawals_amount': float(m.get('cash_withdrawals_amount', 0) or 0),
+            'cheque_deposits_amount': float(m.get('cheque_deposits_amount', 0) or 0),
+            'cheque_issues_amount': float(m.get('cheque_issues_amount', 0) or 0),
+            'loan_repayment_dr': float(m.get('loan_repayment_dr', 0) or 0),
+            'salary_paid': float(m.get('salary_paid', 0) or 0),
+            'statutory_epf': float(m.get('statutory_epf', 0) or 0),
+            'statutory_socso': float(m.get('statutory_socso', 0) or 0),
+            'statutory_tax': float(m.get('statutory_tax', 0) or 0),
+            'statutory_hrdf': float(m.get('statutory_hrdf', 0) or 0),
+            'returned_cheques_outward_count': m.get('returned_cheques_outward_count', 0),
+            'returned_cheques_outward_amount': float(m.get('returned_cheques_outward_amount', 0) or 0),
+            'eod_lowest': lowest,
+            'eod_highest': highest,
+            'eod_average': (highest + lowest) / 2.0 if (highest or lowest) else 0.0,
+            'opening_balance': float(m.get('opening_balance', 0) or 0),
+            'closing_balance': float(m.get('ending_balance', 0) or 0),
+            'transaction_count': m.get('transaction_count', 0),
+            'fx_credit_amount': 0,
+            'fx_debit_amount': 0,
+            'fx_credit_count': 0,
+            'fx_debit_count': 0,
+            'fx_currencies': [],
+        })
+
+    gross_credits = sum(float(t.get('credit', 0) or 0) for t in transactions)
+    gross_debits = sum(float(t.get('debit', 0) or 0) for t in transactions)
+    
+    consolidated = {
+        'gross_credits': round(gross_credits, 2),
+        'gross_debits': round(gross_debits, 2),
+        'net_credits': round(gross_credits, 2),
+        'net_debits': round(gross_debits, 2),
+        'annualized_net_credits': round(gross_credits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
+        'annualized_net_debits': round(gross_debits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
+        'eod_lowest': 0,
+        'eod_highest': 0,
+        'eod_average': 0,
+        'data_completeness': 'COMPLETE',
+    }
+
+    return {
+        'report_info': report_info,
+        'accounts': accounts,
+        'monthly_analysis': monthly_analysis,
+        'consolidated': consolidated,
+        'top_parties': {'top_payers': [], 'top_payees': []},
+        'large_credits': [],
+        'own_related_transactions': {'transactions': [], 'summary': {}},
+        'loan_transactions': {'transactions': [], 'summary': {}},
+        'flags': {'indicators': []},
+        'observations': {'positive': [], 'concerns': []},
+        'parsing_metadata': {},
+        'counterparty_ledger': cp_ledger,
+        'pdf_integrity': pdf_integrity,
+    }
+
+def _top_parties_from_transaction_analysis(transaction_analysis: dict) -> dict:
+    top_payers = transaction_analysis.get("top_payers") or transaction_analysis.get("top_creditors")
+    top_payees = transaction_analysis.get("top_payees") or transaction_analysis.get("top_debtors")
+
+    if not top_payers:
+        top_payers = [
+            {
+                "rank": idx,
+                "party_name": row.get("party"),
+                "total_amount": row.get("total_credit", 0),
+                "transaction_count": row.get("credit_tx_count", 0),
+            }
+            for idx, row in enumerate(transaction_analysis.get("top_credit_parties", []), start=1)
+        ]
+
+    if not top_payees:
+        top_payees = [
+            {
+                "rank": idx,
+                "party_name": row.get("party"),
+                "total_amount": row.get("total_debit", 0),
+                "transaction_count": row.get("debit_tx_count", 0),
+            }
+            for idx, row in enumerate(transaction_analysis.get("top_debit_parties", []), start=1)
+        ]
+
+    return {"top_payers": top_payers or [], "top_payees": top_payees or []}
+
+
+def build_report_data_from_analysis(
+    transactions: List[dict],
+    monthly_summary: List[dict],
+    transaction_analysis: dict,
+    high_value_threshold: float,
+) -> dict:
+    """Build the v6 report payload shared by HTML and Excel exports."""
+    data = {
+        'transactions': transactions,
+        'monthly_summary': monthly_summary,
+        'summary': {
+            'company_names': list(set(t.get('company_name', '') for t in transactions if t.get('company_name'))),
+            'date_range': '',
+            'high_value_threshold': high_value_threshold,
+        },
+        'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
+        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
+    }
+
+    adapted_data = adapt_to_v6(data)
+    adapted_data['transactions'] = transactions
+    adapted_data['top_parties'] = _top_parties_from_transaction_analysis(transaction_analysis)
+    adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])
+    adapted_data['flags'] = transaction_analysis.get('flags', {'indicators': []})
+    adapted_data['observations'] = transaction_analysis.get('observations', {'positive': [], 'concerns': []})
+    adapted_data['round_figure_credits'] = transaction_analysis.get('round_figure_credits', [])
+    adapted_data['loan_transactions'] = transaction_analysis.get(
+        'loan_transactions',
+        adapted_data.get('loan_transactions', {'transactions': [], 'summary': {}}),
+    )
+    adapted_data['own_related_transactions'] = transaction_analysis.get(
+        'own_related_transactions',
+        adapted_data.get('own_related_transactions', {'transactions': [], 'summary': {}}),
+    )
+    adapted_data['unclassified_transactions'] = transaction_analysis.get('unclassified_transactions', [])
+    adapted_data['classification_config'] = transaction_analysis.get('classification_config', {})
+    adapted_data['parsing_metadata'] = transaction_analysis.get(
+        'parsing_metadata',
+        adapted_data.get('parsing_metadata', {}),
+    )
+    return adapted_data
+
+
+def normalize_report_data_for_export(data: dict) -> dict:
+    """Normalize uploaded JSON or v6 payloads for HTML/XLSX report exports."""
+    if not isinstance(data, dict):
+        return {}
+
+    source = dict(data)
+    transaction_analysis = source.get("transaction_analysis", {})
+    if isinstance(transaction_analysis, dict):
+        source.setdefault("counterparty_ledger", transaction_analysis.get("counterparty_ledger", {}))
+
+    if "monthly_analysis" not in source and "transactions" in source:
+        normalized = adapt_to_v6(source)
+        normalized["transactions"] = source.get("transactions", [])
+    else:
+        normalized = dict(source)
+
+    if isinstance(transaction_analysis, dict):
+        normalized["top_parties"] = _top_parties_from_transaction_analysis(transaction_analysis)
+        normalized["large_credits"] = transaction_analysis.get(
+            "high_value_credits",
+            normalized.get("large_credits", []),
+        )
+        normalized["flags"] = transaction_analysis.get("flags", normalized.get("flags", {"indicators": []}))
+        normalized["observations"] = transaction_analysis.get(
+            "observations",
+            normalized.get("observations", {"positive": [], "concerns": []}),
+        )
+
+    normalized.setdefault("accounts", [])
+    normalized.setdefault("monthly_analysis", [])
+    normalized.setdefault("consolidated", {})
+    normalized.setdefault("top_parties", {"top_payers": [], "top_payees": []})
+    normalized.setdefault("large_credits", [])
+    normalized.setdefault("own_related_transactions", {"transactions": [], "summary": {}})
+    normalized.setdefault("loan_transactions", {"transactions": [], "summary": {}})
+    normalized.setdefault("flags", {"indicators": []})
+    normalized.setdefault("observations", {"positive": [], "concerns": []})
+    normalized.setdefault("counterparty_ledger", {})
+    normalized.setdefault("parsing_metadata", {})
+    return normalized
+
+
+def _excel_safe_value(value):
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, pd.Period):
+        return str(value)
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _records_to_excel_df(records, columns: List[str] | None = None) -> pd.DataFrame:
+    safe_records = [
+        {key: _excel_safe_value(val) for key, val in dict(record).items()}
+        for record in (records or [])
+        if isinstance(record, dict)
+    ]
+    df = pd.DataFrame(safe_records)
+    if columns and df.empty:
+        df = pd.DataFrame(columns=columns)
+    return df
+
+
+def _write_excel_sheet(writer, sheet_name: str, df: pd.DataFrame, title: str | None = None) -> None:
+    workbook = writer.book
+    safe_sheet_name = sheet_name[:31]
+    startrow = 2 if title else 0
+    
+    # Convert DataFrame to have proper string columns for Excel
+    df_to_write = df.copy()
+    
+    # Convert all columns to string for safe processing, but keep numeric ones numeric
+    for col in df_to_write.columns:
+        # Check if column contains numeric data (float/int)
+        if pd.api.types.is_numeric_dtype(df_to_write[col]):
+            # Keep numeric columns as is
+            continue
+        else:
+            # Convert non-numeric columns to string, handling None/NaN
+            df_to_write[col] = df_to_write[col].apply(
+                lambda x: str(x) if x is not None and pd.notna(x) else ""
+            )
+    
+    df_to_write.to_excel(writer, sheet_name=safe_sheet_name, startrow=startrow, index=False)
+    worksheet = writer.sheets[safe_sheet_name]
+
+    header_format = workbook.add_format(
+        {"bold": True, "font_color": "white", "bg_color": "#1B4F72", "border": 1}
+    )
+    title_format = workbook.add_format({"bold": True, "font_size": 14, "font_color": "#1B4F72"})
+    money_format = workbook.add_format({"num_format": "#,##0.00"})
+
+    if title:
+        worksheet.write(0, 0, title, title_format)
+
+    for col_idx, col_name in enumerate(df_to_write.columns):
+        worksheet.write(startrow, col_idx, col_name, header_format)
+        
+        # Safely calculate column width
+        try:
+            # Get column values as strings safely
+            col_values = df_to_write[col_name].astype(str).tolist() if not df_to_write.empty else []
+            max_len = len(str(col_name))
+            for val in col_values[:200]:  # Limit to first 200 rows for performance
+                if val:
+                    max_len = max(max_len, len(val))
+            # Cap width between 12 and 42
+            col_width = min(max(max_len + 2, 12), 42)
+        except Exception:
+            col_width = 15  # Default fallback width
+        
+        worksheet.set_column(col_idx, col_idx, col_width)
+        
+        # Apply money format to amount columns
+        if any(token in str(col_name).lower() for token in ("amount", "credit", "debit", "balance", "gross", "net")):
+            # Get the column range
+            last_row = startrow + len(df_to_write)
+            if last_row > startrow:
+                worksheet.set_column(col_idx, col_idx, col_width, money_format)
+
+    worksheet.freeze_panes(startrow + 1, 0)
+    if not df_to_write.empty:
+        worksheet.autofilter(startrow, 0, startrow + len(df_to_write), max(len(df_to_write.columns) - 1, 0))
+
+def generate_excel_report(data: dict) -> BytesIO:
+    """Generate a multi-sheet XLSX report matching the HTML report tabs."""
+    report_data = normalize_report_data_for_export(data)
+    top_parties = report_data.get("top_parties", {}) or {}
+    own_related = report_data.get("own_related_transactions", {}) or {}
+    if isinstance(own_related, list):
+        own_related = {"transactions": own_related, "summary": {}}
+    loans = report_data.get("loan_transactions", {}) or {}
+    flags = report_data.get("flags", {}) or {}
+    cp_ledger = report_data.get("counterparty_ledger", {}) or {}
+    parsing = report_data.get("parsing_metadata", {}) or {}
+    pdf_integrity = report_data.get("pdf_integrity", {}) or {}
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        report_info = report_data.get("report_info", {}) or {}
+        consolidated = report_data.get("consolidated", {}) or {}
+        overview_rows = [
+            {"Section": "Report Info", "Metric": key, "Value": _excel_safe_value(value)}
+            for key, value in report_info.items()
+        ]
+        overview_rows.extend(
+            {"Section": "Consolidated", "Metric": key, "Value": _excel_safe_value(value)}
+            for key, value in consolidated.items()
+        )
+        _write_excel_sheet(writer, "Overview", pd.DataFrame(overview_rows), "Report Overview")
+
+        _write_excel_sheet(
+            writer,
+            "Accounts",
+            _records_to_excel_df(report_data.get("accounts", [])),
+            "Account Details",
+        )
+        _write_excel_sheet(
+            writer,
+            "Cash Flow",
+            _records_to_excel_df(report_data.get("monthly_analysis", [])),
+            "Monthly Cash Flow",
+        )
+
+        party_rows = []
+        for party_type, parties in (
+            ("Top Payer", top_parties.get("top_payers") or top_parties.get("top_creditors") or []),
+            ("Top Payee", top_parties.get("top_payees") or top_parties.get("top_debtors") or []),
+        ):
+            for idx, row in enumerate(parties, start=1):
+                party_rows.append({"type": party_type, "rank": row.get("rank", idx), **row})
+        _write_excel_sheet(writer, "Top Parties", _records_to_excel_df(party_rows), "Top Parties")
+
+        _write_excel_sheet(
+            writer,
+            "Large Credits",
+            _records_to_excel_df(report_data.get("large_credits", [])),
+            "Large Credits",
+        )
+
+        cp_rows = _records_to_excel_df(cp_ledger.get("counterparties", []))
+        if "transactions" in cp_rows.columns:
+            cp_rows = cp_rows.drop(columns=["transactions"])
+        _write_excel_sheet(writer, "Counterparty", cp_rows, "Counterparty Ledger")
+
+        cp_txn_rows = []
+        for cp in cp_ledger.get("counterparties", []) or []:
+            for txn in cp.get("transactions", []) or []:
+                cp_txn_rows.append({"counterparty": cp.get("counterparty_name", ""), **txn})
+        if not cp_txn_rows:
+            cp_txn_rows = own_related.get("transactions", []) or []
+        _write_excel_sheet(writer, "Counterparty Txns", _records_to_excel_df(cp_txn_rows), "Counterparty Transactions")
+
+        loan_rows = []
+        for txn_type, txns in (
+            ("Disbursement", loans.get("disbursements", [])),
+            ("Repayment", loans.get("repayments", [])),
+            ("Transaction", loans.get("transactions", [])),
+        ):
+            for row in txns or []:
+                loan_rows.append({"facility_type": txn_type, **row})
+        _write_excel_sheet(writer, "Facilities", _records_to_excel_df(loan_rows), "Facilities")
+
+        _write_excel_sheet(
+            writer,
+            "Risk Signals",
+            _records_to_excel_df(flags.get("indicators", [])),
+            "Risk Signals",
+        )
+        _write_excel_sheet(
+            writer,
+            "Round Figures",
+            _records_to_excel_df(report_data.get("round_figure_credits", [])),
+            "Round Figure Credits",
+        )
+
+        fx_rows = [
+            row for row in report_data.get("monthly_analysis", [])
+            if any(row.get(key) for key in ("fx_credit_count", "fx_credit_amount", "fx_debit_count", "fx_debit_amount"))
+        ]
+        if fx_rows:
+            _write_excel_sheet(writer, "FX Remittance", _records_to_excel_df(fx_rows), "FX / Remittance")
+
+        unclassified_rows = report_data.get("unclassified_transactions", []) or []
+        if unclassified_rows:
+            _write_excel_sheet(writer, "Unclassified", _records_to_excel_df(unclassified_rows), "Unclassified Transactions")
+
+        if parsing:
+            _write_excel_sheet(
+                writer,
+                "Parsing QC",
+                _records_to_excel_df(parsing.get("account_month_checks", [])),
+                "Parsing Quality Checks",
+            )
+            if parsing.get("extraction_gaps"):
+                _write_excel_sheet(
+                    writer,
+                    "Extraction Gaps",
+                    _records_to_excel_df(parsing.get("extraction_gaps", [])),
+                    "Extraction Gaps",
+                )
+
+        if pdf_integrity:
+            integrity_rows = []
+            for file_name, result in pdf_integrity.items():
+                if isinstance(result, dict):
+                    integrity_rows.append({"file_name": file_name, **result})
+            _write_excel_sheet(writer, "Fraud Detector", _records_to_excel_df(integrity_rows), "Fraud Detector")
+
+        if report_data.get("transactions"):
+            _write_excel_sheet(
+                writer,
+                "Transactions",
+                _records_to_excel_df(report_data.get("transactions", [])),
+                "All Transactions",
+            )
+
+    output.seek(0)
+    return output
+
+
+def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
+                                   transaction_analysis: dict, high_value_threshold: float) -> str:
+    """Generate interactive HTML report from parsed transactions."""
+    return generate_interactive_html(
+        build_report_data_from_analysis(
+            transactions,
+            monthly_summary,
+            transaction_analysis,
+            high_value_threshold,
+        )
+    )
 
 def load_json_payload(json_source):
     """Load JSON from an uploaded file or reuse an already parsed payload."""
@@ -2567,16 +2674,243 @@ def load_json_payload(json_source):
 def convert_json_to_html(json_source) -> str:
     """Convert uploaded JSON analysis file to HTML report"""
     data = normalize_report_data_for_export(load_json_payload(json_source))
-    return generate_html_report_from_data(
-        data.get('transactions', []),
-        data.get('monthly_summary', []),
-        data.get('transaction_analysis', {}),
-        data.get('summary', {}).get('high_value_threshold', 0)
-    )
+    return generate_interactive_html(data)
+
+# ============================================================
+# HTML REPORT GENERATION FUNCTIONS (ADDED)
+# ============================================================
+
+def fmt(val, decimals=2):
+    """Format number with commas"""
+    if val is None:
+        return "0.00"
+    return f"{val:,.{decimals}f}"
+
+def normalize_observations(obs):
+    """Coerce observations into {'positive': [...], 'concerns': [...]}."""
+    if isinstance(obs, dict):
+        return {'positive': list(obs.get('positive', []) or []),
+                'concerns': list(obs.get('concerns', []) or [])}
+    pos, con = [], []
+    if isinstance(obs, list):
+        for item in obs:
+            if isinstance(item, str):
+                con.append(item)
+            elif isinstance(item, dict):
+                kind = str(item.get('type') or item.get('category') or item.get('sentiment') or '').lower()
+                text = item.get('text') or item.get('observation') or item.get('message') or item.get('description') or ''
+                if not text:
+                    continue
+                if kind in ('positive', 'pos', 'good', 'strength'):
+                    pos.append(text)
+                else:
+                    con.append(text)
+    return {'positive': pos, 'concerns': con}
+
+def adapt_to_v6_basic_unused(src):
+    """Reshape flat extractor output into v6.3.3 renderer schema."""
+    from collections import defaultdict
+
+    summary = src.get('summary', {}) or {}
+    transactions = src.get('transactions', []) or []
+    monthly_summary = src.get('monthly_summary', []) or []
+    cp_ledger = src.get('counterparty_ledger', {}) or {}
+    pdf_integrity = src.get('pdf_integrity')
+
+    report_info = {
+        'company_name': summary.get('company_names', ['Unknown'])[0] if summary.get('company_names') else 'Unknown',
+        'schema_version': '6.3.3',
+        'period_start': '',
+        'period_end': '',
+        'total_months': len(monthly_summary),
+        'related_parties': [],
+    }
+
+    # accounts aggregation
+    acc_map = defaultdict(lambda: {'credits': 0.0, 'debits': 0.0, 'txn_count': 0, 'bank': '', 'last_bal': None, 'opening_bal': None})
+    for t in transactions:
+        an = t.get('account_no', '')
+        if not an:
+            continue
+        a = acc_map[an]
+        a['txn_count'] += 1
+        cr = float(t.get('credit', 0) or 0)
+        dr = float(t.get('debit', 0) or 0)
+        a['credits'] += cr
+        a['debits'] += dr
+        if not a['bank']:
+            a['bank'] = t.get('bank', '') or ''
+        bal = t.get('balance')
+        if isinstance(bal, (int, float)):
+            if a['opening_bal'] is None:
+                a['opening_bal'] = bal - cr + dr
+            a['last_bal'] = bal
+    
+    accounts = []
+    for an, a in sorted(acc_map.items()):
+        accounts.append({
+            'bank_name': a['bank'],
+            'account_number': an,
+            'account_holder': report_info['company_name'],
+            'account_type': 'Current',
+            'opening_balance': round(a['opening_bal'] or 0.0, 2),
+            'closing_balance': round(a['last_bal'] or 0.0, 2),
+            'total_credits': round(a['credits'], 2),
+            'total_debits': round(a['debits'], 2),
+            'transaction_count': a['txn_count'],
+        })
+
+    monthly_analysis = []
+    for m in monthly_summary:
+        monthly_analysis.append({
+            'month': m.get('month', ''),
+            'bank_name': '',
+            'account_number': m.get('account_no', ''),
+            'gross_credits': float(m.get('total_credit', 0) or 0),
+            'gross_debits': float(m.get('total_debit', 0) or 0),
+            'net_credits': float(m.get('total_credit', 0) or 0),
+            'net_debits': float(m.get('total_debit', 0) or 0),
+            'eod_lowest': float(m.get('lowest_balance', 0) or 0),
+            'eod_highest': float(m.get('highest_balance', 0) or 0),
+            'eod_average': (float(m.get('highest_balance', 0) or 0) + float(m.get('lowest_balance', 0) or 0)) / 2.0,
+            'opening_balance': float(m.get('opening_balance', 0) or 0),
+            'closing_balance': float(m.get('ending_balance', 0) or 0),
+            'transaction_count': m.get('transaction_count', 0),
+        })
+
+    gross_credits = sum(float(t.get('credit', 0) or 0) for t in transactions)
+    gross_debits = sum(float(t.get('debit', 0) or 0) for t in transactions)
+    total_months = len(monthly_summary) or 1
+    
+    consolidated = {
+        'gross_credits': round(gross_credits, 2),
+        'gross_debits': round(gross_debits, 2),
+        'net_credits': round(gross_credits, 2),
+        'net_debits': round(gross_debits, 2),
+        'annualized_net_credits': round(gross_credits * 12 / total_months, 2),
+        'annualized_net_debits': round(gross_debits * 12 / total_months, 2),
+        'eod_lowest': 0,
+        'eod_highest': 0,
+        'eod_average': 0,
+        'data_completeness': 'COMPLETE',
+    }
+
+    return {
+        'report_info': report_info,
+        'accounts': accounts,
+        'monthly_analysis': monthly_analysis,
+        'consolidated': consolidated,
+        'top_parties': {'top_payers': [], 'top_payees': []},
+        'large_credits': [],
+        'own_related_transactions': {'transactions': [], 'summary': {}},
+        'loan_transactions': {'transactions': [], 'summary': {}},
+        'flags': {'indicators': []},
+        'observations': {'positive': [], 'concerns': []},
+        'parsing_metadata': {},
+        'counterparty_ledger': cp_ledger,
+        'pdf_integrity': pdf_integrity,
+    }
+
+def generate_interactive_html_basic_unused(data):
+    """Generate interactive HTML report for v6 schema"""
+    # Simplified version - you can import the full function from your other file
+    # For now, create a basic HTML report
+    r = data.get('report_info', {})
+    accounts = data.get('accounts', [])
+    consol = data.get('consolidated', {})
+    
+    company = r.get('company_name', 'Company')
+    period_start = r.get('period_start', '')
+    period_end = r.get('period_end', '')
+    
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kredit Lab — {company}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
+        .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }}
+        h1 {{ color: #1B4F72; }}
+        .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }}
+        .card {{ background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #1B4F72; }}
+        .card .value {{ font-size: 24px; font-weight: bold; }}
+        .card .label {{ color: #666; font-size: 12px; text-transform: uppercase; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+        th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }}
+        th {{ background: #1B4F72; color: white; }}
+        .credit {{ color: #059669; }}
+        .debit {{ color: #dc2626; }}
+        .footer {{ text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; color: #666; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Kredit Lab — Statement Intelligence Report</h1>
+        <p><strong>{company}</strong> | Period: {period_start} to {period_end}</p>
+        
+        <div class="summary">
+            <div class="card"><div class="value">RM {consol.get('net_credits', 0):,.0f}</div><div class="label">Net Credits</div></div>
+            <div class="card"><div class="value">RM {consol.get('net_debits', 0):,.0f}</div><div class="label">Net Debits</div></div>
+            <div class="card"><div class="value">RM {consol.get('annualized_net_credits', 0):,.0f}</div><div class="label">Annualized</div></div>
+            <div class="card"><div class="value">{len(accounts)}</div><div class="label">Accounts</div></div>
+        </div>
+        
+        <h2>Account Summary</h2>
+        <table>
+            <thead><tr><th>Bank</th><th>Account No</th><th>Opening Balance</th><th>Closing Balance</th><th>Total Credits</th><th>Total Debits</th></tr></thead>
+            <tbody>'''
+    for acc in accounts:
+        html += f'''<tr>
+            <td>{acc.get('bank_name', '')}</td>
+            <td>{acc.get('account_number', '')}</td>
+            <td class="credit">RM {acc.get('opening_balance', 0):,.2f}</td>
+            <td class="credit">RM {acc.get('closing_balance', 0):,.2f}</td>
+            <td class="credit">RM {acc.get('total_credits', 0):,.2f}</td>
+            <td class="debit">RM {acc.get('total_debits', 0):,.2f}</td>
+        </tr>'''
+    html += f'''</tbody>
+        </table>
+        <div class="footer">
+            <p>Generated by Kredit Lab Statement Intelligence | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </div>
+    </div>
+</body>
+</html>'''
+    return html
+
+def generate_html_report_from_data_basic_unused(transactions: List[dict], monthly_summary: List[dict], 
+                                                transaction_analysis: dict, high_value_threshold: float) -> str:
+    """Generate interactive HTML report from parsed transactions"""
+    # Convert transactions to v6.3.3 schema format
+    data = adapt_to_v6({
+        'transactions': transactions,
+        'monthly_summary': monthly_summary,
+        'summary': {
+            'date_range': f"{transactions[0].get('date', '')} to {transactions[-1].get('date', '')}" if transactions else '',
+            'company_names': list(set(t.get('company_name', '') for t in transactions if t.get('company_name')))
+        },
+        'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
+        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
+    })
+    
+    # Generate HTML report
+    return generate_interactive_html(data)
+
+def convert_json_to_html_basic_unused(json_file) -> str:
+    """Convert uploaded JSON analysis file to HTML report"""
+    data = json.load(json_file)
+    
+    # Adapt to v6 schema if needed
+    if isinstance(data, dict) and 'monthly_analysis' not in data and 'transactions' in data:
+        data = adapt_to_v6(data)
+    
+    return generate_interactive_html(data)
 
 
 # ============================================================
-# END OF HTML REPORT GENERATION FUNCTIONS
+# END OF ADDED FUNCTIONS
 # ============================================================
 
 
@@ -2586,6 +2920,68 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.write("Upload one or more bank statement PDFs to extract transactions.")
+
+
+# ============================================================
+# JSON Upload and Convert Section (ADDED - place after header)
+# ============================================================
+st.markdown("---")
+st.subheader("🔄 Convert Existing Analysis to HTML")
+
+json_file = st.file_uploader(
+    "Upload previously saved JSON analysis",
+    type=['json'],
+    key="json_uploader",
+    help="Upload a JSON analysis file to convert to an interactive HTML report without re-parsing PDFs"
+)
+
+if json_file is not None:
+    try:
+        data = load_json_payload(json_file)
+        html_content = convert_json_to_html(data)
+        st.success("✅ Successfully converted JSON to HTML report!")
+        
+        # Extract company name from JSON for filename
+        company_name = "report"
+        if isinstance(data, dict):
+            if "report_info" in data and data["report_info"].get("company_name"):
+                company_name = data["report_info"]["company_name"]
+            elif "summary" in data and data["summary"].get("company_names"):
+                company_names = data["summary"].get("company_names", [])
+                company_name = company_names[0] if company_names else "report"
+        
+        safe_name = company_name.replace(' ', '_').replace('/', '_')
+        
+        st.download_button(
+            "📥 Download HTML Report",
+            html_content.encode('utf-8'),
+            f"{safe_name}_converted_report.html",
+            "text/html; charset=utf-8",
+            use_container_width=True,
+            type="primary"
+        )
+
+        excel_content = generate_excel_report(data)
+        st.download_button(
+            "Download Excel Report",
+            excel_content.getvalue(),
+            f"{safe_name}_converted_report.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+        
+        if st.checkbox("Preview HTML in this window"):
+            st.components.v1.html(html_content, height=600, scrolling=True)
+            
+    except json.JSONDecodeError as e:
+        st.error(f"Invalid JSON file: {e}")
+    except Exception as e:
+        st.error(f"Failed to convert JSON to HTML: {e}")
+
+st.markdown("---")
+# ============================================================
+# End of JSON Upload Section
+# ============================================================
 
 
 st.markdown(
@@ -4222,14 +4618,54 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
         '<div class="kl-analysis-subtitle">The story of the money and whether the financial behavior makes sense.</div>',
     )
     
-    # Display pattern metrics only (High-Value, Round-Number, Repeated, High Frequency)
+    # Calculate total credits and debits
+    total_credits = analysis_df['credit'].sum() if 'credit' in analysis_df.columns else 0
+    total_debits = analysis_df['debit'].sum() if 'debit' in analysis_df.columns else 0
+    net_position = total_credits - total_debits
+    
+    # Display summary metrics with financial cards added
     item_map = dict(pattern_summary.get("items", []))
     statutory_items = pattern_summary.get("statutory_items", [])
     
-    # Create pattern cards only (excluding financial summary)
+    # Create cards including financial summary
     cards = []
     
+    # Add Financial Summary Cards
+    cards.append(
+       '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">Transactions</div>'
+        f'<div class="kl-metric-value">{item_map.get("Total Transactions", 0)}</div>'
+        '</div>',
+    )
+    cards.append(
+        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
+        '<div class="kl-metric-label">Net Credits</div>'
+        f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
+        '</div>'
+    )
+    
+    cards.append(
+        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
+        '<div class="kl-metric-label">Net Debits</div>'
+        f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
+        '</div>'
+    )
+    
+    net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
+    net_border = "#2e7d32" if net_position >= 0 else "#c62828"
+
+    net_label = "Net Position" if net_position >= 0 else "Net Loss"
+    
+    cards.append(
+        f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
+        f'<div class="kl-metric-label">{net_label}</div>'
+        f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
+        '</div>'
+    )
+    
+    # Add existing pattern cards
     cards.extend([
+        
         '<div class="kl-metric-card">'
         '<div class="kl-metric-label">High-Value Flags</div>'
         f'<div class="kl-metric-value">{item_map.get("High-Value Flags", 0)}</div>'
@@ -4250,6 +4686,7 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
         f'<div class="kl-metric-value">{item_map.get("High Frequency Flags", 0)}</div>'
         '</div>',
     ])
+
     
     # Add statutory payment cards
     if statutory_items:
@@ -4262,14 +4699,13 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
                 '</div>'
             )
     
-    # Display pattern cards in the grid
+    # Display all cards in the grid
     st.html(
         f'<div class="kl-metric-grid">{"".join(cards)}</div>',
     )
     
     # Render detailed expandable sections
     render_pattern_details(analysis_df, high_value_threshold)
-
 
 # -----------------------------
 # Core Processing Functions
@@ -5043,54 +5479,11 @@ if st.session_state.results:
         # Display transaction pattern overview
         render_transaction_overview(df, high_value_threshold)
         
-        # Display Extracted Transaction Section (new section)
+        # Display Counterparty Ledger Table
         st.markdown("---")
-        st.subheader("📊 Extracted Transaction")
+        render_counterparty_ledger_table(df)
         
-        # Display financial summary cards
-        analysis_df = filter_statement_transactions_df(df)
-        total_credits = analysis_df['credit'].sum() if 'credit' in analysis_df.columns else 0
-        total_debits = analysis_df['debit'].sum() if 'debit' in analysis_df.columns else 0
-        net_position = total_credits - total_debits
-        
-        fin_cards = []
-        
-        fin_cards.append(
-           '<div class="kl-metric-card">'
-            '<div class="kl-metric-label">Transactions</div>'
-            f'<div class="kl-metric-value">{len(analysis_df):,}</div>'
-            '</div>',
-        )
-        fin_cards.append(
-            '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
-            '<div class="kl-metric-label">Net Credits</div>'
-            f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
-            '</div>'
-        )
-        
-        fin_cards.append(
-            '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
-            '<div class="kl-metric-label">Net Debits</div>'
-            f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
-            '</div>'
-        )
-        
-        net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
-        net_border = "#2e7d32" if net_position >= 0 else "#c62828"
-        net_label = "Net Position" if net_position >= 0 else "Net Loss"
-        
-        fin_cards.append(
-            f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
-            f'<div class="kl-metric-label">{net_label}</div>'
-            f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
-            '</div>'
-        )
-        
-        st.html(
-            f'<div class="kl-metric-grid">{"".join(fin_cards)}</div>',
-        )
-        
-        # Display all transactions table
+        # Display basic transaction table
         st.markdown("#### All Transactions")
         requested_cols = ["date", "description", "debit", "credit", "balance"]
         display_cols = [c for c in requested_cols if c in df.columns]
@@ -5106,10 +5499,6 @@ if st.session_state.results:
                 "balance": "Running Balance"
             }
         )
-        
-        # Display Counterparty Ledger Table
-        st.markdown("---")
-        render_counterparty_ledger_table(df)
     else:
         st.info("No line-item transactions extracted.")
     
@@ -5189,10 +5578,12 @@ if st.session_state.results:
         )
     
     st.subheader("⬇️ Download Options")
+    # Updated to 4 columns for HTML report
     col1, col2, col3, col4 = st.columns(4)
 
     df_download = df.copy() if not df.empty else pd.DataFrame([])
 
+    # Helper function to convert dataframe to JSON-serializable format
     def make_json_serializable(obj):
         """Recursively convert non-serializable objects to JSON-serializable format"""
         if isinstance(obj, dict):
@@ -5210,6 +5601,7 @@ if st.session_state.results:
         else:
             return obj
 
+    # Convert transactions to JSON-serializable format
     if not df_download.empty:
         json_records = df_download.to_dict(orient="records")
         json_records = make_json_serializable(json_records)
@@ -5226,6 +5618,7 @@ if st.session_state.results:
         )
 
     with col2:
+        # Handle date conversion for display
         if "date" in df_download.columns and not df_download.empty:
             date_min = df_download["date"].min()
             date_max = df_download["date"].max()
@@ -5247,7 +5640,10 @@ if st.session_state.results:
             {x for x in df_download.get("account_no", pd.Series([], dtype=object)).dropna().astype(str).tolist() if x.strip()}
         )
 
+        # Convert monthly_summary to JSON-serializable format
         serializable_monthly_summary = make_json_serializable(monthly_summary)
+        
+        # Convert transaction_analysis_report to JSON-serializable format
         serializable_transaction_analysis = make_json_serializable(transaction_analysis_report)
 
         full_report = {
@@ -5274,27 +5670,29 @@ if st.session_state.results:
         )
 
     with col3:
+        # Make sure data is JSON serializable first
         serialized_transactions = make_json_serializable(st.session_state.results)
         serialized_monthly_summary = make_json_serializable(monthly_summary)
         serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
     
-        report_excel_data = build_report_data_from_analysis(
-            serialized_transactions,
-            serialized_monthly_summary,
-            serialized_transaction_analysis,
-            high_value_threshold,
-        )
-        output = generate_excel_report(report_excel_data)
+    report_excel_data = build_report_data_from_analysis(
+        serialized_transactions,
+        serialized_monthly_summary,
+        serialized_transaction_analysis,
+        high_value_threshold,
+    )
+    output = generate_excel_report(report_excel_data)
 
-        st.download_button(
-            "📊 Download Full Report (XLSX)",
-            output.getvalue(),
-            "full_report.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+    st.download_button(
+        "📊 Download Full Report (XLSX)",
+        output.getvalue(),
+        "full_report.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
 
     with col4:
+        # NEW: Generate and download HTML report from current data
         if st.session_state.results:
             try:
                 html_content = generate_html_report_from_data(
@@ -5304,10 +5702,12 @@ if st.session_state.results:
                     high_value_threshold
                 )
                 
+                # Get company name for filename
                 company_name = st.session_state.company_name_override or "company"
                 if company_name == "company" and not st.session_state.results:
                     company_name = "report"
                 else:
+                    # Try to get from first transaction
                     if st.session_state.results and st.session_state.results[0].get("company_name"):
                         company_name = st.session_state.results[0]["company_name"]
                 
@@ -5315,7 +5715,7 @@ if st.session_state.results:
                 
                 st.download_button(
                     "🌐 Download Interactive HTML Report",
-                    html_content.encode('utf-8') if isinstance(html_content, str) else html_content,
+                    html_content.encode('utf-8'),
                     f"{safe_name}_statement_report.html",
                     "text/html; charset=utf-8",
                     use_container_width=True,
@@ -5323,64 +5723,6 @@ if st.session_state.results:
                 )
             except Exception as e:
                 st.error(f"Failed to generate HTML report: {e}")
-
-
-# ============================================================
-# JSON Upload and Convert Section (MOVED to bottom after download options)
-# ============================================================
-st.markdown("---")
-st.subheader("🔄 Convert Existing Analysis to HTML")
-
-json_file = st.file_uploader(
-    "Upload previously saved JSON analysis",
-    type=['json'],
-    key="json_uploader",
-    help="Upload a JSON analysis file to convert to an interactive HTML report without re-parsing PDFs"
-)
-
-if json_file is not None:
-    try:
-        data = load_json_payload(json_file)
-        html_content = convert_json_to_html(data)
-        st.success("✅ Successfully converted JSON to HTML report!")
-        
-        company_name = "report"
-        if isinstance(data, dict):
-            if "report_info" in data and data["report_info"].get("company_name"):
-                company_name = data["report_info"]["company_name"]
-            elif "summary" in data and data["summary"].get("company_names"):
-                company_names = data["summary"].get("company_names", [])
-                company_name = company_names[0] if company_names else "report"
-        
-        safe_name = company_name.replace(' ', '_').replace('/', '_')
-        
-        col_html, col_excel = st.columns(2)
-        with col_html:
-            st.download_button(
-                "📥 Download HTML Report",
-                html_content.encode('utf-8') if isinstance(html_content, str) else html_content,
-                f"{safe_name}_converted_report.html",
-                "text/html; charset=utf-8",
-                use_container_width=True,
-                type="primary"
-            )
-        with col_excel:
-            excel_content = generate_excel_report(data)
-            st.download_button(
-                "📊 Download Excel Report",
-                excel_content.getvalue(),
-                f"{safe_name}_converted_report.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-        
-        if st.checkbox("Preview HTML in this window"):
-            st.components.v1.html(html_content, height=600, scrolling=True)
-            
-    except json.JSONDecodeError as e:
-        st.error(f"Invalid JSON file: {e}")
-    except Exception as e:
-        st.error(f"Failed to convert JSON to HTML: {e}")
 
 else:
     if (
