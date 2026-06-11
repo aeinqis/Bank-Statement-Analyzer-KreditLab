@@ -1555,6 +1555,10 @@ def generate_interactive_html(data):
         /* Theme toggle */
         .theme-toggle {{ position:absolute; top:1rem; right:1rem; padding:0.4rem 0.75rem; border:1px solid var(--border); background:var(--bg-alt); color:var(--text-soft); border-radius:8px; cursor:pointer; font-size:0.8rem; }}
         .theme-toggle:hover {{ border-color:var(--border-accent); }}
+        .report-actions {{ position:absolute; top:1rem; right:5.5rem; display:flex; gap:0.5rem; }}
+        .excel-btn {{ padding:0.4rem 0.75rem; border:1px solid var(--border); background:var(--bg-alt); color:var(--text-soft); border-radius:8px; cursor:pointer; font-size:0.8rem; font-weight:500; }}
+        .excel-btn:hover {{ border-color:var(--green); color:var(--green); }}
+        .tab-export-bar {{ display:flex; justify-content:flex-end; margin:0 0 1rem; }}
 
         /* Nav */
         .nav {{ display:flex; gap:0.35rem; margin-bottom:1.5rem; flex-wrap:wrap; background:var(--card); padding:0.4rem; border-radius:12px; border:1px solid var(--border); box-shadow:var(--shadow); }}
@@ -1700,7 +1704,7 @@ def generate_interactive_html(data):
 
         /* Print */
         @media print {{
-            .nav, .theme-toggle {{ display:none; }}
+            .nav, .theme-toggle, .report-actions, .tab-export-bar {{ display:none; }}
             .tab {{ display:block !important; page-break-inside:avoid; }}
             body {{ font-size:11px; }}
         }}
@@ -1709,6 +1713,9 @@ def generate_interactive_html(data):
 <body>
     <div class="container">
         <div class="header">
+            <div class="report-actions">
+                <button class="excel-btn" onclick="downloadReportExcel()">Download Report Excel</button>
+            </div>
             <button class="theme-toggle" onclick="toggleTheme()">Dark</button>
             <div class="header-grid">
                 <div class="company-info">
@@ -2003,6 +2010,86 @@ def generate_interactive_html(data):
             // Re-render charts for theme
             renderCharts();
         }}
+        function reportCompanyName() {{
+            const heading = document.querySelector('.company-info h1');
+            if (!heading) return 'kredit_lab_report';
+            return (heading.childNodes[0] && heading.childNodes[0].textContent || 'kredit_lab_report').trim();
+        }}
+        function filenameSafe(value) {{
+            return String(value || 'report')
+                .replace(/[^a-z0-9]+/gi, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 90) || 'report';
+        }}
+        function cleanExportTable(table) {{
+            const clone = table.cloneNode(true);
+            clone.querySelectorAll('button,input,select,textarea,script').forEach(function(el) {{ el.remove(); }});
+            clone.querySelectorAll('tr').forEach(function(row) {{
+                if (row.style && row.style.display === 'none') row.remove();
+            }});
+            return clone.outerHTML;
+        }}
+        function buildExcelHtml(title, tableHtmlParts) {{
+            let body = '<h1>' + title + '</h1>';
+            if (!tableHtmlParts.length) {{
+                body += '<p>No table data available.</p>';
+            }}
+            tableHtmlParts.forEach(function(tableHtml, idx) {{
+                body += '<h2>Table ' + (idx + 1) + '</h2>' + tableHtml;
+            }});
+            return '\\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"><style>body{{font-family:Arial,sans-serif}} table{{border-collapse:collapse;margin-bottom:18px}} th{{background:#1B4F72;color:#fff;font-weight:bold}} th,td{{border:1px solid #d5d8dc;padding:6px 8px;mso-number-format:"\\@"}} .r{{text-align:right}} .credit{{color:#059669}} .debit{{color:#dc2626}}</style></head><body>' + body + '</body></html>';
+        }}
+        function downloadExcelHtml(filename, title, tableHtmlParts) {{
+            const blob = new Blob([buildExcelHtml(title, tableHtmlParts)], {{type:'application/vnd.ms-excel;charset=utf-8;'}});
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filenameSafe(filename) + '.xls';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(function() {{ URL.revokeObjectURL(link.href); }}, 250);
+        }}
+        function getTabTitle(tab) {{
+            const tabName = tab.id.replace(/^tab-/, '');
+            const navButtons = Array.from(document.querySelectorAll('.nav-btn'));
+            const navButton = navButtons.find(function(btn) {{
+                return (btn.getAttribute('onclick') || '').indexOf("'" + tabName + "'") !== -1;
+            }});
+            return navButton ? navButton.textContent.trim() : tabName.replace(/-/g, ' ');
+        }}
+        function downloadTabExcel(tabName) {{
+            const tab = document.getElementById('tab-' + tabName);
+            if (!tab) return;
+            const title = getTabTitle(tab);
+            const tables = Array.from(tab.querySelectorAll('table')).map(cleanExportTable);
+            downloadExcelHtml(reportCompanyName() + '_' + title, title, tables);
+        }}
+        function downloadReportExcel() {{
+            const tables = [];
+            document.querySelectorAll('.tab').forEach(function(tab) {{
+                const title = getTabTitle(tab);
+                tables.push('<table><tr><th>' + title + '</th></tr></table>');
+                tab.querySelectorAll('table').forEach(function(table) {{
+                    tables.push(cleanExportTable(table));
+                }});
+            }});
+            downloadExcelHtml(reportCompanyName() + '_full_html_report', 'Kredit Lab Report - ' + reportCompanyName(), tables);
+        }}
+        function injectExcelButtons() {{
+            document.querySelectorAll('.tab').forEach(function(tab) {{
+                if (tab.firstElementChild && tab.firstElementChild.classList.contains('tab-export-bar')) return;
+                const tabName = tab.id.replace(/^tab-/, '');
+                const bar = document.createElement('div');
+                bar.className = 'tab-export-bar';
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'excel-btn';
+                btn.textContent = 'Download This Tab Excel';
+                btn.addEventListener('click', function() {{ downloadTabExcel(tabName); }});
+                bar.appendChild(btn);
+                tab.insertBefore(bar, tab.firstChild);
+            }});
+        }}
         function renderCharts() {{
             if(typeof Plotly==='undefined'){{console.warn('Plotly not loaded — charts disabled');return;}}
             const isDark = document.documentElement.getAttribute('data-theme')==='dark';
@@ -2045,7 +2132,10 @@ def generate_interactive_html(data):
                 }}, {{responsive:true,displayModeBar:false}});
             }}
         }}
-        document.addEventListener('DOMContentLoaded', renderCharts);
+        document.addEventListener('DOMContentLoaded', function() {{
+            injectExcelButtons();
+            renderCharts();
+        }});
     </script>
 </body>
 </html>'''
@@ -2219,14 +2309,42 @@ def adapt_to_v6(src):
         'pdf_integrity': pdf_integrity,
     }
 
-# Then copy the ENTIRE generate_interactive_html function from your original converter
-# (It's too long to paste here, but you need to copy the complete function 
-# from your first code file - the one with all the HTML/CSS/JS)
+def _top_parties_from_transaction_analysis(transaction_analysis: dict) -> dict:
+    top_payers = transaction_analysis.get("top_payers") or transaction_analysis.get("top_creditors")
+    top_payees = transaction_analysis.get("top_payees") or transaction_analysis.get("top_debtors")
 
-def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
-                                   transaction_analysis: dict, high_value_threshold: float) -> str:
-    """Generate interactive HTML report from parsed transactions"""
-    # Build the v6 schema data structure
+    if not top_payers:
+        top_payers = [
+            {
+                "rank": idx,
+                "party_name": row.get("party"),
+                "total_amount": row.get("total_credit", 0),
+                "transaction_count": row.get("credit_tx_count", 0),
+            }
+            for idx, row in enumerate(transaction_analysis.get("top_credit_parties", []), start=1)
+        ]
+
+    if not top_payees:
+        top_payees = [
+            {
+                "rank": idx,
+                "party_name": row.get("party"),
+                "total_amount": row.get("total_debit", 0),
+                "transaction_count": row.get("debit_tx_count", 0),
+            }
+            for idx, row in enumerate(transaction_analysis.get("top_debit_parties", []), start=1)
+        ]
+
+    return {"top_payers": top_payers or [], "top_payees": top_payees or []}
+
+
+def build_report_data_from_analysis(
+    transactions: List[dict],
+    monthly_summary: List[dict],
+    transaction_analysis: dict,
+    high_value_threshold: float,
+) -> dict:
+    """Build the v6 report payload shared by HTML and Excel exports."""
     data = {
         'transactions': transactions,
         'monthly_summary': monthly_summary,
@@ -2238,24 +2356,279 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
         'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
         'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
     }
-    
-    # Add top parties data if available
-    if 'top_payers' in transaction_analysis:
-        data['top_parties'] = {
-            'top_payers': transaction_analysis.get('top_payers', []),
-            'top_payees': transaction_analysis.get('top_payees', [])
-        }
-    
-    # Adapt to v6 schema
+
     adapted_data = adapt_to_v6(data)
-    
-    # Add additional data from transaction_analysis
+    adapted_data['transactions'] = transactions
+    adapted_data['top_parties'] = _top_parties_from_transaction_analysis(transaction_analysis)
     adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])
     adapted_data['flags'] = transaction_analysis.get('flags', {'indicators': []})
     adapted_data['observations'] = transaction_analysis.get('observations', {'positive': [], 'concerns': []})
-    
-    # Generate HTML report using the full function
-    return generate_interactive_html(adapted_data)
+    adapted_data['round_figure_credits'] = transaction_analysis.get('round_figure_credits', [])
+    adapted_data['loan_transactions'] = transaction_analysis.get(
+        'loan_transactions',
+        adapted_data.get('loan_transactions', {'transactions': [], 'summary': {}}),
+    )
+    adapted_data['own_related_transactions'] = transaction_analysis.get(
+        'own_related_transactions',
+        adapted_data.get('own_related_transactions', {'transactions': [], 'summary': {}}),
+    )
+    adapted_data['unclassified_transactions'] = transaction_analysis.get('unclassified_transactions', [])
+    adapted_data['classification_config'] = transaction_analysis.get('classification_config', {})
+    adapted_data['parsing_metadata'] = transaction_analysis.get(
+        'parsing_metadata',
+        adapted_data.get('parsing_metadata', {}),
+    )
+    return adapted_data
+
+
+def normalize_report_data_for_export(data: dict) -> dict:
+    """Normalize uploaded JSON or v6 payloads for HTML/XLSX report exports."""
+    if not isinstance(data, dict):
+        return {}
+
+    source = dict(data)
+    transaction_analysis = source.get("transaction_analysis", {})
+    if isinstance(transaction_analysis, dict):
+        source.setdefault("counterparty_ledger", transaction_analysis.get("counterparty_ledger", {}))
+
+    if "monthly_analysis" not in source and "transactions" in source:
+        normalized = adapt_to_v6(source)
+        normalized["transactions"] = source.get("transactions", [])
+    else:
+        normalized = dict(source)
+
+    if isinstance(transaction_analysis, dict):
+        normalized["top_parties"] = _top_parties_from_transaction_analysis(transaction_analysis)
+        normalized["large_credits"] = transaction_analysis.get(
+            "high_value_credits",
+            normalized.get("large_credits", []),
+        )
+        normalized["flags"] = transaction_analysis.get("flags", normalized.get("flags", {"indicators": []}))
+        normalized["observations"] = transaction_analysis.get(
+            "observations",
+            normalized.get("observations", {"positive": [], "concerns": []}),
+        )
+
+    normalized.setdefault("accounts", [])
+    normalized.setdefault("monthly_analysis", [])
+    normalized.setdefault("consolidated", {})
+    normalized.setdefault("top_parties", {"top_payers": [], "top_payees": []})
+    normalized.setdefault("large_credits", [])
+    normalized.setdefault("own_related_transactions", {"transactions": [], "summary": {}})
+    normalized.setdefault("loan_transactions", {"transactions": [], "summary": {}})
+    normalized.setdefault("flags", {"indicators": []})
+    normalized.setdefault("observations", {"positive": [], "concerns": []})
+    normalized.setdefault("counterparty_ledger", {})
+    normalized.setdefault("parsing_metadata", {})
+    return normalized
+
+
+def _excel_safe_value(value):
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, pd.Period):
+        return str(value)
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _records_to_excel_df(records, columns: List[str] | None = None) -> pd.DataFrame:
+    safe_records = [
+        {key: _excel_safe_value(val) for key, val in dict(record).items()}
+        for record in (records or [])
+        if isinstance(record, dict)
+    ]
+    df = pd.DataFrame(safe_records)
+    if columns and df.empty:
+        df = pd.DataFrame(columns=columns)
+    return df
+
+
+def _write_excel_sheet(writer, sheet_name: str, df: pd.DataFrame, title: str | None = None) -> None:
+    workbook = writer.book
+    safe_sheet_name = sheet_name[:31]
+    startrow = 2 if title else 0
+    df.to_excel(writer, sheet_name=safe_sheet_name, startrow=startrow, index=False)
+    worksheet = writer.sheets[safe_sheet_name]
+
+    header_format = workbook.add_format(
+        {"bold": True, "font_color": "white", "bg_color": "#1B4F72", "border": 1}
+    )
+    title_format = workbook.add_format({"bold": True, "font_size": 14, "font_color": "#1B4F72"})
+    money_format = workbook.add_format({"num_format": "#,##0.00"})
+
+    if title:
+        worksheet.write(0, 0, title, title_format)
+
+    for col_idx, col_name in enumerate(df.columns):
+        worksheet.write(startrow, col_idx, col_name, header_format)
+        series = df[col_name].astype(str) if not df.empty else pd.Series([str(col_name)])
+        max_width = max([len(str(col_name))] + series.map(len).head(200).tolist())
+        worksheet.set_column(col_idx, col_idx, min(max(max_width + 2, 12), 42))
+        if any(token in str(col_name).lower() for token in ("amount", "credit", "debit", "balance", "gross", "net")):
+            worksheet.set_column(col_idx, col_idx, min(max(max_width + 2, 14), 42), money_format)
+
+    worksheet.freeze_panes(startrow + 1, 0)
+    if not df.empty:
+        worksheet.autofilter(startrow, 0, startrow + len(df), max(len(df.columns) - 1, 0))
+
+
+def generate_excel_report(data: dict) -> BytesIO:
+    """Generate a multi-sheet XLSX report matching the HTML report tabs."""
+    report_data = normalize_report_data_for_export(data)
+    top_parties = report_data.get("top_parties", {}) or {}
+    own_related = report_data.get("own_related_transactions", {}) or {}
+    if isinstance(own_related, list):
+        own_related = {"transactions": own_related, "summary": {}}
+    loans = report_data.get("loan_transactions", {}) or {}
+    flags = report_data.get("flags", {}) or {}
+    cp_ledger = report_data.get("counterparty_ledger", {}) or {}
+    parsing = report_data.get("parsing_metadata", {}) or {}
+    pdf_integrity = report_data.get("pdf_integrity", {}) or {}
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        report_info = report_data.get("report_info", {}) or {}
+        consolidated = report_data.get("consolidated", {}) or {}
+        overview_rows = [
+            {"Section": "Report Info", "Metric": key, "Value": _excel_safe_value(value)}
+            for key, value in report_info.items()
+        ]
+        overview_rows.extend(
+            {"Section": "Consolidated", "Metric": key, "Value": _excel_safe_value(value)}
+            for key, value in consolidated.items()
+        )
+        _write_excel_sheet(writer, "Overview", pd.DataFrame(overview_rows), "Report Overview")
+
+        _write_excel_sheet(
+            writer,
+            "Accounts",
+            _records_to_excel_df(report_data.get("accounts", [])),
+            "Account Details",
+        )
+        _write_excel_sheet(
+            writer,
+            "Cash Flow",
+            _records_to_excel_df(report_data.get("monthly_analysis", [])),
+            "Monthly Cash Flow",
+        )
+
+        party_rows = []
+        for party_type, parties in (
+            ("Top Payer", top_parties.get("top_payers") or top_parties.get("top_creditors") or []),
+            ("Top Payee", top_parties.get("top_payees") or top_parties.get("top_debtors") or []),
+        ):
+            for idx, row in enumerate(parties, start=1):
+                party_rows.append({"type": party_type, "rank": row.get("rank", idx), **row})
+        _write_excel_sheet(writer, "Top Parties", _records_to_excel_df(party_rows), "Top Parties")
+
+        _write_excel_sheet(
+            writer,
+            "Large Credits",
+            _records_to_excel_df(report_data.get("large_credits", [])),
+            "Large Credits",
+        )
+
+        cp_rows = _records_to_excel_df(cp_ledger.get("counterparties", []))
+        if "transactions" in cp_rows.columns:
+            cp_rows = cp_rows.drop(columns=["transactions"])
+        _write_excel_sheet(writer, "Counterparty", cp_rows, "Counterparty Ledger")
+
+        cp_txn_rows = []
+        for cp in cp_ledger.get("counterparties", []) or []:
+            for txn in cp.get("transactions", []) or []:
+                cp_txn_rows.append({"counterparty": cp.get("counterparty_name", ""), **txn})
+        if not cp_txn_rows:
+            cp_txn_rows = own_related.get("transactions", []) or []
+        _write_excel_sheet(writer, "Counterparty Txns", _records_to_excel_df(cp_txn_rows), "Counterparty Transactions")
+
+        loan_rows = []
+        for txn_type, txns in (
+            ("Disbursement", loans.get("disbursements", [])),
+            ("Repayment", loans.get("repayments", [])),
+            ("Transaction", loans.get("transactions", [])),
+        ):
+            for row in txns or []:
+                loan_rows.append({"facility_type": txn_type, **row})
+        _write_excel_sheet(writer, "Facilities", _records_to_excel_df(loan_rows), "Facilities")
+
+        _write_excel_sheet(
+            writer,
+            "Risk Signals",
+            _records_to_excel_df(flags.get("indicators", [])),
+            "Risk Signals",
+        )
+        _write_excel_sheet(
+            writer,
+            "Round Figures",
+            _records_to_excel_df(report_data.get("round_figure_credits", [])),
+            "Round Figure Credits",
+        )
+
+        fx_rows = [
+            row for row in report_data.get("monthly_analysis", [])
+            if any(row.get(key) for key in ("fx_credit_count", "fx_credit_amount", "fx_debit_count", "fx_debit_amount"))
+        ]
+        if fx_rows:
+            _write_excel_sheet(writer, "FX Remittance", _records_to_excel_df(fx_rows), "FX / Remittance")
+
+        unclassified_rows = report_data.get("unclassified_transactions", []) or []
+        if unclassified_rows:
+            _write_excel_sheet(writer, "Unclassified", _records_to_excel_df(unclassified_rows), "Unclassified Transactions")
+
+        if parsing:
+            _write_excel_sheet(
+                writer,
+                "Parsing QC",
+                _records_to_excel_df(parsing.get("account_month_checks", [])),
+                "Parsing Quality Checks",
+            )
+            if parsing.get("extraction_gaps"):
+                _write_excel_sheet(
+                    writer,
+                    "Extraction Gaps",
+                    _records_to_excel_df(parsing.get("extraction_gaps", [])),
+                    "Extraction Gaps",
+                )
+
+        if pdf_integrity:
+            integrity_rows = []
+            for file_name, result in pdf_integrity.items():
+                if isinstance(result, dict):
+                    integrity_rows.append({"file_name": file_name, **result})
+            _write_excel_sheet(writer, "Fraud Detector", _records_to_excel_df(integrity_rows), "Fraud Detector")
+
+        if report_data.get("transactions"):
+            _write_excel_sheet(
+                writer,
+                "Transactions",
+                _records_to_excel_df(report_data.get("transactions", [])),
+                "All Transactions",
+            )
+
+    output.seek(0)
+    return output
+
+
+def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
+                                   transaction_analysis: dict, high_value_threshold: float) -> str:
+    """Generate interactive HTML report from parsed transactions."""
+    return generate_interactive_html(
+        build_report_data_from_analysis(
+            transactions,
+            monthly_summary,
+            transaction_analysis,
+            high_value_threshold,
+        )
+    )
 
 def load_json_payload(json_source):
     """Load JSON from an uploaded file or reuse an already parsed payload."""
@@ -2268,15 +2641,7 @@ def load_json_payload(json_source):
 
 def convert_json_to_html(json_source) -> str:
     """Convert uploaded JSON analysis file to HTML report"""
-    data = load_json_payload(json_source)
-    
-    # Adapt to v6 schema if needed
-    if isinstance(data, dict) and 'monthly_analysis' not in data and 'transactions' in data:
-        data = adapt_to_v6(data)
-    elif isinstance(data, dict) and 'monthly_analysis' in data and ('consolidated' not in data or 'top_parties' not in data):
-        # Add normalization for Claude AI output if needed
-        pass
-    
+    data = normalize_report_data_for_export(load_json_payload(json_source))
     return generate_interactive_html(data)
 
 # ============================================================
@@ -2562,6 +2927,15 @@ if json_file is not None:
             "text/html; charset=utf-8",
             use_container_width=True,
             type="primary"
+        )
+
+        excel_content = generate_excel_report(data)
+        st.download_button(
+            "Download Excel Report",
+            excel_content.getvalue(),
+            f"{safe_name}_converted_report.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
         )
         
         if st.checkbox("Preview HTML in this window"):
@@ -5264,17 +5638,13 @@ if st.session_state.results:
         )
 
     with col3:
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df_download.to_excel(writer, sheet_name="Transactions", index=False)
-            if monthly_summary:
-                pd.DataFrame(monthly_summary).to_excel(writer, sheet_name="Monthly Summary", index=False)
-            if transaction_analysis_report.get("high_value_credits"):
-                pd.DataFrame(transaction_analysis_report["high_value_credits"]).to_excel(
-                    writer,
-                    sheet_name="High Value Credits",
-                    index=False,
-                )
+        report_excel_data = build_report_data_from_analysis(
+            json_records,
+            monthly_summary,
+            transaction_analysis_report,
+            high_value_threshold,
+        )
+        output = generate_excel_report(report_excel_data)
 
         st.download_button(
             "📊 Download Full Report (XLSX)",
