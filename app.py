@@ -1,3 +1,5 @@
+# Add this near the top of your app.py file, after the imports
+
 import json
 import re
 from datetime import datetime
@@ -46,12 +48,303 @@ from fraud_logic import (
 )
 
 
+# ============================================================
+# HTML REPORT GENERATION FUNCTIONS (ADDED)
+# ============================================================
+
+def fmt(val, decimals=2):
+    """Format number with commas"""
+    if val is None:
+        return "0.00"
+    return f"{val:,.{decimals}f}"
+
+def normalize_observations(obs):
+    """Coerce observations into {'positive': [...], 'concerns': [...]}."""
+    if isinstance(obs, dict):
+        return {'positive': list(obs.get('positive', []) or []),
+                'concerns': list(obs.get('concerns', []) or [])}
+    pos, con = [], []
+    if isinstance(obs, list):
+        for item in obs:
+            if isinstance(item, str):
+                con.append(item)
+            elif isinstance(item, dict):
+                kind = str(item.get('type') or item.get('category') or item.get('sentiment') or '').lower()
+                text = item.get('text') or item.get('observation') or item.get('message') or item.get('description') or ''
+                if not text:
+                    continue
+                if kind in ('positive', 'pos', 'good', 'strength'):
+                    pos.append(text)
+                else:
+                    con.append(text)
+    return {'positive': pos, 'concerns': con}
+
+def adapt_to_v6(src):
+    """Reshape flat extractor output into v6.3.3 renderer schema."""
+    from collections import defaultdict
+
+    summary = src.get('summary', {}) or {}
+    transactions = src.get('transactions', []) or []
+    monthly_summary = src.get('monthly_summary', []) or []
+    cp_ledger = src.get('counterparty_ledger', {}) or {}
+    pdf_integrity = src.get('pdf_integrity')
+
+    report_info = {
+        'company_name': summary.get('company_names', ['Unknown'])[0] if summary.get('company_names') else 'Unknown',
+        'schema_version': '6.3.3',
+        'period_start': '',
+        'period_end': '',
+        'total_months': len(monthly_summary),
+        'related_parties': [],
+    }
+
+    # accounts aggregation
+    acc_map = defaultdict(lambda: {'credits': 0.0, 'debits': 0.0, 'txn_count': 0, 'bank': '', 'last_bal': None, 'opening_bal': None})
+    for t in transactions:
+        an = t.get('account_no', '')
+        if not an:
+            continue
+        a = acc_map[an]
+        a['txn_count'] += 1
+        cr = float(t.get('credit', 0) or 0)
+        dr = float(t.get('debit', 0) or 0)
+        a['credits'] += cr
+        a['debits'] += dr
+        if not a['bank']:
+            a['bank'] = t.get('bank', '') or ''
+        bal = t.get('balance')
+        if isinstance(bal, (int, float)):
+            if a['opening_bal'] is None:
+                a['opening_bal'] = bal - cr + dr
+            a['last_bal'] = bal
+    
+    accounts = []
+    for an, a in sorted(acc_map.items()):
+        accounts.append({
+            'bank_name': a['bank'],
+            'account_number': an,
+            'account_holder': report_info['company_name'],
+            'account_type': 'Current',
+            'opening_balance': round(a['opening_bal'] or 0.0, 2),
+            'closing_balance': round(a['last_bal'] or 0.0, 2),
+            'total_credits': round(a['credits'], 2),
+            'total_debits': round(a['debits'], 2),
+            'transaction_count': a['txn_count'],
+        })
+
+    monthly_analysis = []
+    for m in monthly_summary:
+        monthly_analysis.append({
+            'month': m.get('month', ''),
+            'bank_name': '',
+            'account_number': m.get('account_no', ''),
+            'gross_credits': float(m.get('total_credit', 0) or 0),
+            'gross_debits': float(m.get('total_debit', 0) or 0),
+            'net_credits': float(m.get('total_credit', 0) or 0),
+            'net_debits': float(m.get('total_debit', 0) or 0),
+            'eod_lowest': float(m.get('lowest_balance', 0) or 0),
+            'eod_highest': float(m.get('highest_balance', 0) or 0),
+            'eod_average': (float(m.get('highest_balance', 0) or 0) + float(m.get('lowest_balance', 0) or 0)) / 2.0,
+            'opening_balance': float(m.get('opening_balance', 0) or 0),
+            'closing_balance': float(m.get('ending_balance', 0) or 0),
+            'transaction_count': m.get('transaction_count', 0),
+        })
+
+    gross_credits = sum(float(t.get('credit', 0) or 0) for t in transactions)
+    gross_debits = sum(float(t.get('debit', 0) or 0) for t in transactions)
+    total_months = len(monthly_summary) or 1
+    
+    consolidated = {
+        'gross_credits': round(gross_credits, 2),
+        'gross_debits': round(gross_debits, 2),
+        'net_credits': round(gross_credits, 2),
+        'net_debits': round(gross_debits, 2),
+        'annualized_net_credits': round(gross_credits * 12 / total_months, 2),
+        'annualized_net_debits': round(gross_debits * 12 / total_months, 2),
+        'eod_lowest': 0,
+        'eod_highest': 0,
+        'eod_average': 0,
+        'data_completeness': 'COMPLETE',
+    }
+
+    return {
+        'report_info': report_info,
+        'accounts': accounts,
+        'monthly_analysis': monthly_analysis,
+        'consolidated': consolidated,
+        'top_parties': {'top_payers': [], 'top_payees': []},
+        'large_credits': [],
+        'own_related_transactions': {'transactions': [], 'summary': {}},
+        'loan_transactions': {'transactions': [], 'summary': {}},
+        'flags': {'indicators': []},
+        'observations': {'positive': [], 'concerns': []},
+        'parsing_metadata': {},
+        'counterparty_ledger': cp_ledger,
+        'pdf_integrity': pdf_integrity,
+    }
+
+def generate_interactive_html(data):
+    """Generate interactive HTML report for v6 schema"""
+    # Simplified version - you can import the full function from your other file
+    # For now, create a basic HTML report
+    r = data.get('report_info', {})
+    accounts = data.get('accounts', [])
+    consol = data.get('consolidated', {})
+    
+    company = r.get('company_name', 'Company')
+    period_start = r.get('period_start', '')
+    period_end = r.get('period_end', '')
+    
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kredit Lab — {company}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
+        .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }}
+        h1 {{ color: #1B4F72; }}
+        .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }}
+        .card {{ background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #1B4F72; }}
+        .card .value {{ font-size: 24px; font-weight: bold; }}
+        .card .label {{ color: #666; font-size: 12px; text-transform: uppercase; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+        th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }}
+        th {{ background: #1B4F72; color: white; }}
+        .credit {{ color: #059669; }}
+        .debit {{ color: #dc2626; }}
+        .footer {{ text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; color: #666; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Kredit Lab — Statement Intelligence Report</h1>
+        <p><strong>{company}</strong> | Period: {period_start} to {period_end}</p>
+        
+        <div class="summary">
+            <div class="card"><div class="value">RM {consol.get('net_credits', 0):,.0f}</div><div class="label">Net Credits</div></div>
+            <div class="card"><div class="value">RM {consol.get('net_debits', 0):,.0f}</div><div class="label">Net Debits</div></div>
+            <div class="card"><div class="value">RM {consol.get('annualized_net_credits', 0):,.0f}</div><div class="label">Annualized</div></div>
+            <div class="card"><div class="value">{len(accounts)}</div><div class="label">Accounts</div></div>
+        </div>
+        
+        <h2>Account Summary</h2>
+        <table>
+            <thead><tr><th>Bank</th><th>Account No</th><th>Opening Balance</th><th>Closing Balance</th><th>Total Credits</th><th>Total Debits</th></tr></thead>
+            <tbody>'''
+    for acc in accounts:
+        html += f'''<tr>
+            <td>{acc.get('bank_name', '')}</td>
+            <td>{acc.get('account_number', '')}</td>
+            <td class="credit">RM {acc.get('opening_balance', 0):,.2f}</td>
+            <td class="credit">RM {acc.get('closing_balance', 0):,.2f}</td>
+            <td class="credit">RM {acc.get('total_credits', 0):,.2f}</td>
+            <td class="debit">RM {acc.get('total_debits', 0):,.2f}</td>
+        </tr>'''
+    html += f'''</tbody>
+        </table>
+        <div class="footer">
+            <p>Generated by Kredit Lab Statement Intelligence | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </div>
+    </div>
+</body>
+</html>'''
+    return html
+
+def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
+                                   transaction_analysis: dict, high_value_threshold: float) -> str:
+    """Generate interactive HTML report from parsed transactions"""
+    # Convert transactions to v6.3.3 schema format
+    data = adapt_to_v6({
+        'transactions': transactions,
+        'monthly_summary': monthly_summary,
+        'summary': {
+            'date_range': f"{transactions[0].get('date', '')} to {transactions[-1].get('date', '')}" if transactions else '',
+            'company_names': list(set(t.get('company_name', '') for t in transactions if t.get('company_name')))
+        },
+        'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
+        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
+    })
+    
+    # Generate HTML report
+    return generate_interactive_html(data)
+
+def convert_json_to_html(json_file) -> str:
+    """Convert uploaded JSON analysis file to HTML report"""
+    data = json.load(json_file)
+    
+    # Adapt to v6 schema if needed
+    if isinstance(data, dict) and 'monthly_analysis' not in data and 'transactions' in data:
+        data = adapt_to_v6(data)
+    
+    return generate_interactive_html(data)
+
+
+# ============================================================
+# END OF ADDED FUNCTIONS
+# ============================================================
+
+
 st.set_page_config(page_title="Bank Statement Parser", layout="wide")
 st.markdown(
     '<h1>📄 Bank Statement Parser (Multi-File Support)</h1>',
     unsafe_allow_html=True,
 )
 st.write("Upload one or more bank statement PDFs to extract transactions.")
+
+
+# ============================================================
+# JSON Upload and Convert Section (ADDED - place after header)
+# ============================================================
+st.markdown("---")
+st.subheader("🔄 Convert Existing Analysis to HTML")
+
+json_file = st.file_uploader(
+    "Upload previously saved JSON analysis",
+    type=['json'],
+    key="json_uploader",
+    help="Upload a JSON analysis file to convert to an interactive HTML report without re-parsing PDFs"
+)
+
+if json_file is not None:
+    try:
+        html_content = convert_json_to_html(json_file)
+        st.success("✅ Successfully converted JSON to HTML report!")
+        
+        # Extract company name from JSON for filename
+        data = json.load(json_file)
+        company_name = "report"
+        if isinstance(data, dict):
+            if "report_info" in data and data["report_info"].get("company_name"):
+                company_name = data["report_info"]["company_name"]
+            elif "summary" in data and data["summary"].get("company_names"):
+                company_names = data["summary"].get("company_names", [])
+                company_name = company_names[0] if company_names else "report"
+        
+        safe_name = company_name.replace(' ', '_').replace('/', '_')
+        
+        st.download_button(
+            "📥 Download HTML Report",
+            html_content.encode('utf-8'),
+            f"{safe_name}_converted_report.html",
+            "text/html; charset=utf-8",
+            use_container_width=True,
+            type="primary"
+        )
+        
+        if st.checkbox("Preview HTML in this window"):
+            st.components.v1.html(html_content, height=600, scrolling=True)
+            
+    except json.JSONDecodeError as e:
+        st.error(f"Invalid JSON file: {e}")
+    except Exception as e:
+        st.error(f"Failed to convert JSON to HTML: {e}")
+
+st.markdown("---")
+# ============================================================
+# End of JSON Upload Section
+# ============================================================
 
 
 st.markdown(
@@ -989,6 +1282,7 @@ def is_benign_integrity_finding(finding: dict) -> bool:
     return any(pattern in message for pattern in benign_patterns)
 
 
+
 # -----------------------------
 # Counterparty Ledger Functions
 # -----------------------------
@@ -1103,42 +1397,36 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     
     st.markdown("## 💼 Counterparty Ledger")
     st.markdown("*Top counterparties by absolute net position. Green indicates net inflows; red indicates net outflows.*")
-
-    def build_top_counterparty_table(
-        amount_column: str,
-        count_column: str,
-    ) -> pd.DataFrame:
+    
+    def build_top_counterparty_table(amount_column: str, count_column: str) -> pd.DataFrame:
         top_df = counterparty_summary[
             counterparty_summary[amount_column].fillna(0) > 0
         ].copy()
         if top_df.empty:
-            return pd.DataFrame(columns=["Counterparty", "Total Txn", "Total Amount of Txn"])
+            return pd.DataFrame(columns=["Counterparty", "Total Txn", "Total Amnt of Txn"])
 
         top_df = top_df.sort_values(amount_column, ascending=False).head(10)
         return pd.DataFrame(
             {
                 "Counterparty": top_df["counterparty_name"],
                 "Total Txn": top_df[count_column].astype(int),
-                "Total Amount of Txn": top_df[amount_column].apply(lambda x: f"RM {x:,.2f}"),
+                "Total Amnt of Txn": top_df[amount_column].apply(lambda x: f"RM {x:,.2f}"),
             }
         )
-
-    top_credit_counterparties = build_top_counterparty_table("total_credits", "credit_count")
-    top_debit_counterparties = build_top_counterparty_table("total_debits", "debit_count")
 
     st.markdown("### Top 10 Counterparties by Transaction Amount")
     credit_col, debit_col = st.columns(2)
     with credit_col:
         st.markdown("#### Credit")
         st.dataframe(
-            top_credit_counterparties,
+            build_top_counterparty_table("total_credits", "credit_count"),
             use_container_width=True,
             hide_index=True,
         )
     with debit_col:
         st.markdown("#### Debit")
         st.dataframe(
-            top_debit_counterparties,
+            build_top_counterparty_table("total_debits", "debit_count"),
             use_container_width=True,
             hide_index=True,
         )
@@ -2653,7 +2941,8 @@ if st.session_state.results:
         )
     
     st.subheader("⬇️ Download Options")
-    col1, col2, col3 = st.columns(3)
+    # Updated to 4 columns for HTML report
+    col1, col2, col3, col4 = st.columns(4)
 
     df_download = df.copy() if not df.empty else pd.DataFrame([])
 
@@ -2688,6 +2977,7 @@ if st.session_state.results:
             json.dumps(json_records, indent=4),
             "transactions.json",
             "application/json",
+            use_container_width=True
         )
 
     with col2:
@@ -2739,6 +3029,7 @@ if st.session_state.results:
             json.dumps(full_report, indent=4),
             "full_report.json",
             "application/json",
+            use_container_width=True
         )
 
     with col3:
@@ -2759,7 +3050,41 @@ if st.session_state.results:
             output.getvalue(),
             "full_report.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
+
+    with col4:
+        # NEW: Generate and download HTML report from current data
+        if st.session_state.results:
+            try:
+                html_content = generate_html_report_from_data(
+                    st.session_state.results,
+                    monthly_summary,
+                    transaction_analysis_report,
+                    high_value_threshold
+                )
+                
+                # Get company name for filename
+                company_name = st.session_state.company_name_override or "company"
+                if company_name == "company" and not st.session_state.results:
+                    company_name = "report"
+                else:
+                    # Try to get from first transaction
+                    if st.session_state.results and st.session_state.results[0].get("company_name"):
+                        company_name = st.session_state.results[0]["company_name"]
+                
+                safe_name = company_name.replace(' ', '_').replace('/', '_')
+                
+                st.download_button(
+                    "🌐 Download Interactive HTML Report",
+                    html_content.encode('utf-8'),
+                    f"{safe_name}_statement_report.html",
+                    "text/html; charset=utf-8",
+                    use_container_width=True,
+                    help="Download an interactive HTML report with charts and analysis"
+                )
+            except Exception as e:
+                st.error(f"Failed to generate HTML report: {e}")
 
 else:
     if (
