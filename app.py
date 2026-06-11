@@ -2456,7 +2456,23 @@ def _write_excel_sheet(writer, sheet_name: str, df: pd.DataFrame, title: str | N
     workbook = writer.book
     safe_sheet_name = sheet_name[:31]
     startrow = 2 if title else 0
-    df.to_excel(writer, sheet_name=safe_sheet_name, startrow=startrow, index=False)
+    
+    # Convert DataFrame to have proper string columns for Excel
+    df_to_write = df.copy()
+    
+    # Convert all columns to string for safe processing, but keep numeric ones numeric
+    for col in df_to_write.columns:
+        # Check if column contains numeric data (float/int)
+        if pd.api.types.is_numeric_dtype(df_to_write[col]):
+            # Keep numeric columns as is
+            continue
+        else:
+            # Convert non-numeric columns to string, handling None/NaN
+            df_to_write[col] = df_to_write[col].apply(
+                lambda x: str(x) if x is not None and pd.notna(x) else ""
+            )
+    
+    df_to_write.to_excel(writer, sheet_name=safe_sheet_name, startrow=startrow, index=False)
     worksheet = writer.sheets[safe_sheet_name]
 
     header_format = workbook.add_format(
@@ -2468,18 +2484,34 @@ def _write_excel_sheet(writer, sheet_name: str, df: pd.DataFrame, title: str | N
     if title:
         worksheet.write(0, 0, title, title_format)
 
-    for col_idx, col_name in enumerate(df.columns):
+    for col_idx, col_name in enumerate(df_to_write.columns):
         worksheet.write(startrow, col_idx, col_name, header_format)
-        series = df[col_name].astype(str) if not df.empty else pd.Series([str(col_name)])
-        max_width = max([len(str(col_name))] + series.map(len).head(200).tolist())
-        worksheet.set_column(col_idx, col_idx, min(max(max_width + 2, 12), 42))
+        
+        # Safely calculate column width
+        try:
+            # Get column values as strings safely
+            col_values = df_to_write[col_name].astype(str).tolist() if not df_to_write.empty else []
+            max_len = len(str(col_name))
+            for val in col_values[:200]:  # Limit to first 200 rows for performance
+                if val:
+                    max_len = max(max_len, len(val))
+            # Cap width between 12 and 42
+            col_width = min(max(max_len + 2, 12), 42)
+        except Exception:
+            col_width = 15  # Default fallback width
+        
+        worksheet.set_column(col_idx, col_idx, col_width)
+        
+        # Apply money format to amount columns
         if any(token in str(col_name).lower() for token in ("amount", "credit", "debit", "balance", "gross", "net")):
-            worksheet.set_column(col_idx, col_idx, min(max(max_width + 2, 14), 42), money_format)
+            # Get the column range
+            last_row = startrow + len(df_to_write)
+            if last_row > startrow:
+                worksheet.set_column(col_idx, col_idx, col_width, money_format)
 
     worksheet.freeze_panes(startrow + 1, 0)
-    if not df.empty:
-        worksheet.autofilter(startrow, 0, startrow + len(df), max(len(df.columns) - 1, 0))
-
+    if not df_to_write.empty:
+        worksheet.autofilter(startrow, 0, startrow + len(df_to_write), max(len(df_to_write.columns) - 1, 0))
 
 def generate_excel_report(data: dict) -> BytesIO:
     """Generate a multi-sheet XLSX report matching the HTML report tabs."""
@@ -5638,21 +5670,26 @@ if st.session_state.results:
         )
 
     with col3:
-        report_excel_data = build_report_data_from_analysis(
-            json_records,
-            monthly_summary,
-            transaction_analysis_report,
-            high_value_threshold,
-        )
-        output = generate_excel_report(report_excel_data)
+        # Make sure data is JSON serializable first
+        serialized_transactions = make_json_serializable(st.session_state.results)
+        serialized_monthly_summary = make_json_serializable(monthly_summary)
+        serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
+    
+    report_excel_data = build_report_data_from_analysis(
+        serialized_transactions,
+        serialized_monthly_summary,
+        serialized_transaction_analysis,
+        high_value_threshold,
+    )
+    output = generate_excel_report(report_excel_data)
 
-        st.download_button(
-            "📊 Download Full Report (XLSX)",
-            output.getvalue(),
-            "full_report.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+    st.download_button(
+        "📊 Download Full Report (XLSX)",
+        output.getvalue(),
+        "full_report.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
 
     with col4:
         # NEW: Generate and download HTML report from current data
