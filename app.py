@@ -5479,9 +5479,54 @@ if st.session_state.results:
         # Display transaction pattern overview
         render_transaction_overview(df, high_value_threshold)
         
-        # Display Counterparty Ledger Table
+        # DisplayExtracted Transaction Section
         st.markdown("---")
-        render_counterparty_ledger_table(df)
+        st.subheader("📊 Extracted Transaction")
+        
+        # Display financial summary cards
+        analysis_df = filter_statement_transactions_df(df)
+        total_credits = analysis_df['credit'].sum() if 'credit' in analysis_df.columns else 0
+        total_debits = analysis_df['debit'].sum() if 'debit' in analysis_df.columns else 0
+        net_position = total_credits - total_debits
+        
+        fin_cards = []
+
+        # Display basic transaction table
+        fin_cards.append(
+           '<div class="kl-metric-card">'
+            '<div class="kl-metric-label">Transactions</div>'
+            f'<div class="kl-metric-value">{len(analysis_df):,}</div>'
+            '</div>',
+        )
+        fin_cards.append(
+            '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
+            '<div class="kl-metric-label">Net Credits</div>'
+            f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
+            '</div>'
+        )
+        
+        fin_cards.append(
+            '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
+            '<div class="kl-metric-label">Net Debits</div>'
+            f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
+            '</div>'
+        )
+        
+        net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
+        net_border = "#2e7d32" if net_position >= 0 else "#c62828"
+        net_label = "Net Position" if net_position >= 0 else "Net Loss"
+        
+        fin_cards.append(
+            f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
+            f'<div class="kl-metric-label">{net_label}</div>'
+            f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
+            '</div>'
+        )
+        
+        st.html(
+            f'<div class="kl-metric-grid">{"".join(fin_cards)}</div>',
+        )
+
         
         # Display basic transaction table
         st.markdown("#### All Transactions")
@@ -5499,6 +5544,9 @@ if st.session_state.results:
                 "balance": "Running Balance"
             }
         )
+
+        st.markdown("---")
+        render_counterparty_ledger_table(df)
     else:
         st.info("No line-item transactions extracted.")
     
@@ -5675,21 +5723,21 @@ if st.session_state.results:
         serialized_monthly_summary = make_json_serializable(monthly_summary)
         serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
     
-    report_excel_data = build_report_data_from_analysis(
-        serialized_transactions,
-        serialized_monthly_summary,
-        serialized_transaction_analysis,
-        high_value_threshold,
-    )
-    output = generate_excel_report(report_excel_data)
+        report_excel_data = build_report_data_from_analysis(
+            serialized_transactions,
+            serialized_monthly_summary,
+            serialized_transaction_analysis,
+            high_value_threshold,
+        )
+        output = generate_excel_report(report_excel_data)
 
-    st.download_button(
-        "📊 Download Full Report (XLSX)",
-        output.getvalue(),
-        "full_report.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
+        st.download_button(
+            "📊 Download Full Report (XLSX)",
+            output.getvalue(),
+            "full_report.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
 
     with col4:
         # NEW: Generate and download HTML report from current data
