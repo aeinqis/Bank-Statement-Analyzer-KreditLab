@@ -688,6 +688,9 @@ if "status" not in st.session_state:
 if "results" not in st.session_state:
     st.session_state.results = []
 
+if "integrity_analysis_results" not in st.session_state:
+    st.session_state.integrity_analysis_results = {}
+
 if "affin_statement_totals" not in st.session_state:
     st.session_state.affin_statement_totals = []
 
@@ -1745,6 +1748,7 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
 # -----------------------------
 def clear_processing_outputs() -> None:
     st.session_state.results = []
+    st.session_state.integrity_analysis_results = {}
     st.session_state.affin_statement_totals = []
     st.session_state.affin_file_transactions = {}
     st.session_state.ambank_statement_totals = []
@@ -2409,6 +2413,7 @@ if uploaded_files and st.session_state.status == "running":
             analysis_results = analyze_pdf_batch(resolved_pdf_bytes)
         except Exception as e:
             st.warning(f"PDF integrity check failed: {e}")
+    st.session_state.integrity_analysis_results = analysis_results
 
     # Display final status message
     if processing_stopped:
@@ -2495,6 +2500,8 @@ if uploaded_files and st.session_state.status == "running":
 # ---------------------------------------------------
 # DISPLAY
 # ---------------------------------------------------
+analysis_results = st.session_state.get("integrity_analysis_results", {})
+
 if st.session_state.results:
     high_value_threshold = get_high_value_threshold()
     
