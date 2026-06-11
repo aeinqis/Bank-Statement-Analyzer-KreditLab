@@ -2182,11 +2182,11 @@ def adapt_to_v6(src):
     transactions = src.get('transactions', []) or []
     monthly_summary = src.get('monthly_summary', []) or []
     cp_ledger = src.get('counterparty_ledger', {}) or {}
-    pdf_integrity = src.get('pdf_integrity')
+    pdf_integrity = src.get('pdf_integrity') or st.session_state.get('integrity_analysis_results', {})
 
     report_info = {
         'company_name': summary.get('company_names', ['Unknown'])[0] if summary.get('company_names') else 'Unknown',
-        'schema_version': '6.3.5',
+        'schema_version': 'AQ-1.0',
         'period_start': '',
         'period_end': '',
         'total_months': len(monthly_summary),
@@ -2354,7 +2354,7 @@ def build_report_data_from_analysis(
             'high_value_threshold': high_value_threshold,
         },
         'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
-        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
+        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})  # This is key!
     }
 
     adapted_data = adapt_to_v6(data)
@@ -2378,6 +2378,8 @@ def build_report_data_from_analysis(
         'parsing_metadata',
         adapted_data.get('parsing_metadata', {}),
     )
+    # Ensure pdf_integrity is preserved
+    adapted_data['pdf_integrity'] = st.session_state.get('integrity_analysis_results', {})
     return adapted_data
 
 
@@ -5740,23 +5742,34 @@ if st.session_state.results:
         )
 
     with col4:
-        # NEW: Generate and download HTML report from current data
+        # Generate HTML report from current data
         if st.session_state.results:
             try:
-                html_content = generate_html_report_from_data(
+                # Make sure we have the integrity results
+                integrity_results = st.session_state.get('integrity_analysis_results', {})
+                
+                # Include integrity results in transaction analysis
+                transaction_analysis_report['pdf_integrity'] = integrity_results
+                
+                # Also add to the report data directly
+                report_data = build_report_data_from_analysis(
                     st.session_state.results,
                     monthly_summary,
                     transaction_analysis_report,
                     high_value_threshold
                 )
                 
+                # Explicitly add pdf_integrity to the report data
+                report_data['pdf_integrity'] = integrity_results
+                
+                # Generate HTML
+                html_content = generate_interactive_html(report_data)
+                
                 # Get company name for filename
-                company_name = st.session_state.company_name_override or "company"
-                if company_name == "company" and not st.session_state.results:
-                    company_name = "report"
-                else:
+                company_name = st.session_state.company_name_override or "report"
+                if company_name == "report" and st.session_state.results:
                     # Try to get from first transaction
-                    if st.session_state.results and st.session_state.results[0].get("company_name"):
+                    if st.session_state.results[0].get("company_name"):
                         company_name = st.session_state.results[0]["company_name"]
                 
                 safe_name = company_name.replace(' ', '_').replace('/', '_')
@@ -5771,6 +5784,7 @@ if st.session_state.results:
                 )
             except Exception as e:
                 st.error(f"Failed to generate HTML report: {e}")
+                st.exception(e)
 
 else:
     if (
