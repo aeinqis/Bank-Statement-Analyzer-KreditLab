@@ -1103,7 +1103,46 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     
     st.markdown("## 💼 Counterparty Ledger")
     st.markdown("*Top counterparties by absolute net position. Green indicates net inflows; red indicates net outflows.*")
-    
+
+    def build_top_counterparty_table(
+        amount_column: str,
+        count_column: str,
+    ) -> pd.DataFrame:
+        top_df = counterparty_summary[
+            counterparty_summary[amount_column].fillna(0) > 0
+        ].copy()
+        if top_df.empty:
+            return pd.DataFrame(columns=["Counterparty", "Total Txn", "Total Amount of Txn"])
+
+        top_df = top_df.sort_values(amount_column, ascending=False).head(10)
+        return pd.DataFrame(
+            {
+                "Counterparty": top_df["counterparty_name"],
+                "Total Txn": top_df[count_column].astype(int),
+                "Total Amount of Txn": top_df[amount_column].apply(lambda x: f"RM {x:,.2f}"),
+            }
+        )
+
+    top_credit_counterparties = build_top_counterparty_table("total_credits", "credit_count")
+    top_debit_counterparties = build_top_counterparty_table("total_debits", "debit_count")
+
+    st.markdown("### Top 10 Counterparties by Transaction Amount")
+    credit_col, debit_col = st.columns(2)
+    with credit_col:
+        st.markdown("#### Credit")
+        st.dataframe(
+            top_credit_counterparties,
+            use_container_width=True,
+            hide_index=True,
+        )
+    with debit_col:
+        st.markdown("#### Debit")
+        st.dataframe(
+            top_debit_counterparties,
+            use_container_width=True,
+            hide_index=True,
+        )
+
     # Display summary table
     display_df = counterparty_summary.copy()
     display_df['total_credits'] = display_df['total_credits'].apply(lambda x: f"RM {x:,.2f}")
