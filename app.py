@@ -41,11 +41,25 @@ from bank_totals import (
     extract_rhb_statement_totals,
     extract_bank_islam_statement_month
 )
+
+# Fraud detection logic imports
 from fraud_logic import (
     analyze_pdf_batch,
     build_display_summary,
     detect_font_anomalies,
 )
+
+# Track 2 classifier — build_track2_result produces the full v6.3.5 schema
+# that generate_interactive_html expects (flags, statutory compliance, risk
+# indicators, RP detection, etc.)
+try:
+    from kredit_lab_classify_track2 import (
+        build_track2_result,
+        account_meta_from_determinations,
+    )
+    _TRACK2_AVAILABLE = True
+except ImportError:
+    _TRACK2_AVAILABLE = False
 
 # Function copy from HTML, def generate_interactive_html(data) - you will replace this with the full function from your original converter file
 def generate_interactive_html(data):
@@ -2182,11 +2196,11 @@ def adapt_to_v6(src):
     transactions = src.get('transactions', []) or []
     monthly_summary = src.get('monthly_summary', []) or []
     cp_ledger = src.get('counterparty_ledger', {}) or {}
-    pdf_integrity = src.get('pdf_integrity') or st.session_state.get('integrity_analysis_results', {})
+    pdf_integrity = src.get('pdf_integrity')
 
     report_info = {
         'company_name': summary.get('company_names', ['Unknown'])[0] if summary.get('company_names') else 'Unknown',
-        'schema_version': 'AQ-1.0',
+        'schema_version': '6.3.5',
         'period_start': '',
         'period_end': '',
         'total_months': len(monthly_summary),
@@ -2354,7 +2368,7 @@ def build_report_data_from_analysis(
             'high_value_threshold': high_value_threshold,
         },
         'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
-        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})  # This is key!
+        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
     }
 
     adapted_data = adapt_to_v6(data)
@@ -2378,8 +2392,6 @@ def build_report_data_from_analysis(
         'parsing_metadata',
         adapted_data.get('parsing_metadata', {}),
     )
-    # Ensure pdf_integrity is preserved
-    adapted_data['pdf_integrity'] = st.session_state.get('integrity_analysis_results', {})
     return adapted_data
 
 
@@ -2652,9 +2664,151 @@ def generate_excel_report(data: dict) -> BytesIO:
     return output
 
 
+def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
+    """Convert raw transaction rows into the counterparty_ledger dict shape
+    that build_track2_result (kredit_lab_classify_track2) expects.
+
+    Schema: {"counterparties": [{"counterparty_name": str,
+                                  "transaction_count": int,
+                                  "credit_count": int,
+                                  "debit_count": int,
+                                  "total_credits": float,
+                                  "total_debits": float,
+                                  "net_position": float,
+                                  "transactions": [{"date", "description",
+                                                    "amount", "type"}]
+                                 }]}
+    """
+    from collections import defaultdict
+
+    buckets: dict = defaultdict(lambda: {
+        "total_credits": 0.0,
+        "total_debits": 0.0,
+        "credit_count": 0,
+        "debit_count": 0,
+        "transactions": [],
+    })
+
+    for tx in transactions:
+        # Resolve counterparty name using the existing helper
+        desc = tx.get("description", "")
+        bank = str(tx.get("bank", "") or "").upper()
+        name = ""
+        for col in ("party_name", "counterparty", "counterparty_name",
+                    "party", "merchant", "recipient", "beneficiary"):
+            v = tx.get(col)
+            if v and str(v).strip() and str(v).upper() not in (
+                "", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"
+            ):
+                name = str(v).strip().upper()
+                break
+        if not name and "CIMB" in bank:
+            try:
+                extracted = extract_cimb_party_name(desc)
+                if extracted and str(extracted).strip():
+                    name = str(extracted).strip().upper()
+            except Exception:
+                pass
+        if not name:
+            name = "UNKNOWN"
+
+        bucket = buckets[name]
+        credit = float(tx.get("credit") or 0)
+        debit = float(tx.get("debit") or 0)
+        if credit > 0:
+            bucket["total_credits"] += credit
+            bucket["credit_count"] += 1
+            bucket["transactions"].append({
+                "date": tx.get("date", ""),
+                "description": desc,
+                "amount": round(credit, 2),
+                "type": "CREDIT",
+            })
+        if debit > 0:
+            bucket["total_debits"] += debit
+            bucket["debit_count"] += 1
+            bucket["transactions"].append({
+                "date": tx.get("date", ""),
+                "description": desc,
+                "amount": round(debit, 2),
+                "type": "DEBIT",
+            })
+
+    counterparties = []
+    for name, b in buckets.items():
+        if not b["transactions"]:
+            continue
+        cr = round(b["total_credits"], 2)
+        dr = round(b["total_debits"], 2)
+        counterparties.append({
+            "counterparty_name": name,
+            "transaction_count": b["credit_count"] + b["debit_count"],
+            "credit_count": b["credit_count"],
+            "debit_count": b["debit_count"],
+            "total_credits": cr,
+            "total_debits": dr,
+            "net_position": round(cr - dr, 2),
+            "transactions": b["transactions"],
+        })
+
+    counterparties.sort(
+        key=lambda c: abs(c["total_credits"] - c["total_debits"]), reverse=True
+    )
+    return {"counterparties": counterparties, "total_counterparties": len(counterparties)}
+
+
 def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
                                    transaction_analysis: dict, high_value_threshold: float) -> str:
-    """Generate interactive HTML report from parsed transactions."""
+    """Generate interactive HTML report from parsed transactions.
+
+    When kredit_lab_classify_track2 is available the report is built via
+    build_track2_result which produces the full v6.3.5 schema (risk flags,
+    statutory compliance, RP detection, etc.) that generate_interactive_html
+    renders.  Falls back to the legacy adapt_to_v6 path when the module is
+    not installed.
+    """
+    if _TRACK2_AVAILABLE:
+        try:
+            # Build counterparty ledger in the format Track 2 expects
+            cp_ledger = build_track2_counterparty_ledger(transactions)
+
+            # Collect company names and account meta from session state
+            company_names = list({
+                str(t.get("company_name", "") or "").strip()
+                for t in transactions
+                if t.get("company_name")
+            })
+            override = (st.session_state.get("company_name_override") or "").strip()
+            if override and override not in company_names:
+                company_names.insert(0, override)
+
+            # Account-type determinations (populated by parser hooks when available)
+            determinations = st.session_state.get("account_type_determinations") or []
+            account_meta = account_meta_from_determinations(determinations)
+
+            # Analyst-supplied related parties (empty by default; populated by
+            # the analyst form when wired)
+            related_parties = st.session_state.get("related_parties_override") or []
+
+            pdf_integrity = st.session_state.get("integrity_analysis_results") or {}
+
+            data = build_track2_result(
+                transactions,
+                counterparty_ledger=cp_ledger,
+                pdf_integrity=pdf_integrity if pdf_integrity else None,
+                company_names=company_names or None,
+                related_parties=related_parties or None,
+                account_meta=account_meta or None,
+            )
+            return generate_interactive_html(data)
+        except Exception as _track2_err:
+            # Track 2 path failed — fall back gracefully so the download
+            # button still works.
+            import traceback
+            print(f"[Track2] build_track2_result failed, falling back: {_track2_err}")
+            traceback.print_exc()
+
+    # Legacy fallback path
     return generate_interactive_html(
         build_report_data_from_analysis(
             transactions,
@@ -2674,8 +2828,17 @@ def load_json_payload(json_source):
 
 
 def convert_json_to_html(json_source) -> str:
-    """Convert uploaded JSON analysis file to HTML report"""
-    data = normalize_report_data_for_export(load_json_payload(json_source))
+    """Convert uploaded JSON analysis file to HTML report.
+
+    If the payload already has the v6.3.5 ``monthly_analysis`` key it is
+    passed straight to generate_interactive_html (no re-adaptation needed).
+    Older flat payloads go through normalize_report_data_for_export first.
+    """
+    raw = load_json_payload(json_source)
+    # Full v6 schema — has monthly_analysis already
+    if isinstance(raw, dict) and "monthly_analysis" in raw:
+        return generate_interactive_html(raw)
+    data = normalize_report_data_for_export(raw)
     return generate_interactive_html(data)
 
 # ============================================================
@@ -3690,6 +3853,14 @@ if "file_company_name" not in st.session_state:
 if "file_account_no" not in st.session_state:
     st.session_state.file_account_no = {}
 
+# Track 2 — account-type determinations populated by parser hooks
+if "account_type_determinations" not in st.session_state:
+    st.session_state.account_type_determinations = []
+
+# Analyst-supplied related parties (populated by the analyst form when wired)
+if "related_parties_override" not in st.session_state:
+    st.session_state.related_parties_override = []
+
 
 # -----------------------------
 # Fraud/Integrity Constants and Functions
@@ -4035,6 +4206,7 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
         return
     
     st.markdown("## 💼 Counterparty Ledger")
+    st.markdown("*Top counterparties by absolute net position. Green indicates net inflows; red indicates net outflows.*")
     
     def build_top_counterparty_table(amount_column: str, count_column: str) -> pd.DataFrame:
         top_df = counterparty_summary[
@@ -4052,16 +4224,17 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
             }
         )
 
+    st.markdown("### Top 10 Counterparties by Transaction Amount")
     credit_col, debit_col = st.columns(2)
     with credit_col:
-        st.markdown("#### Top 10 Counterparties by Credit")
+        st.markdown("#### Credit")
         st.dataframe(
             build_top_counterparty_table("total_credits", "credit_count"),
             use_container_width=True,
             hide_index=True,
         )
     with debit_col:
-        st.markdown("#### Top 10 Counterparties by Debit")
+        st.markdown("#### Debit")
         st.dataframe(
             build_top_counterparty_table("total_debits", "debit_count"),
             use_container_width=True,
@@ -4630,6 +4803,39 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     # Create cards including financial summary
     cards = []
     
+    # Add Financial Summary Cards
+    cards.append(
+       '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">Transactions</div>'
+        f'<div class="kl-metric-value">{item_map.get("Total Transactions", 0)}</div>'
+        '</div>',
+    )
+    cards.append(
+        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
+        '<div class="kl-metric-label">Net Credits</div>'
+        f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
+        '</div>'
+    )
+    
+    cards.append(
+        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
+        '<div class="kl-metric-label">Net Debits</div>'
+        f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
+        '</div>'
+    )
+    
+    net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
+    net_border = "#2e7d32" if net_position >= 0 else "#c62828"
+
+    net_label = "Net Position" if net_position >= 0 else "Net Loss"
+    
+    cards.append(
+        f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
+        f'<div class="kl-metric-label">{net_label}</div>'
+        f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
+        '</div>'
+    )
+    
     # Add existing pattern cards
     cards.extend([
         
@@ -4691,6 +4897,8 @@ def clear_processing_outputs() -> None:
     st.session_state.bank_islam_file_month = {}
     st.session_state.file_company_name = {}
     st.session_state.file_account_no = {}
+    st.session_state.account_type_determinations = []
+    st.session_state.related_parties_override = []
 
 
 def parse_high_value_threshold() -> Tuple[Optional[float], Optional[str]]:
@@ -5446,54 +5654,9 @@ if st.session_state.results:
         # Display transaction pattern overview
         render_transaction_overview(df, high_value_threshold)
         
-        # DisplayExtracted Transaction Section
+        # Display Counterparty Ledger Table
         st.markdown("---")
-        st.subheader("📊 Extracted Transaction")
-        
-        # Display financial summary cards
-        analysis_df = filter_statement_transactions_df(df)
-        total_credits = analysis_df['credit'].sum() if 'credit' in analysis_df.columns else 0
-        total_debits = analysis_df['debit'].sum() if 'debit' in analysis_df.columns else 0
-        net_position = total_credits - total_debits
-        
-        fin_cards = []
-
-        # Display basic transaction table
-        fin_cards.append(
-           '<div class="kl-metric-card">'
-            '<div class="kl-metric-label">Transactions</div>'
-            f'<div class="kl-metric-value">{len(analysis_df):,}</div>'
-            '</div>',
-        )
-        fin_cards.append(
-            '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
-            '<div class="kl-metric-label">Net Credits</div>'
-            f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
-            '</div>'
-        )
-        
-        fin_cards.append(
-            '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
-            '<div class="kl-metric-label">Net Debits</div>'
-            f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
-            '</div>'
-        )
-        
-        net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
-        net_border = "#2e7d32" if net_position >= 0 else "#c62828"
-        net_label = "Net Position" if net_position >= 0 else "Net Loss"
-        
-        fin_cards.append(
-            f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
-            f'<div class="kl-metric-label">{net_label}</div>'
-            f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
-            '</div>'
-        )
-        
-        st.html(
-            f'<div class="kl-metric-grid">{"".join(fin_cards)}</div>',
-        )
-
+        render_counterparty_ledger_table(df)
         
         # Display basic transaction table
         st.markdown("#### All Transactions")
@@ -5511,9 +5674,6 @@ if st.session_state.results:
                 "balance": "Running Balance"
             }
         )
-
-        st.markdown("---")
-        render_counterparty_ledger_table(df)
     else:
         st.info("No line-item transactions extracted.")
     
@@ -5625,7 +5785,7 @@ if st.session_state.results:
 
     with col1:
         st.download_button(
-            "📄 Download Full Transactions (JSON)",
+            "📄 Download Transactions (JSON)",
             json.dumps(json_records, indent=4),
             "transactions.json",
             "application/json",
@@ -5677,7 +5837,7 @@ if st.session_state.results:
         }
 
         st.download_button(
-            "📊 Download Full Transaction (JSON)",
+            "📊 Download Full Report (JSON)",
             json.dumps(full_report, indent=4),
             "full_report.json",
             "application/json",
@@ -5690,51 +5850,40 @@ if st.session_state.results:
         serialized_monthly_summary = make_json_serializable(monthly_summary)
         serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
     
-        report_excel_data = build_report_data_from_analysis(
-            serialized_transactions,
-            serialized_monthly_summary,
-            serialized_transaction_analysis,
-            high_value_threshold,
-        )
-        output = generate_excel_report(report_excel_data)
+    report_excel_data = build_report_data_from_analysis(
+        serialized_transactions,
+        serialized_monthly_summary,
+        serialized_transaction_analysis,
+        high_value_threshold,
+    )
+    output = generate_excel_report(report_excel_data)
 
-        st.download_button(
-            "📊 Download Full Report (XLSX)",
-            output.getvalue(),
-            "full_report.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+    st.download_button(
+        "📊 Download Full Report (XLSX)",
+        output.getvalue(),
+        "full_report.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
 
     with col4:
-        # Generate HTML report from current data
+        # NEW: Generate and download HTML report from current data
         if st.session_state.results:
             try:
-                # Make sure we have the integrity results
-                integrity_results = st.session_state.get('integrity_analysis_results', {})
-                
-                # Include integrity results in transaction analysis
-                transaction_analysis_report['pdf_integrity'] = integrity_results
-                
-                # Also add to the report data directly
-                report_data = build_report_data_from_analysis(
+                html_content = generate_html_report_from_data(
                     st.session_state.results,
                     monthly_summary,
                     transaction_analysis_report,
                     high_value_threshold
                 )
                 
-                # Explicitly add pdf_integrity to the report data
-                report_data['pdf_integrity'] = integrity_results
-                
-                # Generate HTML
-                html_content = generate_interactive_html(report_data)
-                
                 # Get company name for filename
-                company_name = st.session_state.company_name_override or "report"
-                if company_name == "report" and st.session_state.results:
+                company_name = st.session_state.company_name_override or "company"
+                if company_name == "company" and not st.session_state.results:
+                    company_name = "report"
+                else:
                     # Try to get from first transaction
-                    if st.session_state.results[0].get("company_name"):
+                    if st.session_state.results and st.session_state.results[0].get("company_name"):
                         company_name = st.session_state.results[0]["company_name"]
                 
                 safe_name = company_name.replace(' ', '_').replace('/', '_')
@@ -5749,7 +5898,6 @@ if st.session_state.results:
                 )
             except Exception as e:
                 st.error(f"Failed to generate HTML report: {e}")
-                st.exception(e)
 
 else:
     if (
