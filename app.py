@@ -3199,68 +3199,6 @@ st.markdown(
 st.write("Upload one or more bank statement PDFs to extract transactions.")
 
 
-# ============================================================
-# JSON Upload and Convert Section (ADDED - place after header)
-# ============================================================
-st.markdown("---")
-st.subheader("🔄 Convert Existing Analysis to HTML")
-
-json_file = st.file_uploader(
-    "Upload previously saved JSON analysis",
-    type=['json'],
-    key="json_uploader",
-    help="Upload a JSON analysis file to convert to an interactive HTML report without re-parsing PDFs"
-)
-
-if json_file is not None:
-    try:
-        data = load_json_payload(json_file)
-        html_content = convert_json_to_html(data)
-        st.success("✅ Successfully converted JSON to HTML report!")
-        
-        # Extract company name from JSON for filename
-        company_name = "report"
-        if isinstance(data, dict):
-            if "report_info" in data and data["report_info"].get("company_name"):
-                company_name = data["report_info"]["company_name"]
-            elif "summary" in data and data["summary"].get("company_names"):
-                company_names = data["summary"].get("company_names", [])
-                company_name = company_names[0] if company_names else "report"
-        
-        safe_name = company_name.replace(' ', '_').replace('/', '_')
-        
-        st.download_button(
-            "📥 Download HTML Report",
-            html_content.encode('utf-8'),
-            f"{safe_name}_converted_report.html",
-            "text/html; charset=utf-8",
-            use_container_width=True,
-            type="primary"
-        )
-
-        excel_content = generate_excel_report(data)
-        st.download_button(
-            "Download Excel Report",
-            excel_content.getvalue(),
-            f"{safe_name}_converted_report.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-        
-        if st.checkbox("Preview HTML in this window"):
-            st.components.v1.html(html_content, height=600, scrolling=True)
-            
-    except json.JSONDecodeError as e:
-        st.error(f"Invalid JSON file: {e}")
-    except Exception as e:
-        st.error(f"Failed to convert JSON to HTML: {e}")
-
-st.markdown("---")
-# ============================================================
-# End of JSON Upload Section
-# ============================================================
-
-
 st.markdown(
     """
     <style>
@@ -4294,10 +4232,9 @@ def build_counterparty_ledger_from_transactions(df: pd.DataFrame) -> pd.DataFram
     
     summary_df = pd.DataFrame(summary_data)
     
-    # Sort by absolute net position
-    summary_df['abs_net_position'] = summary_df['net_position'].abs()
-    summary_df = summary_df.sort_values('abs_net_position', ascending=False)
-    summary_df = summary_df.drop('abs_net_position', axis=1)
+    summary_df['_sort_counterparty'] = summary_df['counterparty_name'].astype(str).str.casefold()
+    summary_df = summary_df.sort_values('_sort_counterparty', ascending=True)
+    summary_df = summary_df.drop('_sort_counterparty', axis=1).reset_index(drop=True)
     
     return summary_df
 
@@ -4318,7 +4255,6 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
         return
     
     st.markdown("## 💼 Counterparty Ledger")
-    st.markdown("*Top counterparties by absolute net position. Green indicates net inflows; red indicates net outflows.*")
     
     def build_top_counterparty_table(amount_column: str, count_column: str) -> pd.DataFrame:
         top_df = counterparty_summary[
@@ -4367,7 +4303,18 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
         return f"⚪ RM {val:,.2f}"
     
     display_df['net_position_display'] = counterparty_summary['net_position'].apply(format_net_position)
-    
+    display_df = display_df[
+        [
+            'counterparty_name',
+            'transaction_count',
+            'credit_count',
+            'debit_count',
+            'total_credits',
+            'total_debits',
+            'net_position_display',
+        ]
+    ]
+
     st.dataframe(
         display_df,
         use_container_width=True,
@@ -4386,36 +4333,34 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     # Selection dropdown
     selected_counterparty = st.selectbox(
         "Select a counterparty to inspect transaction lines",
-        options=[''] + counterparty_summary['counterparty_name'].tolist(),
-        format_func=lambda x: x if x else "Choose a counterparty..."
+        options=counterparty_summary['counterparty_name'].tolist(),
+        index=0,
     )
     
     # Show transactions for selected counterparty
-    if selected_counterparty:
-        df_copy = df.copy()
-        df_copy['counterparty'] = df_copy.apply(resolve_transaction_counterparty, axis=1)
-        counterparty_tx = df_copy[df_copy['counterparty'] == selected_counterparty].copy()
+    df_copy = df.copy()
+    df_copy['counterparty'] = df_copy.apply(resolve_transaction_counterparty, axis=1)
+    counterparty_tx = df_copy[df_copy['counterparty'] == selected_counterparty].copy()
+
+    if not counterparty_tx.empty:
+        # Format for display
+        display_tx = counterparty_tx[['date', 'description', 'credit', 'debit', 'balance']].copy()
+        display_tx['credit'] = display_tx['credit'].apply(lambda x: f"RM {x:,.2f}" if x and x > 0 else "")
+        display_tx['debit'] = display_tx['debit'].apply(lambda x: f"RM {x:,.2f}" if x and x > 0 else "")
+        display_tx['balance'] = display_tx['balance'].apply(lambda x: f"RM {x:,.2f}" if x and str(x) != 'nan' else "")
         
-        if not counterparty_tx.empty:
-            # Format for display
-            display_tx = counterparty_tx[['date', 'description', 'credit', 'debit', 'balance']].copy()
-            display_tx['credit'] = display_tx['credit'].apply(lambda x: f"RM {x:,.2f}" if x and x > 0 else "")
-            display_tx['debit'] = display_tx['debit'].apply(lambda x: f"RM {x:,.2f}" if x and x > 0 else "")
-            display_tx['balance'] = display_tx['balance'].apply(lambda x: f"RM {x:,.2f}" if x and str(x) != 'nan' else "")
-            
-            st.markdown(f"### Transaction Details: {selected_counterparty}")
-            st.dataframe(
-                display_tx,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    'date': 'Date',
-                    'description': 'Description',
-                    'credit': 'Credit (RM)',
-                    'debit': 'Debit (RM)',
-                    'balance': 'Balance'
-                }
-            )
+        st.dataframe(
+            display_tx,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'date': 'Date',
+                'description': 'Description',
+                'credit': 'Credit (RM)',
+                'debit': 'Debit (RM)',
+                'balance': 'Balance'
+            }
+        )
 
 # -----------------------------
 # Pattern Analysis Functions
