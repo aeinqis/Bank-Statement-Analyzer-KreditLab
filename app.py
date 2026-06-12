@@ -64,11 +64,14 @@ except ImportError:
 def build_large_transactions(transactions: List[dict], threshold: float) -> List[dict]:
     """Build list of large transactions (both credits and debits) above threshold."""
     large_txns = []
+    threshold_float = float(threshold)
+    
     for t in transactions:
         credit = safe_float(t.get('credit', 0))
         debit = safe_float(t.get('debit', 0))
         
-        if credit >= threshold:
+        # Check both credits and debits
+        if credit >= threshold_float:
             large_txns.append({
                 'date': t.get('date', ''),
                 'description': t.get('description', ''),
@@ -76,7 +79,7 @@ def build_large_transactions(transactions: List[dict], threshold: float) -> List
                 'balance': t.get('balance', 0),
                 'type': 'CREDIT'
             })
-        elif debit >= threshold:
+        elif debit >= threshold_float:
             large_txns.append({
                 'date': t.get('date', ''),
                 'description': t.get('description', ''),
@@ -2312,10 +2315,11 @@ def adapt_to_v6(src):
     monthly_summary = src.get('monthly_summary', []) or []
     cp_ledger = src.get('counterparty_ledger', {}) or {}
     pdf_integrity = src.get('pdf_integrity')
+    high_value_threshold = summary.get('high_value_threshold', 100000)
 
     report_info = {
         'company_name': summary.get('company_names', ['Unknown'])[0] if summary.get('company_names') else 'Unknown',
-        'schema_version': '6.3.5',
+        'schema_version': 'Testv2.0',
         'period_start': '',
         'period_end': '',
         'total_months': len(monthly_summary),
@@ -2420,7 +2424,8 @@ def adapt_to_v6(src):
     'eod_highest': 0,
     'eod_average': 0,
     'data_completeness': 'COMPLETE',
-    'high_value_threshold': src.get('summary', {}).get('high_value_threshold', 100000),  # Add this line
+    'high_value_threshold': high_value_threshold,  # Add this line
+    'large_credit_threshold': high_value_threshold,  # Add alias for compatibility
     }
     
     return {
@@ -2430,6 +2435,7 @@ def adapt_to_v6(src):
         'consolidated': consolidated,
         'top_parties': {'top_payers': [], 'top_payees': []},
         'large_credits': [],
+        'large_transactions': [],
         'own_related_transactions': {'transactions': [], 'summary': {}},
         'loan_transactions': {'transactions': [], 'summary': {}},
         'flags': {'indicators': []},
@@ -2478,13 +2484,16 @@ def build_report_data_from_analysis(
     # Get pdf_integrity from session state
     pdf_integrity = st.session_state.get("integrity_analysis_results", {})
     
+    # Ensure threshold is a float and has the correct value
+    threshold = float(high_value_threshold) if high_value_threshold else 100000.0
+    
     data = {
         'transactions': transactions,
         'monthly_summary': monthly_summary,
         'summary': {
             'company_names': list(set(t.get('company_name', '') for t in transactions if t.get('company_name'))),
             'date_range': '',
-            'high_value_threshold': high_value_threshold,
+            'high_value_threshold': threshold,
         },
         'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
         'pdf_integrity': pdf_integrity,
@@ -2494,9 +2503,9 @@ def build_report_data_from_analysis(
     adapted_data['transactions'] = transactions
     adapted_data['top_parties'] = _top_parties_from_transaction_analysis(transaction_analysis)
     
-    # Use large_transactions instead of large_credits
-    adapted_data['large_transactions'] = build_large_transactions(transactions, high_value_threshold)
-    adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])  # Keep for backward compatibility
+    # IMPORTANT: Build large transactions directly from transactions with correct threshold
+    adapted_data['large_transactions'] = build_large_transactions(transactions, threshold)
+    adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])
     
     adapted_data['flags'] = transaction_analysis.get('flags', {'indicators': []})
     adapted_data['observations'] = transaction_analysis.get('observations', {'positive': [], 'concerns': []})
@@ -2517,12 +2526,13 @@ def build_report_data_from_analysis(
     )
     adapted_data['pdf_integrity'] = pdf_integrity
     
-    # Add threshold to consolidated for display
+    # IMPORTANT: Add threshold to consolidated for display
     if 'consolidated' in adapted_data:
-        adapted_data['consolidated']['high_value_threshold'] = high_value_threshold
+        adapted_data['consolidated']['high_value_threshold'] = threshold
+        # Also store as large_credit_threshold for consistency
+        adapted_data['consolidated']['large_credit_threshold'] = threshold
     
     return adapted_data
-
 
 def normalize_report_data_for_export(data: dict) -> dict:
     """Normalize uploaded JSON or v6 payloads for HTML/XLSX report exports."""
@@ -2892,16 +2902,12 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
 
 def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
                                    transaction_analysis: dict, high_value_threshold: float) -> str:
-    """Generate interactive HTML report from parsed transactions.
-
-    When kredit_lab_classify_track2 is available the report is built via
-    build_track2_result which produces the full v6.3.5 schema (risk flags,
-    statutory compliance, RP detection, etc.) that generate_interactive_html
-    renders.  Falls back to the legacy adapt_to_v6 path when the module is
-    not installed.
-    """
-    # Get pdf_integrity from session state (same source Excel uses)
+    """Generate interactive HTML report from parsed transactions."""
+    # Get pdf_integrity from session state
     pdf_integrity = st.session_state.get("integrity_analysis_results") or {}
+    
+    # Ensure threshold is a float
+    threshold = float(high_value_threshold) if high_value_threshold else 100000.0
     
     if _TRACK2_AVAILABLE:
         try:
@@ -2918,12 +2924,11 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
             if override and override not in company_names:
                 company_names.insert(0, override)
 
-            # Account-type determinations (populated by parser hooks when available)
+            # Account-type determinations
             determinations = st.session_state.get("account_type_determinations") or []
             account_meta = account_meta_from_determinations(determinations)
 
-            # Analyst-supplied related parties (empty by default; populated by
-            # the analyst form when wired)
+            # Analyst-supplied related parties
             related_parties = st.session_state.get("related_parties_override") or []
 
             data = build_track2_result(
@@ -2934,22 +2939,29 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
                 related_parties=related_parties or None,
                 account_meta=account_meta or None,
             )
+            
+            # Ensure the threshold is set in the consolidated data
+            if 'consolidated' in data:
+                data['consolidated']['high_value_threshold'] = threshold
+                data['consolidated']['large_credit_threshold'] = threshold
+            
+            # Ensure large_transactions is populated
+            if 'large_transactions' not in data or not data['large_transactions']:
+                data['large_transactions'] = build_large_transactions(transactions, threshold)
+            
             return generate_interactive_html(data)
         except Exception as _track2_err:
-            # Track 2 path failed — fall back gracefully so the download
-            # button still works.
             import traceback
             print(f"[Track2] build_track2_result failed, falling back: {_track2_err}")
             traceback.print_exc()
 
-    # Legacy fallback path - also include pdf_integrity
+    # Legacy fallback path
     report_data = build_report_data_from_analysis(
         transactions,
         monthly_summary,
         transaction_analysis,
-        high_value_threshold,
+        threshold,
     )
-    # Ensure pdf_integrity is included in the legacy data
     report_data['pdf_integrity'] = pdf_integrity
     return generate_interactive_html(report_data)
 
@@ -4272,22 +4284,6 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
             }
         )
 
-    st.markdown("### Top 10 Counterparties by Transaction Amount")
-    credit_col, debit_col = st.columns(2)
-    with credit_col:
-        st.markdown("#### Credit")
-        st.dataframe(
-            build_top_counterparty_table("total_credits", "credit_count"),
-            use_container_width=True,
-            hide_index=True,
-        )
-    with debit_col:
-        st.markdown("#### Debit")
-        st.dataframe(
-            build_top_counterparty_table("total_debits", "debit_count"),
-            use_container_width=True,
-            hide_index=True,
-        )
 
     # Display summary table
     display_df = counterparty_summary.copy()
@@ -4360,6 +4356,22 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
                 'debit': 'Debit (RM)',
                 'balance': 'Balance'
             }
+        )
+
+    credit_col, debit_col = st.columns(2)
+    with credit_col:
+        st.markdown("#### Top 10 Credit Counterparties")
+        st.dataframe(
+            build_top_counterparty_table("total_credits", "credit_count"),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with debit_col:
+        st.markdown("#### Top 10 Debit Counterparties")
+        st.dataframe(
+            build_top_counterparty_table("total_debits", "debit_count"),
+            use_container_width=True,
+            hide_index=True,
         )
 
 # -----------------------------
