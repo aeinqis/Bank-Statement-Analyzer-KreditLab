@@ -61,6 +61,36 @@ try:
 except ImportError:
     _TRACK2_AVAILABLE = False
 
+def build_large_transactions(transactions: List[dict], threshold: float) -> List[dict]:
+    """Build list of large transactions (both credits and debits) above threshold."""
+    large_txns = []
+    threshold_float = float(threshold)
+    
+    for t in transactions:
+        credit = safe_float(t.get('credit', 0))
+        debit = safe_float(t.get('debit', 0))
+        
+        # Check both credits and debits
+        if credit >= threshold_float:
+            large_txns.append({
+                'date': t.get('date', ''),
+                'description': t.get('description', ''),
+                'amount': credit,
+                'balance': t.get('balance', 0),
+                'type': 'CREDIT'
+            })
+        elif debit >= threshold_float:
+            large_txns.append({
+                'date': t.get('date', ''),
+                'description': t.get('description', ''),
+                'amount': debit,
+                'balance': t.get('balance', 0),
+                'type': 'DEBIT'
+            })
+    
+    # Sort by amount descending
+    large_txns.sort(key=lambda x: x['amount'], reverse=True)
+    return large_txns
 
 # Function copy from HTML, def generate_interactive_html(data) - you will replace this with the full function from your original converter file
 def generate_interactive_html(data):
