@@ -61,40 +61,47 @@ try:
 except ImportError:
     _TRACK2_AVAILABLE = False
 
-def build_large_transactions(transactions: List[dict], threshold: float) -> List[dict]:
-    """Build list of large transactions (both credits and debits) above threshold."""
-    large_txns = []
-    threshold_float = float(threshold)
-    
-    for t in transactions:
-        credit = safe_float(t.get('credit', 0))
-        debit = safe_float(t.get('debit', 0))
-        
-        # Check both credits and debits
-        if credit >= threshold_float:
-            large_txns.append({
-                'date': t.get('date', ''),
-                'description': t.get('description', ''),
-                'amount': credit,
-                'balance': t.get('balance', 0),
-                'type': 'CREDIT'
-            })
-        elif debit >= threshold_float:
-            large_txns.append({
-                'date': t.get('date', ''),
-                'description': t.get('description', ''),
-                'amount': debit,
-                'balance': t.get('balance', 0),
-                'type': 'DEBIT'
-            })
-    
-    # Sort by amount descending
-    large_txns.sort(key=lambda x: x['amount'], reverse=True)
-    return large_txns
 
 # Function copy from HTML, def generate_interactive_html(data) - you will replace this with the full function from your original converter file
 def generate_interactive_html(data):
     """Generate interactive HTML report for v6.0.0 schema"""
+
+     # Define build_large_transactions inside the function if needed
+    def build_large_transactions_internal(transactions, threshold):
+        """Build list of large transactions from transaction list"""
+        large_txns = []
+        threshold_float = float(threshold) if threshold else 100000.0
+        
+        for t in transactions:
+            if not isinstance(t, dict):
+                continue
+            credit = safe_float(t.get('credit', 0))
+            debit = safe_float(t.get('debit', 0))
+            
+            if credit >= threshold_float:
+                large_txns.append({
+                    'date': t.get('date', ''),
+                    'description': t.get('description', ''),
+                    'amount': credit,
+                    'balance': t.get('balance', 0),
+                    'type': 'CREDIT'
+                })
+            elif debit >= threshold_float:
+                large_txns.append({
+                    'date': t.get('date', ''),
+                    'description': t.get('description', ''),
+                    'amount': debit,
+                    'balance': t.get('balance', 0),
+                    'type': 'DEBIT'
+                })
+        
+        large_txns.sort(key=lambda x: x.get('amount', 0), reverse=True)
+        return large_txns
+    
+    # Then use it:
+    large_txns = data.get('large_transactions', [])
+    if not large_txns and data.get('transactions'):
+        large_txns = build_large_transactions_internal(data.get('transactions', []), large_threshold)
 
     r = data.get('report_info', {})
     accounts = data.get('accounts', [])
@@ -653,28 +660,59 @@ def generate_interactive_html(data):
             <td class="mono r">{p.get('transaction_count',0)}</td>
         </tr>'''
 
-       # ── Large transactions (both credits and debits above threshold) ──
+
+    # ── Large transactions (both credits and debits above threshold) ──
     # Get threshold from consolidated or report_info
     large_threshold = consol.get('high_value_threshold', 100000)
+    if large_threshold is None or large_threshold == 0:
+        large_threshold = 100000
     
-    # Get large transactions data - support both 'large_credits' and 'large_transactions'
+    # Get large transactions data - support multiple formats
     large_txns = data.get('large_transactions', [])
-    if not large_txns and large_credits:
-        # Convert old format: only credits
-        large_txns = [{'date': t.get('date',''), 'description': t.get('description',''), 
-                       'amount': t.get('amount',0), 'balance': t.get('balance',0), 
-                       'type': 'CREDIT'} for t in large_credits]
     
+    # If large_transactions is empty, try to build it from transactions
+    if not large_txns and data.get('transactions'):
+        large_txns = build_large_transactions(data.get('transactions', []), large_threshold)
+        data['large_transactions'] = large_txns
+    
+    # Also check for large_credits as fallback
+    large_credits = data.get('large_credits', [])
+    if not large_txns and large_credits:
+        # Convert old format to new format
+        large_txns = []
+        for t in large_credits:
+            if isinstance(t, dict):
+                large_txns.append({
+                    'date': t.get('date', ''),
+                    'description': t.get('description', ''),
+                    'amount': t.get('amount', 0),
+                    'balance': t.get('balance', 0),
+                    'type': 'CREDIT'
+                })
+    
+    # Build the large transaction rows HTML
     large_txn_rows = ""
-    for t in large_txns:
-        txn_type = t.get('type', 'CREDIT')
-        type_cls = 'credit' if txn_type == 'CREDIT' else 'debit'
-        large_txn_rows += f'''<tr>
-            <td>{t.get('date','')}</td>
-            <td>{t.get('description','')[:70]}</td>
-            <td class="mono r {type_cls}">RM {t.get('amount',0):,.2f} ({txn_type})</td>
-            <td class="mono r">{t.get('balance',0):,.2f}</td>
-        </tr>'''
+    if large_txns and isinstance(large_txns, list):
+        for t in large_txns:
+            if not isinstance(t, dict):
+                continue
+            txn_type = t.get('type', 'CREDIT')
+            type_cls = 'credit' if txn_type == 'CREDIT' else 'debit'
+            amount = t.get('amount', 0)
+            if amount is None:
+                amount = 0
+            balance = t.get('balance', 0)
+            if balance is None:
+                balance = 0
+            large_txn_rows += f'''<tr>
+                <td>{t.get('date', '')}</td>
+                <td>{str(t.get('description', ''))[:70]}</td>
+                <td class="mono r {type_cls}">RM {float(amount):,.2f} ({txn_type})</td>
+                <td class="mono r">{float(balance):,.2f}</td>
+            </tr>'''
+    
+    if not large_txn_rows:
+        large_txn_rows = f'<tr><td colspan="4" class="note">No transactions above RM {large_threshold:,.0f}</td></tr>'
 
     # ── Round-figure credits (AML Flag 3) per-transaction detail ──
     round_figure_credits = data.get('round_figure_credits', []) or []
