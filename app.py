@@ -1349,6 +1349,120 @@ def generate_interactive_html(data):
 
         parsing_tab_html += '</div>'
 
+    def _pdf_detail_to_text(value) -> str:
+        if value in (None, "", [], {}):
+            return ""
+        if isinstance(value, dict):
+            return ", ".join(f"{k}: {v}" for k, v in value.items())
+        if isinstance(value, list):
+            return "; ".join(str(x) for x in value[:5])
+        return str(value)
+
+    def _pdf_finding_is_benign(finding: dict) -> bool:
+        message = str(finding.get("message", "") or "").lower()
+        benign_patterns = [
+            "no anomalies detected",
+            "verified",
+            "matches known",
+            "hashes computed",
+            "pdf version",
+            "font consistency",
+        ]
+        return any(pattern in message for pattern in benign_patterns)
+
+    def _normalise_pdf_layer_rows(pdf_file: dict) -> list:
+        """Normalise Railway analyze_pdf_batch output and legacy HTML shapes."""
+        layer_order = [
+            ("metadata", "Layer 1: Metadata"),
+            ("fonts", "Layer 2: Fonts"),
+            ("text_layers", "Layer 3: Text Layers"),
+            ("visual", "Layer 4: Visual"),
+            ("cross_validation", "Layer 5: Cross Validation"),
+            ("bank_profile", "Layer 6: Bank Profile"),
+            ("structural", "Layer 7: Structural"),
+            ("arithmetic", "Layer 8: Arithmetic"),
+        ]
+        layer_results = pdf_file.get("layer_results")
+        if isinstance(layer_results, dict):
+            rows = []
+            handled_keys = set()
+            for layer_key, layer_label in layer_order:
+                handled_keys.add(layer_key)
+                findings = layer_results.get(layer_key, []) or []
+                findings = findings if isinstance(findings, list) else []
+                highest = next(
+                    (
+                        level
+                        for level in ("HIGH", "MEDIUM", "LOW")
+                        if any((finding.get("severity") or "").upper() == level for finding in findings if isinstance(finding, dict))
+                    ),
+                    "LOW",
+                )
+                anomaly_count = sum(
+                    1
+                    for finding in findings
+                    if isinstance(finding, dict) and not _pdf_finding_is_benign(finding)
+                )
+                primary = findings[0] if findings and isinstance(findings[0], dict) else {}
+                detail_text = _pdf_detail_to_text(primary.get("detail"))
+                detail_parts = [f"{anomaly_count} anomalies detected"]
+                if detail_text:
+                    detail_parts.append(detail_text)
+                rows.append(
+                    {
+                        "layer": layer_label,
+                        "severity": highest,
+                        "finding": primary.get("message") or "No findings.",
+                        "detail": " | ".join(detail_parts),
+                    }
+                )
+
+            for layer_key, findings in layer_results.items():
+                if layer_key in handled_keys:
+                    continue
+                findings = findings if isinstance(findings, list) else []
+                for finding in findings:
+                    if not isinstance(finding, dict):
+                        continue
+                    rows.append(
+                        {
+                            "layer": str(layer_key),
+                            "severity": (finding.get("severity") or "LOW").upper(),
+                            "finding": finding.get("message") or finding.get("finding") or "",
+                            "detail": _pdf_detail_to_text(finding.get("detail")),
+                        }
+                    )
+            return rows
+
+        legacy_layers = pdf_file.get("layers", pdf_file.get("checks", pdf_file.get("findings", [])))
+        if isinstance(legacy_layers, list):
+            return [
+                {
+                    "layer": layer.get("layer", layer.get("name", "")),
+                    "severity": (layer.get("severity", "") or layer.get("risk", "") or "LOW").upper(),
+                    "finding": layer.get("message", layer.get("finding", layer.get("description", ""))),
+                    "detail": _pdf_detail_to_text(layer.get("detail", layer.get("details", ""))),
+                }
+                for layer in legacy_layers
+                if isinstance(layer, dict)
+            ]
+        if isinstance(legacy_layers, dict):
+            rows = []
+            for layer_name, layer_data in legacy_layers.items():
+                if isinstance(layer_data, dict):
+                    rows.append(
+                        {
+                            "layer": layer_name,
+                            "severity": (layer_data.get("severity", "") or layer_data.get("risk", "") or "LOW").upper(),
+                            "finding": layer_data.get("message", layer_data.get("finding", layer_data.get("description", ""))),
+                            "detail": _pdf_detail_to_text(layer_data.get("detail", layer_data.get("details", ""))),
+                        }
+                    )
+                else:
+                    rows.append({"layer": layer_name, "severity": "LOW", "finding": str(layer_data), "detail": ""})
+            return rows
+        return []
+
     # v6.3.0: Build Fraud Detector tab HTML
     # v6.3.4: ALWAYS build the tab — when pdf_integrity is missing from the analysis JSON,
     # render a clear placeholder so analysts see the tab every time (consistency across
@@ -1398,27 +1512,14 @@ def generate_interactive_html(data):
         high_count = 0
         medium_count = 0
         for pf in pdf_files:
-            layers = pf.get('layers', pf.get('checks', pf.get('findings', [])))
-            if isinstance(layers, list):
-                for layer in layers:
-                    sev = (layer.get('severity', '') or layer.get('risk', '') or 'LOW').upper()
-                    all_severities.append(sev)
-                    total_checks += 1
-                    if sev == 'HIGH':
-                        high_count += 1
-                    elif sev == 'MEDIUM':
-                        medium_count += 1
-            elif isinstance(layers, dict):
-                for layer_name, layer_data in layers.items():
-                    sev = 'LOW'
-                    if isinstance(layer_data, dict):
-                        sev = (layer_data.get('severity', '') or layer_data.get('risk', '') or 'LOW').upper()
-                    all_severities.append(sev)
-                    total_checks += 1
-                    if sev == 'HIGH':
-                        high_count += 1
-                    elif sev == 'MEDIUM':
-                        medium_count += 1
+            for layer in _normalise_pdf_layer_rows(pf):
+                sev = (layer.get('severity') or 'LOW').upper()
+                all_severities.append(sev)
+                total_checks += 1
+                if sev == 'HIGH':
+                    high_count += 1
+                elif sev == 'MEDIUM':
+                    medium_count += 1
 
         overall_risk = 'low'
         if high_count > 0:
@@ -1438,46 +1539,19 @@ def generate_interactive_html(data):
                 file_risk = 'LOW'
             risk_cls = file_risk.lower()
 
-            layers = pf.get('layers', pf.get('checks', pf.get('findings', [])))
             layer_rows = ''
-            if isinstance(layers, list):
-                for layer in layers:
-                    l_name = layer.get('layer', layer.get('name', ''))
-                    l_sev = (layer.get('severity', '') or layer.get('risk', '') or 'LOW').upper()
-                    l_msg = layer.get('message', layer.get('finding', layer.get('description', '')))
-                    l_detail = layer.get('detail', layer.get('details', ''))
-                    if isinstance(l_detail, dict):
-                        l_detail = ', '.join(f'{k}: {v}' for k, v in l_detail.items())
-                    elif isinstance(l_detail, list):
-                        l_detail = '; '.join(str(x) for x in l_detail[:5])
-                    sev_cls = l_sev.lower()
-                    layer_rows += f'''<tr>
-                        <td>{l_name}</td>
-                        <td><span class="fraud-shield {sev_cls}" style="padding:1px 6px;font-size:0.72rem">{l_sev}</span></td>
-                        <td>{l_msg}</td>
-                        <td style="font-size:0.78rem;color:var(--text-soft)">{l_detail}</td>
-                    </tr>'''
-            elif isinstance(layers, dict):
-                for l_name, l_data in layers.items():
-                    if isinstance(l_data, dict):
-                        l_sev = (l_data.get('severity', '') or l_data.get('risk', '') or 'LOW').upper()
-                        l_msg = l_data.get('message', l_data.get('finding', l_data.get('description', '')))
-                        l_detail = l_data.get('detail', l_data.get('details', ''))
-                        if isinstance(l_detail, dict):
-                            l_detail = ', '.join(f'{k}: {v}' for k, v in l_detail.items())
-                        elif isinstance(l_detail, list):
-                            l_detail = '; '.join(str(x) for x in l_detail[:5])
-                    else:
-                        l_sev = 'LOW'
-                        l_msg = str(l_data)
-                        l_detail = ''
-                    sev_cls = l_sev.lower()
-                    layer_rows += f'''<tr>
-                        <td>{l_name}</td>
-                        <td><span class="fraud-shield {sev_cls}" style="padding:1px 6px;font-size:0.72rem">{l_sev}</span></td>
-                        <td>{l_msg}</td>
-                        <td style="font-size:0.78rem;color:var(--text-soft)">{l_detail}</td>
-                    </tr>'''
+            for layer in _normalise_pdf_layer_rows(pf):
+                l_name = escape(str(layer.get('layer', '')))
+                l_sev = escape(str((layer.get('severity') or 'LOW').upper()))
+                l_msg = escape(str(layer.get('finding', '')))
+                l_detail = escape(str(layer.get('detail', '')))
+                sev_cls = l_sev.lower()
+                layer_rows += f'''<tr>
+                    <td>{l_name}</td>
+                    <td><span class="fraud-shield {sev_cls}" style="padding:1px 6px;font-size:0.72rem">{l_sev}</span></td>
+                    <td>{l_msg}</td>
+                    <td style="font-size:0.78rem;color:var(--text-soft)">{l_detail}</td>
+                </tr>'''
 
             file_sections += f'''
             <div class="section">
@@ -5830,6 +5904,7 @@ if st.session_state.results:
         
         # Convert transaction_analysis_report to JSON-serializable format
         serializable_transaction_analysis = make_json_serializable(transaction_analysis_report)
+        serializable_pdf_integrity = make_json_serializable(analysis_results)
 
         full_report = {
             "summary": {
@@ -5843,6 +5918,7 @@ if st.session_state.results:
             },
             "transaction_analysis": serializable_transaction_analysis,
             "monthly_summary": serializable_monthly_summary,
+            "pdf_integrity": serializable_pdf_integrity,
             "transactions": json_records,
         }
 
