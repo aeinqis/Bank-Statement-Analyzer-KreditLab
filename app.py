@@ -2359,6 +2359,9 @@ def build_report_data_from_analysis(
     high_value_threshold: float,
 ) -> dict:
     """Build the v6 report payload shared by HTML and Excel exports."""
+    # Get pdf_integrity from session state
+    pdf_integrity = st.session_state.get("integrity_analysis_results", {})
+    
     data = {
         'transactions': transactions,
         'monthly_summary': monthly_summary,
@@ -2368,7 +2371,7 @@ def build_report_data_from_analysis(
             'high_value_threshold': high_value_threshold,
         },
         'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
-        'pdf_integrity': st.session_state.get('integrity_analysis_results', {})
+        'pdf_integrity': pdf_integrity,  # Explicitly add this
     }
 
     adapted_data = adapt_to_v6(data)
@@ -2392,6 +2395,8 @@ def build_report_data_from_analysis(
         'parsing_metadata',
         adapted_data.get('parsing_metadata', {}),
     )
+    # Ensure pdf_integrity is in the final adapted_data
+    adapted_data['pdf_integrity'] = pdf_integrity
     return adapted_data
 
 
@@ -2767,6 +2772,9 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
     renders.  Falls back to the legacy adapt_to_v6 path when the module is
     not installed.
     """
+    # Get pdf_integrity from session state (same source Excel uses)
+    pdf_integrity = st.session_state.get("integrity_analysis_results") or {}
+    
     if _TRACK2_AVAILABLE:
         try:
             # Build counterparty ledger in the format Track 2 expects
@@ -2790,8 +2798,6 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
             # the analyst form when wired)
             related_parties = st.session_state.get("related_parties_override") or []
 
-            pdf_integrity = st.session_state.get("integrity_analysis_results") or {}
-
             data = build_track2_result(
                 transactions,
                 counterparty_ledger=cp_ledger,
@@ -2808,38 +2814,16 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
             print(f"[Track2] build_track2_result failed, falling back: {_track2_err}")
             traceback.print_exc()
 
-    # Legacy fallback path
-    return generate_interactive_html(
-        build_report_data_from_analysis(
-            transactions,
-            monthly_summary,
-            transaction_analysis,
-            high_value_threshold,
-        )
+    # Legacy fallback path - also include pdf_integrity
+    report_data = build_report_data_from_analysis(
+        transactions,
+        monthly_summary,
+        transaction_analysis,
+        high_value_threshold,
     )
-
-def load_json_payload(json_source):
-    """Load JSON from an uploaded file or reuse an already parsed payload."""
-    if isinstance(json_source, (dict, list)):
-        return json_source
-    if hasattr(json_source, "seek"):
-        json_source.seek(0)
-    return json.load(json_source)
-
-
-def convert_json_to_html(json_source) -> str:
-    """Convert uploaded JSON analysis file to HTML report.
-
-    If the payload already has the v6.3.5 ``monthly_analysis`` key it is
-    passed straight to generate_interactive_html (no re-adaptation needed).
-    Older flat payloads go through normalize_report_data_for_export first.
-    """
-    raw = load_json_payload(json_source)
-    # Full v6 schema — has monthly_analysis already
-    if isinstance(raw, dict) and "monthly_analysis" in raw:
-        return generate_interactive_html(raw)
-    data = normalize_report_data_for_export(raw)
-    return generate_interactive_html(data)
+    # Ensure pdf_integrity is included in the legacy data
+    report_data['pdf_integrity'] = pdf_integrity
+    return generate_interactive_html(report_data)
 
 # ============================================================
 # HTML REPORT GENERATION FUNCTIONS (ADDED)
@@ -4562,8 +4546,14 @@ def run_fraud_checks(df: pd.DataFrame, high_value_threshold: float, round_thresh
     
     df = df.copy()
     
-    # High value detection
-    df["is_high_value"] = df["credit"].apply(lambda x: safe_float(x) >= high_value_threshold if x else False)
+    # High value detection includes both inflows and outflows.
+    df["is_high_value"] = df.apply(
+        lambda row: (
+            safe_float(row.get("credit", 0)) >= high_value_threshold
+            or safe_float(row.get("debit", 0)) >= high_value_threshold
+        ),
+        axis=1,
+    )
     
     # Round number detection - using flexible thresholds
     df["is_round"] = df.apply(
@@ -4685,9 +4675,31 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
     if "is_high_value" in df.columns:
         high_hits = df[df["is_high_value"] == True].copy()
         if not high_hits.empty:
+            high_hits["amount"] = high_hits.apply(
+                lambda row: (
+                    f"+RM {safe_float(row.get('credit', 0)):,.2f}"
+                    if safe_float(row.get("credit", 0)) > 0
+                    else f"-RM {safe_float(row.get('debit', 0)):,.2f}"
+                ),
+                axis=1,
+            )
             with st.expander("High-value transactions"):
-                high_value_columns = [c for c in ["date", "description", "credit", "balance"] if c in high_hits.columns]
-                st.dataframe(high_hits[high_value_columns], use_container_width=True)
+                st.caption(
+                    "Transactions flagged when the credit or debit amount is above or equal "
+                    f"to the inserted high value threshold: RM {high_value_threshold:,.2f}."
+                )
+                high_value_columns = [c for c in ["date", "description", "amount", "balance"] if c in high_hits.columns]
+                st.dataframe(
+                    high_hits[high_value_columns],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "date": "Date Transaction",
+                        "description": "Description",
+                        "amount": "Amount (RM)",
+                        "balance": "Balance",
+                    },
+                )
     
     # Statutory payments sections
     epf_count, epf_total = compute_epf_payments(df)
@@ -5510,6 +5522,8 @@ if uploaded_files and st.session_state.status == "running":
                 t["company_name"] = company_name
                 t["account_no"] = account_no
                 t["high_value_credit"] = safe_float(t.get("credit", 0)) >= high_value_threshold
+                t["high_value_debit"] = safe_float(t.get("debit", 0)) >= high_value_threshold
+                t["high_value_transaction"] = t["high_value_credit"] or t["high_value_debit"]
 
             if bank_choice == "Affin Bank":
                 st.session_state.affin_file_transactions[uploaded_file.name] = tx_norm
