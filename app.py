@@ -61,6 +61,34 @@ try:
 except ImportError:
     _TRACK2_AVAILABLE = False
 
+def build_large_transactions(transactions: List[dict], threshold: float) -> List[dict]:
+    """Build list of large transactions (both credits and debits) above threshold."""
+    large_txns = []
+    for t in transactions:
+        credit = safe_float(t.get('credit', 0))
+        debit = safe_float(t.get('debit', 0))
+        
+        if credit >= threshold:
+            large_txns.append({
+                'date': t.get('date', ''),
+                'description': t.get('description', ''),
+                'amount': credit,
+                'balance': t.get('balance', 0),
+                'type': 'CREDIT'
+            })
+        elif debit >= threshold:
+            large_txns.append({
+                'date': t.get('date', ''),
+                'description': t.get('description', ''),
+                'amount': debit,
+                'balance': t.get('balance', 0),
+                'type': 'DEBIT'
+            })
+    
+    # Sort by amount descending
+    large_txns.sort(key=lambda x: x['amount'], reverse=True)
+    return large_txns
+
 # Function copy from HTML, def generate_interactive_html(data) - you will replace this with the full function from your original converter file
 def generate_interactive_html(data):
     """Generate interactive HTML report for v6.0.0 schema"""
@@ -622,13 +650,26 @@ def generate_interactive_html(data):
             <td class="mono r">{p.get('transaction_count',0)}</td>
         </tr>'''
 
-    # ── Large credits ──
-    large_cr_rows = ""
-    for t in large_credits:
-        large_cr_rows += f'''<tr>
+       # ── Large transactions (both credits and debits above threshold) ──
+    # Get threshold from consolidated or report_info
+    large_threshold = consol.get('high_value_threshold', 100000)
+    
+    # Get large transactions data - support both 'large_credits' and 'large_transactions'
+    large_txns = data.get('large_transactions', [])
+    if not large_txns and large_credits:
+        # Convert old format: only credits
+        large_txns = [{'date': t.get('date',''), 'description': t.get('description',''), 
+                       'amount': t.get('amount',0), 'balance': t.get('balance',0), 
+                       'type': 'CREDIT'} for t in large_credits]
+    
+    large_txn_rows = ""
+    for t in large_txns:
+        txn_type = t.get('type', 'CREDIT')
+        type_cls = 'credit' if txn_type == 'CREDIT' else 'debit'
+        large_txn_rows += f'''<tr>
             <td>{t.get('date','')}</td>
             <td>{t.get('description','')[:70]}</td>
-            <td class="mono r credit">RM {t.get('amount',0):,.2f}</td>
+            <td class="mono r {type_cls}">RM {t.get('amount',0):,.2f} ({txn_type})</td>
             <td class="mono r">{t.get('balance',0):,.2f}</td>
         </tr>'''
 
@@ -1987,14 +2028,14 @@ def generate_interactive_html(data):
             <div class="note"><span class="rp-badge">RP</span> = Related Party</div>
         </div>
 
-        <!-- LARGE CREDITS TAB -->
+        <!-- LARGE TRANSACTIONS TAB -->
         <div id="tab-large" class="tab">
             <div class="section">
-                <div class="section-head"><h2>Large Credits (&ge; RM 100,000)</h2><span class="badge badge-current">{len(large_credits)} transactions</span></div>
+                <div class="section-head"><h2>Large Transactions (&ge; RM {large_threshold:,.0f})</h2><span class="badge badge-current">{len(large_txns)} transactions</span></div>
                 <div class="section-body" style="padding:0">
-                    <div class="table-wrap" style="max-height:500px;overflow:auto"><table>
+                    <div class="table-wrap" style="max-height:500px;overflow:auto"></table>
                         <thead><tr><th>Date</th><th>Description</th><th class="r">Amount (RM)</th><th class="r">Balance</th></tr></thead>
-                        <tbody>{large_cr_rows}</tbody>
+                        <tbody>{large_txn_rows or '<tr><td colspan="4" class="note">No transactions above threshold</td></tr>'}</tbody>
                     </table></div>
                 </div>
             </div>
@@ -2369,18 +2410,19 @@ def adapt_to_v6(src):
     gross_debits = sum(float(t.get('debit', 0) or 0) for t in transactions)
     
     consolidated = {
-        'gross_credits': round(gross_credits, 2),
-        'gross_debits': round(gross_debits, 2),
-        'net_credits': round(gross_credits, 2),
-        'net_debits': round(gross_debits, 2),
-        'annualized_net_credits': round(gross_credits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
-        'annualized_net_debits': round(gross_debits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
-        'eod_lowest': 0,
-        'eod_highest': 0,
-        'eod_average': 0,
-        'data_completeness': 'COMPLETE',
+    'gross_credits': round(gross_credits, 2),
+    'gross_debits': round(gross_debits, 2),
+    'net_credits': round(gross_credits, 2),
+    'net_debits': round(gross_debits, 2),
+    'annualized_net_credits': round(gross_credits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
+    'annualized_net_debits': round(gross_debits * 12 / len(monthly_summary), 2) if monthly_summary else 0,
+    'eod_lowest': 0,
+    'eod_highest': 0,
+    'eod_average': 0,
+    'data_completeness': 'COMPLETE',
+    'high_value_threshold': src.get('summary', {}).get('high_value_threshold', 100000),  # Add this line
     }
-
+    
     return {
         'report_info': report_info,
         'accounts': accounts,
@@ -2445,13 +2487,17 @@ def build_report_data_from_analysis(
             'high_value_threshold': high_value_threshold,
         },
         'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
-        'pdf_integrity': pdf_integrity,  # Explicitly add this
+        'pdf_integrity': pdf_integrity,
     }
 
     adapted_data = adapt_to_v6(data)
     adapted_data['transactions'] = transactions
     adapted_data['top_parties'] = _top_parties_from_transaction_analysis(transaction_analysis)
-    adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])
+    
+    # Use large_transactions instead of large_credits
+    adapted_data['large_transactions'] = build_large_transactions(transactions, high_value_threshold)
+    adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])  # Keep for backward compatibility
+    
     adapted_data['flags'] = transaction_analysis.get('flags', {'indicators': []})
     adapted_data['observations'] = transaction_analysis.get('observations', {'positive': [], 'concerns': []})
     adapted_data['round_figure_credits'] = transaction_analysis.get('round_figure_credits', [])
@@ -2469,8 +2515,12 @@ def build_report_data_from_analysis(
         'parsing_metadata',
         adapted_data.get('parsing_metadata', {}),
     )
-    # Ensure pdf_integrity is in the final adapted_data
     adapted_data['pdf_integrity'] = pdf_integrity
+    
+    # Add threshold to consolidated for display
+    if 'consolidated' in adapted_data:
+        adapted_data['consolidated']['high_value_threshold'] = high_value_threshold
+    
     return adapted_data
 
 
@@ -2655,11 +2705,15 @@ def generate_excel_report(data: dict) -> BytesIO:
                 party_rows.append({"type": party_type, "rank": row.get("rank", idx), **row})
         _write_excel_sheet(writer, "Top Parties", _records_to_excel_df(party_rows), "Top Parties")
 
+        large_txns = report_data.get("large_transactions", [])
+        if not large_txns:
+            large_txns = report_data.get("large_credits", [])  # Fallback
+            
         _write_excel_sheet(
             writer,
-            "Large Credits",
-            _records_to_excel_df(report_data.get("large_credits", [])),
-            "Large Credits",
+            "Large Transactions",
+            _records_to_excel_df(large_txns),
+            f"Large Transactions (≥ RM {report_data.get('consolidated', {}).get('high_value_threshold', 100000):,.0f})",
         )
 
         cp_rows = _records_to_excel_df(cp_ledger.get("counterparties", []))
