@@ -4791,54 +4791,13 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
         '<div class="kl-analysis-subtitle">The story of the money and whether the financial behavior makes sense.</div>',
     )
     
-    # Calculate total credits and debits
-    total_credits = analysis_df['credit'].sum() if 'credit' in analysis_df.columns else 0
-    total_debits = analysis_df['debit'].sum() if 'debit' in analysis_df.columns else 0
-    net_position = total_credits - total_debits
-    
-    # Display summary metrics with financial cards added
+    # Display pattern metrics only. Financial cards live in the Extracted Transaction section.
     item_map = dict(pattern_summary.get("items", []))
     statutory_items = pattern_summary.get("statutory_items", [])
     
-    # Create cards including financial summary
     cards = []
-    
-    # Add Financial Summary Cards
-    cards.append(
-       '<div class="kl-metric-card">'
-        '<div class="kl-metric-label">Transactions</div>'
-        f'<div class="kl-metric-value">{item_map.get("Total Transactions", 0)}</div>'
-        '</div>',
-    )
-    cards.append(
-        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
-        '<div class="kl-metric-label">Net Credits</div>'
-        f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
-        '</div>'
-    )
-    
-    cards.append(
-        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
-        '<div class="kl-metric-label">Net Debits</div>'
-        f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
-        '</div>'
-    )
-    
-    net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
-    net_border = "#2e7d32" if net_position >= 0 else "#c62828"
 
-    net_label = "Net Position" if net_position >= 0 else "Net Loss"
-    
-    cards.append(
-        f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
-        f'<div class="kl-metric-label">{net_label}</div>'
-        f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
-        '</div>'
-    )
-    
-    # Add existing pattern cards
     cards.extend([
-        
         '<div class="kl-metric-card">'
         '<div class="kl-metric-label">High-Value Flags</div>'
         f'<div class="kl-metric-value">{item_map.get("High-Value Flags", 0)}</div>'
@@ -4879,6 +4838,56 @@ def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -
     
     # Render detailed expandable sections
     render_pattern_details(analysis_df, high_value_threshold)
+
+
+def render_extracted_transaction_section(df: pd.DataFrame) -> None:
+    """Render extracted transaction metrics and the transaction table."""
+    analysis_df = filter_statement_transactions_df(df)
+    total_credits = analysis_df["credit"].sum() if "credit" in analysis_df.columns else 0
+    total_debits = analysis_df["debit"].sum() if "debit" in analysis_df.columns else 0
+    net_position = total_credits - total_debits
+    net_color = "#69f0ae" if net_position >= 0 else "#ff8a80"
+    net_border = "#2e7d32" if net_position >= 0 else "#c62828"
+    net_label = "Net Position" if net_position >= 0 else "Net Loss"
+
+    cards = [
+        '<div class="kl-metric-card">'
+        '<div class="kl-metric-label">Transactions</div>'
+        f'<div class="kl-metric-value">{len(analysis_df):,}</div>'
+        '</div>',
+        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a472a 0%, #0d2818 100%); border-color: #2e7d32;">'
+        '<div class="kl-metric-label">Net Credits</div>'
+        f'<div class="kl-metric-value" style="color: #69f0ae;">RM {total_credits:,.2f}</div>'
+        '</div>',
+        '<div class="kl-metric-card" style="background: linear-gradient(135deg, #4a1a1a 0%, #2d1010 100%); border-color: #c62828;">'
+        '<div class="kl-metric-label">Net Debits</div>'
+        f'<div class="kl-metric-value" style="color: #ff8a80;">RM {total_debits:,.2f}</div>'
+        '</div>',
+        f'<div class="kl-metric-card" style="background: linear-gradient(135deg, #1a2a3a 0%, #0d1a2a 100%); border-color: {net_border};">'
+        f'<div class="kl-metric-label">{net_label}</div>'
+        f'<div class="kl-metric-value" style="color: {net_color};">RM {abs(net_position):,.2f}</div>'
+        '</div>',
+    ]
+
+    st.html(
+        '<div class="kl-analysis-title">&#128202; Extracted Transaction <span style="font-size: 1rem; color: #A9C1DD;">&#128279;</span></div>'
+        f'<div class="kl-metric-grid">{"".join(cards)}</div>',
+    )
+
+    st.markdown("#### All Transactions")
+    requested_cols = ["date", "description", "debit", "credit", "balance"]
+    display_cols = [c for c in requested_cols if c in df.columns]
+    st.dataframe(
+        df[display_cols],
+        use_container_width=True,
+        column_config={
+            "date": "Transaction Date",
+            "description": "Description",
+            "debit": "Debit (RM)",
+            "credit": "Credit (RM)",
+            "balance": "Running Balance",
+        },
+    )
 
 # -----------------------------
 # Core Processing Functions
@@ -5653,27 +5662,14 @@ if st.session_state.results:
         
         # Display transaction pattern overview
         render_transaction_overview(df, high_value_threshold)
+
+        # Display Extracted Transaction section
+        st.markdown("---")
+        render_extracted_transaction_section(df)
         
         # Display Counterparty Ledger Table
         st.markdown("---")
         render_counterparty_ledger_table(df)
-        
-        # Display basic transaction table
-        st.markdown("#### All Transactions")
-        requested_cols = ["date", "description", "debit", "credit", "balance"]
-        display_cols = [c for c in requested_cols if c in df.columns]
-        
-        st.dataframe(
-            df[display_cols], 
-            use_container_width=True,
-            column_config={
-                "date": "Transaction Date",
-                "description": "Description",
-                "debit": "Debit (RM)",
-                "credit": "Credit (RM)",
-                "balance": "Running Balance"
-            }
-        )
     else:
         st.info("No line-item transactions extracted.")
     
@@ -5785,7 +5781,7 @@ if st.session_state.results:
 
     with col1:
         st.download_button(
-            "📄 Download Transactions (JSON)",
+            "📄 Download Full Transactions (JSON)",
             json.dumps(json_records, indent=4),
             "transactions.json",
             "application/json",
@@ -5837,7 +5833,7 @@ if st.session_state.results:
         }
 
         st.download_button(
-            "📊 Download Full Report (JSON)",
+            "📊 Download Full Transaction (JSON)",
             json.dumps(full_report, indent=4),
             "full_report.json",
             "application/json",
@@ -5850,21 +5846,21 @@ if st.session_state.results:
         serialized_monthly_summary = make_json_serializable(monthly_summary)
         serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
     
-    report_excel_data = build_report_data_from_analysis(
-        serialized_transactions,
-        serialized_monthly_summary,
-        serialized_transaction_analysis,
-        high_value_threshold,
-    )
-    output = generate_excel_report(report_excel_data)
+        report_excel_data = build_report_data_from_analysis(
+            serialized_transactions,
+            serialized_monthly_summary,
+            serialized_transaction_analysis,
+            high_value_threshold,
+        )
+        output = generate_excel_report(report_excel_data)
 
-    st.download_button(
-        "📊 Download Full Report (XLSX)",
-        output.getvalue(),
-        "full_report.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
+        st.download_button(
+            "📊 Download Full Report (XLSX)",
+            output.getvalue(),
+            "full_report.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
 
     with col4:
         # NEW: Generate and download HTML report from current data
