@@ -2197,7 +2197,8 @@ def generate_interactive_html(data):
             </div>
 
         <!-- ROUND FIGURE TAB -->
-        <div class="section">
+        <div id="tab-round" class="tab">
+            <div class="section">
                 <div class="section-head"><h2>Round Figure Credits (AML) &mdash; Detail</h2><span class="badge badge-current">{len(round_figure_credits)} transactions</span></div>
                 <div class="section-body" style="padding:0">
                     <div class="note" style="padding:0.5rem 1.25rem">Credits that are exact round multiples (Flag 3). Listed so the analyst can trace each back to the statement before treating it as anomalous &mdash; round contract payments are common for service operators.</div>
