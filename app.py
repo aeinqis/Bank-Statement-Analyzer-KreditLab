@@ -1949,7 +1949,8 @@ def generate_interactive_html(data):
             <button class="nav-btn active" onclick="showTab('overview')">Overview</button>
             <button class="nav-btn" onclick="showTab('monthly')">Cash Flow</button>
             <button class="nav-btn" onclick="showTab('parties')">Top Parties</button>
-            <button class="nav-btn" onclick="showTab('large')">Large Credits</button>
+            <button class="nav-btn" onclick="showTab('large')">Large Transactions</button>
+            <button class="nav-btn" onclick="showTab('round')">Round Figure</button>
             <button class="nav-btn" onclick="showTab('related')">Counterparty</button>
             <button class="nav-btn" onclick="showTab('loans')">Facilities</button>
             <button class="nav-btn" onclick="showTab('flags')">Risk Signals</button>
@@ -2194,7 +2195,9 @@ def generate_interactive_html(data):
                     </table></div>
                 </div>
             </div>
-            <div class="section">
+
+        <!-- ROUND FIGURE TAB -->
+        <div class="section">
                 <div class="section-head"><h2>Round Figure Credits (AML) &mdash; Detail</h2><span class="badge badge-current">{len(round_figure_credits)} transactions</span></div>
                 <div class="section-body" style="padding:0">
                     <div class="note" style="padding:0.5rem 1.25rem">Credits that are exact round multiples (Flag 3). Listed so the analyst can trace each back to the statement before treating it as anomalous &mdash; round contract payments are common for service operators.</div>
