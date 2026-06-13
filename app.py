@@ -127,11 +127,49 @@ def generate_interactive_html(data):
         
         large_txns.sort(key=lambda x: x.get('amount', 0), reverse=True)
         return large_txns
+
+    def build_round_figure_credits_internal(transactions, multiple=10000.0, min_amount=10000.0):
+        """Build round-figure credit rows when the payload lacks precomputed detail."""
+        rows = []
+        step_cents = round(float(multiple) * 100)
+        if step_cents <= 0:
+            return rows
+
+        for t in transactions or []:
+            if not isinstance(t, dict):
+                continue
+            credit = safe_float(t.get('credit', 0))
+            if credit <= 0 and str(t.get('type', '')).upper() == 'CREDIT':
+                credit = safe_float(t.get('amount', 0))
+            if credit < min_amount:
+                continue
+
+            cents = round(credit * 100)
+            if cents % step_cents != 0:
+                continue
+
+            rows.append({
+                'date': t.get('date', ''),
+                'description': t.get('description', ''),
+                'amount': round(credit, 2),
+                'balance': t.get('balance', 0),
+            })
+
+        return rows
     
     # Then use it:
+    _fallback_consol = data.get('consolidated') if isinstance(data.get('consolidated'), dict) else {}
+    _fallback_summary = data.get('summary') if isinstance(data.get('summary'), dict) else {}
+    _fallback_config = data.get('classification_config') if isinstance(data.get('classification_config'), dict) else {}
+    fallback_large_threshold = (
+        _fallback_consol.get('high_value_threshold')
+        or _fallback_summary.get('high_value_threshold')
+        or _fallback_config.get('large_credit_threshold')
+        or 100000
+    )
     large_txns = data.get('large_transactions', [])
     if not large_txns and data.get('transactions'):
-        large_txns = build_large_transactions_internal(data.get('transactions', []), large_threshold)
+        large_txns = build_large_transactions_internal(data.get('transactions', []), fallback_large_threshold)
 
     r = data.get('report_info', {})
     accounts = data.get('accounts', [])
@@ -764,17 +802,23 @@ def generate_interactive_html(data):
     
     # Also ensure the round_figure_credits section has proper table structure
     round_figure_credits = data.get('round_figure_credits', []) or []
+    if isinstance(round_figure_credits, dict):
+        round_figure_credits = round_figure_credits.get('round_figure_entries', []) or []
+    if not round_figure_credits and data.get('transactions'):
+        round_figure_credits = build_round_figure_credits_internal(data.get('transactions', []))
     rf_cr_rows = ""
     if round_figure_credits and isinstance(round_figure_credits, list):
         for t in round_figure_credits:
             if not isinstance(t, dict):
                 continue
+            amount = safe_float(t.get('amount', t.get('credit', 0)))
+            balance = safe_float(t.get('balance', 0))
             rf_cr_rows += f'''
                 <tr>
-                    <td>{t.get('date', '')}</td>
-                    <td>{t.get('description', '')[:70]}</td>
-                    <td class="mono r credit">RM {t.get('amount', 0):,.2f}</td>
-                    <td class="mono r">RM {t.get('balance', 0):,.2f}</td>
+                    <td>{escape(str(t.get('date', '')))}</td>
+                    <td>{escape(str(t.get('description', ''))[:70])}</td>
+                    <td class="mono r credit">RM {amount:,.2f}</td>
+                    <td class="mono r">RM {balance:,.2f}</td>
                 </tr>'''
     if not rf_cr_rows:
         rf_cr_rows = '<tr><td colspan="4" class="note">No round-figure credits detected.</td></tr>'
@@ -2195,6 +2239,7 @@ def generate_interactive_html(data):
                     </table></div>
                 </div>
             </div>
+        </div>
 
         <!-- ROUND FIGURE TAB -->
         <div id="tab-round" class="tab">
