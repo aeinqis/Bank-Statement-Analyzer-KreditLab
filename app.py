@@ -691,23 +691,31 @@ def generate_interactive_html(data):
         </tr>'''
 
 
-    # ── Large transactions (both credits and debits above threshold) ──
+        # ── Large transactions (both credits and debits above threshold) ──
     # Get threshold from consolidated or report_info
     large_threshold = consol.get('high_value_threshold', 100000)
     if large_threshold is None or large_threshold == 0:
         large_threshold = 100000
     
+    # Debug: Print to console for troubleshooting
+    print(f"[DEBUG] Large threshold: {large_threshold}")
+    
     # Get large transactions data - support multiple formats
     large_txns = data.get('large_transactions', [])
     
     # If large_transactions is empty, try to build it from transactions
-    if not large_txns and data.get('transactions'):
-        large_txns = build_large_transactions(data.get('transactions', []), large_threshold)
-        data['large_transactions'] = large_txns
+    if (not large_txns or len(large_txns) == 0) and data.get('transactions'):
+        # Use the external build_large_transactions function
+        try:
+            large_txns = build_large_transactions(data.get('transactions', []), large_threshold)
+            print(f"[DEBUG] Built {len(large_txns)} large transactions from transactions")
+        except Exception as e:
+            print(f"[DEBUG] Error building large transactions: {e}")
+            large_txns = []
     
     # Also check for large_credits as fallback
     large_credits = data.get('large_credits', [])
-    if not large_txns and large_credits:
+    if (not large_txns or len(large_txns) == 0) and large_credits:
         # Convert old format to new format
         large_txns = []
         for t in large_credits:
@@ -719,10 +727,13 @@ def generate_interactive_html(data):
                     'balance': t.get('balance', 0),
                     'type': 'CREDIT'
                 })
+        print(f"[DEBUG] Converted {len(large_txns)} from large_credits")
     
-    # Build the large transaction rows HTML
+    print(f"[DEBUG] Final large_txns count: {len(large_txns)}")
+    
+    # Build the large transaction rows HTML as a proper table
     large_txn_rows = ""
-    if large_txns and isinstance(large_txns, list):
+    if large_txns and isinstance(large_txns, list) and len(large_txns) > 0:
         for t in large_txns:
             if not isinstance(t, dict):
                 continue
@@ -734,28 +745,37 @@ def generate_interactive_html(data):
             balance = t.get('balance', 0)
             if balance is None:
                 balance = 0
-            large_txn_rows += f'''<tr>
-                <td>{t.get('date', '')}</td>
-                <td>{str(t.get('description', ''))[:70]}</td>
-                <td class="mono r {type_cls}">RM {float(amount):,.2f} ({txn_type})</td>
-                <td class="mono r">{float(balance):,.2f}</td>
-            </tr>'''
+            date_str = str(t.get('date', ''))
+            desc_str = str(t.get('description', ''))[:70]
+            # Ensure we're building proper table rows
+            large_txn_rows += f'''
+                <tr>
+                    <td>{date_str}</td>
+                    <td>{desc_str}</td>
+                    <td class="mono r {type_cls}">RM {float(amount):,.2f} ({txn_type})</td>
+                    <td class="mono r">RM {float(balance):,.2f}</td>
+                </tr>'''
+    else:
+        # Provide a meaningful message when no transactions are found
+        large_txn_rows = f'''
+                <tr>
+                    <td colspan="4" class="note">No transactions above RM {large_threshold:,.0f}</td>
+                </tr>'''
     
-    if not large_txn_rows:
-        large_txn_rows = f'<tr><td colspan="4" class="note">No transactions above RM {large_threshold:,.0f}</td></tr>'
-
-    # ── Round-figure credits (AML Flag 3) per-transaction detail ──
+    # Also ensure the round_figure_credits section has proper table structure
     round_figure_credits = data.get('round_figure_credits', []) or []
     rf_cr_rows = ""
-    for t in round_figure_credits:
-        if not isinstance(t, dict):
-            continue
-        rf_cr_rows += f'''<tr>
-            <td>{t.get('date','')}</td>
-            <td>{t.get('description','')[:70]}</td>
-            <td class="mono r credit">RM {t.get('amount',0):,.2f}</td>
-            <td class="mono r">{t.get('balance',0):,.2f}</td>
-        </tr>'''
+    if round_figure_credits and isinstance(round_figure_credits, list):
+        for t in round_figure_credits:
+            if not isinstance(t, dict):
+                continue
+            rf_cr_rows += f'''
+                <tr>
+                    <td>{t.get('date', '')}</td>
+                    <td>{t.get('description', '')[:70]}</td>
+                    <td class="mono r credit">RM {t.get('amount', 0):,.2f}</td>
+                    <td class="mono r">RM {t.get('balance', 0):,.2f}</td>
+                </tr>'''
     if not rf_cr_rows:
         rf_cr_rows = '<tr><td colspan="4" class="note">No round-figure credits detected.</td></tr>'
 
@@ -2104,10 +2124,21 @@ def generate_interactive_html(data):
             <div class="section">
                 <div class="section-head"><h2>Large Transactions (&ge; RM {large_threshold:,.0f})</h2><span class="badge badge-current">{len(large_txns)} transactions</span></div>
                 <div class="section-body" style="padding:0">
-                    <div class="table-wrap" style="max-height:500px;overflow:auto"></table>
-                        <thead><tr><th>Date</th><th>Description</th><th class="r">Amount (RM)</th><th class="r">Balance</th></tr></thead>
-                        <tbody>{large_txn_rows or '<tr><td colspan="4" class="note">No transactions above threshold</td></tr>'}</tbody>
-                    </table></div>
+                    <div class="table-wrap" style="max-height:500px;overflow:auto">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Description</th>
+                                    <th class="r">Amount (RM)</th>
+                                    <th class="r">Balance</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {large_txn_rows}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
