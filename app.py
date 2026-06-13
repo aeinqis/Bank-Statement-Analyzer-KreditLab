@@ -1775,11 +1775,6 @@ def generate_interactive_html(data):
         /* Theme toggle */
         .theme-toggle {{ position:absolute; top:1rem; right:1rem; padding:0.4rem 0.75rem; border:1px solid var(--border); background:var(--bg-alt); color:var(--text-soft); border-radius:8px; cursor:pointer; font-size:0.8rem; }}
         .theme-toggle:hover {{ border-color:var(--border-accent); }}
-        .report-actions {{ position:absolute; top:1rem; right:5.5rem; display:flex; gap:0.5rem; }}
-        .excel-btn {{ padding:0.4rem 0.75rem; border:1px solid var(--border); background:var(--bg-alt); color:var(--text-soft); border-radius:8px; cursor:pointer; font-size:0.8rem; font-weight:500; }}
-        .excel-btn:hover {{ border-color:var(--green); color:var(--green); }}
-        .tab-export-bar {{ display:flex; justify-content:flex-end; margin:0 0 1rem; }}
-
         /* Nav */
         .nav {{ display:flex; gap:0.35rem; margin-bottom:1.5rem; flex-wrap:wrap; background:var(--card); padding:0.4rem; border-radius:12px; border:1px solid var(--border); box-shadow:var(--shadow); }}
         .nav-btn {{ padding:0.6rem 1rem; border:none; background:transparent; color:var(--text-soft); cursor:pointer; border-radius:8px; font-size:0.82rem; font-weight:500; transition:all 0.15s; white-space:nowrap; }}
@@ -1924,7 +1919,7 @@ def generate_interactive_html(data):
 
         /* Print */
         @media print {{
-            .nav, .theme-toggle, .report-actions, .tab-export-bar {{ display:none; }}
+            .nav, .theme-toggle {{ display:none; }}
             .tab {{ display:block !important; page-break-inside:avoid; }}
             body {{ font-size:11px; }}
         }}
@@ -1933,9 +1928,6 @@ def generate_interactive_html(data):
 <body>
     <div class="container">
         <div class="header">
-            <div class="report-actions">
-                <button class="excel-btn" onclick="downloadReportExcel()">Download Report Excel</button>
-            </div>
             <button class="theme-toggle" onclick="toggleTheme()">Dark</button>
             <div class="header-grid">
                 <div class="company-info">
@@ -2246,40 +2238,6 @@ def generate_interactive_html(data):
             if (!heading) return 'kredit_lab_report';
             return (heading.childNodes[0] && heading.childNodes[0].textContent || 'kredit_lab_report').trim();
         }}
-        function filenameSafe(value) {{
-            return String(value || 'report')
-                .replace(/[^a-z0-9]+/gi, '_')
-                .replace(/^_+|_+$/g, '')
-                .slice(0, 90) || 'report';
-        }}
-        function cleanExportTable(table) {{
-            const clone = table.cloneNode(true);
-            clone.querySelectorAll('button,input,select,textarea,script').forEach(function(el) {{ el.remove(); }});
-            clone.querySelectorAll('tr').forEach(function(row) {{
-                if (row.style && row.style.display === 'none') row.remove();
-            }});
-            return clone.outerHTML;
-        }}
-        function buildExcelHtml(title, tableHtmlParts) {{
-            let body = '<h1>' + title + '</h1>';
-            if (!tableHtmlParts.length) {{
-                body += '<p>No table data available.</p>';
-            }}
-            tableHtmlParts.forEach(function(tableHtml, idx) {{
-                body += '<h2>Table ' + (idx + 1) + '</h2>' + tableHtml;
-            }});
-            return '\\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"><style>body{{font-family:Arial,sans-serif}} table{{border-collapse:collapse;margin-bottom:18px}} th{{background:#1B4F72;color:#fff;font-weight:bold}} th,td{{border:1px solid #d5d8dc;padding:6px 8px;mso-number-format:"\\@"}} .r{{text-align:right}} .credit{{color:#059669}} .debit{{color:#dc2626}}</style></head><body>' + body + '</body></html>';
-        }}
-        function downloadExcelHtml(filename, title, tableHtmlParts) {{
-            const blob = new Blob([buildExcelHtml(title, tableHtmlParts)], {{type:'application/vnd.ms-excel;charset=utf-8;'}});
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = filenameSafe(filename) + '.xls';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            setTimeout(function() {{ URL.revokeObjectURL(link.href); }}, 250);
-        }}
         function getTabTitle(tab) {{
             const tabName = tab.id.replace(/^tab-/, '');
             const navButtons = Array.from(document.querySelectorAll('.nav-btn'));
@@ -2287,39 +2245,6 @@ def generate_interactive_html(data):
                 return (btn.getAttribute('onclick') || '').indexOf("'" + tabName + "'") !== -1;
             }});
             return navButton ? navButton.textContent.trim() : tabName.replace(/-/g, ' ');
-        }}
-        function downloadTabExcel(tabName) {{
-            const tab = document.getElementById('tab-' + tabName);
-            if (!tab) return;
-            const title = getTabTitle(tab);
-            const tables = Array.from(tab.querySelectorAll('table')).map(cleanExportTable);
-            downloadExcelHtml(reportCompanyName() + '_' + title, title, tables);
-        }}
-        function downloadReportExcel() {{
-            const tables = [];
-            document.querySelectorAll('.tab').forEach(function(tab) {{
-                const title = getTabTitle(tab);
-                tables.push('<table><tr><th>' + title + '</th></tr></table>');
-                tab.querySelectorAll('table').forEach(function(table) {{
-                    tables.push(cleanExportTable(table));
-                }});
-            }});
-            downloadExcelHtml(reportCompanyName() + '_full_html_report', 'Kredit Lab Report - ' + reportCompanyName(), tables);
-        }}
-        function injectExcelButtons() {{
-            document.querySelectorAll('.tab').forEach(function(tab) {{
-                if (tab.firstElementChild && tab.firstElementChild.classList.contains('tab-export-bar')) return;
-                const tabName = tab.id.replace(/^tab-/, '');
-                const bar = document.createElement('div');
-                bar.className = 'tab-export-bar';
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'excel-btn';
-                btn.textContent = 'Download This Tab Excel';
-                btn.addEventListener('click', function() {{ downloadTabExcel(tabName); }});
-                bar.appendChild(btn);
-                tab.insertBefore(bar, tab.firstChild);
-            }});
         }}
         function renderCharts() {{
             if(typeof Plotly==='undefined'){{console.warn('Plotly not loaded — charts disabled');return;}}
@@ -2364,7 +2289,6 @@ def generate_interactive_html(data):
             }}
         }}
         document.addEventListener('DOMContentLoaded', function() {{
-            injectExcelButtons();
             renderCharts();
         }});
     </script>
