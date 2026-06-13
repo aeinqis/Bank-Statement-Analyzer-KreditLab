@@ -128,34 +128,9 @@ def generate_interactive_html(data):
         large_txns.sort(key=lambda x: x.get('amount', 0), reverse=True)
         return large_txns
 
-    def build_round_figure_credits_internal(transactions, multiple=10000.0, min_amount=10000.0):
-        """Build round-figure credit rows when the payload lacks precomputed detail."""
-        rows = []
-        step_cents = round(float(multiple) * 100)
-        if step_cents <= 0:
-            return rows
-
-        for t in transactions or []:
-            if not isinstance(t, dict):
-                continue
-            credit = safe_float(t.get('credit', 0))
-            if credit <= 0 and str(t.get('type', '')).upper() == 'CREDIT':
-                credit = safe_float(t.get('amount', 0))
-            if credit < min_amount:
-                continue
-
-            cents = round(credit * 100)
-            if cents % step_cents != 0:
-                continue
-
-            rows.append({
-                'date': t.get('date', ''),
-                'description': t.get('description', ''),
-                'amount': round(credit, 2),
-                'balance': t.get('balance', 0),
-            })
-
-        return rows
+    def build_round_figure_credits_internal(transactions):
+        """Build the same signed round-number transactions shown in Railway."""
+        return build_round_transactions(transactions)
     
     # Then use it:
     _fallback_consol = data.get('consolidated') if isinstance(data.get('consolidated'), dict) else {}
@@ -800,10 +775,8 @@ def generate_interactive_html(data):
                     <td colspan="4" class="note">No transactions above RM {large_threshold:,.0f}</td>
                 </tr>'''
     
-    # Also ensure the round_figure_credits section has proper table structure
-    round_figure_credits = data.get('round_figure_credits', []) or []
-    if isinstance(round_figure_credits, dict):
-        round_figure_credits = round_figure_credits.get('round_figure_entries', []) or []
+    # Also ensure the round-number transactions section has proper table structure
+    round_figure_credits = get_round_transactions_for_report(data)
     if not round_figure_credits and data.get('transactions'):
         round_figure_credits = build_round_figure_credits_internal(data.get('transactions', []))
     rf_cr_rows = ""
@@ -812,16 +785,18 @@ def generate_interactive_html(data):
             if not isinstance(t, dict):
                 continue
             amount = safe_float(t.get('amount', t.get('credit', 0)))
+            amount_class = 'credit' if amount >= 0 else 'debit'
+            amount_text = f"{'+' if amount >= 0 else '-'}RM {abs(amount):,.2f}"
             balance = safe_float(t.get('balance', 0))
             rf_cr_rows += f'''
                 <tr>
                     <td>{escape(str(t.get('date', '')))}</td>
                     <td>{escape(str(t.get('description', ''))[:70])}</td>
-                    <td class="mono r credit">RM {amount:,.2f}</td>
+                    <td class="mono r {amount_class}">{amount_text}</td>
                     <td class="mono r">RM {balance:,.2f}</td>
                 </tr>'''
     if not rf_cr_rows:
-        rf_cr_rows = '<tr><td colspan="4" class="note">No round-figure credits detected.</td></tr>'
+        rf_cr_rows = '<tr><td colspan="4" class="note">No round-figure transactions detected.</td></tr>'
 
     # ── Related party transactions ──
     rp_summary = own_related.get('summary', {}) or {}
@@ -2244,9 +2219,9 @@ def generate_interactive_html(data):
         <!-- ROUND FIGURE TAB -->
         <div id="tab-round" class="tab">
             <div class="section">
-                <div class="section-head"><h2>Round Figure Credits (AML) &mdash; Detail</h2><span class="badge badge-current">{len(round_figure_credits)} transactions</span></div>
+                <div class="section-head"><h2>Round Figure Transactions &mdash; Detail</h2><span class="badge badge-current">{len(round_figure_credits)} transactions</span></div>
                 <div class="section-body" style="padding:0">
-                    <div class="note" style="padding:0.5rem 1.25rem">Credits that are exact round multiples (Flag 3). Listed so the analyst can trace each back to the statement before treating it as anomalous &mdash; round contract payments are common for service operators.</div>
+                    <div class="note" style="padding:0.5rem 1.25rem">Credit or debit transactions with round-number amounts, matching the Railway round-number flag list.</div>
                     <div class="table-wrap" style="max-height:400px;overflow:auto"><table>
                         <thead><tr><th>Date</th><th>Description</th><th class="r">Amount (RM)</th><th class="r">Balance</th></tr></thead>
                         <tbody>{rf_cr_rows}</tbody>
@@ -2546,6 +2521,69 @@ def _top_parties_from_transaction_analysis(transaction_analysis: dict) -> dict:
     return {"top_payers": top_payers or [], "top_payees": top_payees or []}
 
 
+def build_round_transactions(transactions: List[dict], round_thresholds: List[float] | None = None) -> List[dict]:
+    """Build the same signed round-number transaction rows shown in Railway."""
+    round_rows = []
+    for tx in transactions or []:
+        if not isinstance(tx, dict):
+            continue
+
+        credit = safe_float(tx.get("credit", 0))
+        debit = safe_float(tx.get("debit", 0))
+        is_round_credit = credit > 0 and is_round_number(credit, round_thresholds)
+        is_round_debit = debit > 0 and is_round_number(debit, round_thresholds)
+        if not (is_round_credit or is_round_debit):
+            continue
+
+        amount = credit if credit > 0 else -debit
+        round_rows.append(
+            {
+                "date": tx.get("date", ""),
+                "description": tx.get("description", ""),
+                "amount": round(float(amount), 2),
+                "balance": tx.get("balance", 0),
+            }
+        )
+
+    return round_rows
+
+
+def get_round_transactions_for_report(data: dict) -> List[dict]:
+    """Return export-ready round transactions, preferring raw transactions when available."""
+    if not isinstance(data, dict):
+        return []
+
+    transactions = data.get("transactions") or []
+    if transactions:
+        return build_round_transactions(transactions)
+
+    existing = (
+        data.get("round_transactions")
+        or data.get("round_figure_transactions")
+        or data.get("round_figure_credits")
+        or []
+    )
+    if isinstance(existing, dict):
+        existing = existing.get("round_figure_entries", []) or existing.get("transactions", []) or []
+
+    rows = []
+    for row in existing or []:
+        if not isinstance(row, dict):
+            continue
+        amount = safe_float(row.get("amount", row.get("credit", 0)))
+        if str(row.get("type", "")).upper() == "DEBIT" and amount > 0:
+            amount = -amount
+        rows.append(
+            {
+                "date": row.get("date", ""),
+                "description": row.get("description", ""),
+                "amount": round(float(amount), 2),
+                "balance": row.get("balance", 0),
+            }
+        )
+    return rows
+
+
 def build_report_data_from_analysis(
     transactions: List[dict],
     monthly_summary: List[dict],
@@ -2578,10 +2616,12 @@ def build_report_data_from_analysis(
     # IMPORTANT: Build large transactions directly from transactions with correct threshold
     adapted_data['large_transactions'] = build_large_transactions(transactions, threshold)
     adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])
+    round_transactions = build_round_transactions(transactions)
     
     adapted_data['flags'] = transaction_analysis.get('flags', {'indicators': []})
     adapted_data['observations'] = transaction_analysis.get('observations', {'positive': [], 'concerns': []})
-    adapted_data['round_figure_credits'] = transaction_analysis.get('round_figure_credits', [])
+    adapted_data['round_transactions'] = round_transactions
+    adapted_data['round_figure_credits'] = round_transactions
     adapted_data['loan_transactions'] = transaction_analysis.get(
         'loan_transactions',
         adapted_data.get('loan_transactions', {'transactions': [], 'summary': {}}),
@@ -2645,6 +2685,9 @@ def normalize_report_data_for_export(data: dict) -> dict:
     normalized.setdefault("observations", {"positive": [], "concerns": []})
     normalized.setdefault("counterparty_ledger", {})
     normalized.setdefault("parsing_metadata", {})
+    round_transactions = get_round_transactions_for_report(normalized)
+    normalized["round_transactions"] = round_transactions
+    normalized["round_figure_credits"] = round_transactions
     return normalized
 
 
@@ -2672,8 +2715,11 @@ def _records_to_excel_df(records, columns: List[str] | None = None) -> pd.DataFr
         if isinstance(record, dict)
     ]
     df = pd.DataFrame(safe_records)
-    if columns and df.empty:
-        df = pd.DataFrame(columns=columns)
+    if columns:
+        if df.empty:
+            df = pd.DataFrame(columns=columns)
+        else:
+            df = df.reindex(columns=columns)
     return df
 
 
@@ -2827,11 +2873,25 @@ def generate_excel_report(data: dict) -> BytesIO:
             _records_to_excel_df(flags.get("indicators", [])),
             "Risk Signals",
         )
+        round_rows = []
+        for row in get_round_transactions_for_report(report_data):
+            amount = safe_float(row.get("amount", 0))
+            round_rows.append(
+                {
+                    "date": row.get("date", ""),
+                    "description": row.get("description", ""),
+                    "amount": f"{'+' if amount >= 0 else '-'}{abs(amount):,.2f}",
+                    "balance": safe_float(row.get("balance", 0)),
+                }
+            )
         _write_excel_sheet(
             writer,
             "Round Figures",
-            _records_to_excel_df(report_data.get("round_figure_credits", [])),
-            "Round Figure Credits",
+            _records_to_excel_df(
+                round_rows,
+                ["date", "description", "amount", "balance"],
+            ),
+            "Round Figure Transactions",
         )
 
         fx_rows = [
@@ -3020,6 +3080,10 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
             # Ensure large_transactions is populated
             if 'large_transactions' not in data or not data['large_transactions']:
                 data['large_transactions'] = build_large_transactions(transactions, threshold)
+            data['transactions'] = transactions
+            round_transactions = build_round_transactions(transactions)
+            data['round_transactions'] = round_transactions
+            data['round_figure_credits'] = round_transactions
             
             return generate_interactive_html(data)
         except Exception as _track2_err:
@@ -5988,6 +6052,7 @@ if st.session_state.results:
         # Convert transaction_analysis_report to JSON-serializable format
         serializable_transaction_analysis = make_json_serializable(transaction_analysis_report)
         serializable_pdf_integrity = make_json_serializable(analysis_results)
+        serializable_round_transactions = make_json_serializable(build_round_transactions(json_records))
 
         full_report = {
             "summary": {
@@ -6002,6 +6067,8 @@ if st.session_state.results:
             "transaction_analysis": serializable_transaction_analysis,
             "monthly_summary": serializable_monthly_summary,
             "pdf_integrity": serializable_pdf_integrity,
+            "round_transactions": serializable_round_transactions,
+            "round_figure_credits": serializable_round_transactions,
             "transactions": json_records,
         }
 
