@@ -3043,6 +3043,153 @@ def _write_excel_sheet(writer, sheet_name: str, df: pd.DataFrame, title: str | N
     if not df_to_write.empty:
         worksheet.autofilter(startrow, 0, startrow + len(df_to_write), max(len(df_to_write.columns) - 1, 0))
 
+
+def _pdf_detail_to_excel_text(value) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _pdf_finding_is_benign_for_export(finding: dict) -> bool:
+    message = str(finding.get("message", "") or "").lower()
+    benign_patterns = [
+        "no anomalies detected",
+        "verified",
+        "matches known",
+        "hashes computed",
+        "pdf version",
+        "font consistency",
+    ]
+    return any(pattern in message for pattern in benign_patterns)
+
+
+def _normalise_pdf_integrity_layer_rows(file_name: str, result: dict) -> List[dict]:
+    layer_order = [
+        ("metadata", "Layer 1: Metadata"),
+        ("fonts", "Layer 2: Fonts"),
+        ("text_layers", "Layer 3: Text Layers"),
+        ("visual", "Layer 4: Visual"),
+        ("cross_validation", "Layer 5: Cross Validation"),
+        ("bank_profile", "Layer 6: Bank Profile"),
+        ("structural", "Layer 7: Structural"),
+        ("arithmetic", "Layer 8: Arithmetic"),
+    ]
+    if not isinstance(result, dict):
+        return []
+
+    overall_risk = (result.get("overall_risk") or "LOW").upper()
+    layer_results = result.get("layer_results")
+    if isinstance(layer_results, dict):
+        rows = []
+        handled_keys = set()
+        for layer_key, layer_label in layer_order:
+            handled_keys.add(layer_key)
+            findings = layer_results.get(layer_key, []) or []
+            findings = findings if isinstance(findings, list) else []
+            highest = next(
+                (
+                    level
+                    for level in ("HIGH", "MEDIUM", "LOW")
+                    if any(
+                        isinstance(finding, dict)
+                        and (finding.get("severity") or "").upper() == level
+                        for finding in findings
+                    )
+                ),
+                "LOW",
+            )
+            anomaly_count = sum(
+                1
+                for finding in findings
+                if isinstance(finding, dict) and not _pdf_finding_is_benign_for_export(finding)
+            )
+            primary = findings[0] if findings and isinstance(findings[0], dict) else {}
+            detail_text = _pdf_detail_to_excel_text(primary.get("detail"))
+            rows.append(
+                {
+                    "file_name": file_name,
+                    "overall_risk": overall_risk,
+                    "layer": layer_label,
+                    "severity": highest,
+                    "finding": primary.get("message") or "No findings.",
+                    "anomaly_count": anomaly_count,
+                    "detail": detail_text,
+                }
+            )
+
+        for layer_key, findings in layer_results.items():
+            if layer_key in handled_keys:
+                continue
+            findings = findings if isinstance(findings, list) else []
+            for finding in findings:
+                if not isinstance(finding, dict):
+                    continue
+                rows.append(
+                    {
+                        "file_name": file_name,
+                        "overall_risk": overall_risk,
+                        "layer": str(layer_key),
+                        "severity": (finding.get("severity") or "LOW").upper(),
+                        "finding": finding.get("message") or finding.get("finding") or "",
+                        "anomaly_count": 0 if _pdf_finding_is_benign_for_export(finding) else 1,
+                        "detail": _pdf_detail_to_excel_text(finding.get("detail")),
+                    }
+                )
+        return rows
+
+    legacy_layers = result.get("layers", result.get("checks", result.get("findings", [])))
+    if isinstance(legacy_layers, dict):
+        legacy_layers = [
+            {"layer": layer_name, **layer_data}
+            if isinstance(layer_data, dict)
+            else {"layer": layer_name, "message": str(layer_data)}
+            for layer_name, layer_data in legacy_layers.items()
+        ]
+    rows = []
+    for layer in legacy_layers or []:
+        if not isinstance(layer, dict):
+            continue
+        rows.append(
+            {
+                "file_name": file_name,
+                "overall_risk": overall_risk,
+                "layer": layer.get("layer", layer.get("name", "")),
+                "severity": (layer.get("severity") or layer.get("risk") or "LOW").upper(),
+                "finding": layer.get("message", layer.get("finding", layer.get("description", ""))),
+                "anomaly_count": 0 if _pdf_finding_is_benign_for_export(layer) else 1,
+                "detail": _pdf_detail_to_excel_text(layer.get("detail", layer.get("details", ""))),
+            }
+        )
+    return rows
+
+
+def _top_counterparty_excel_rows(cp_ledger: dict, amount_column: str, count_column: str) -> List[dict]:
+    counterparties = cp_ledger.get("counterparties", []) if isinstance(cp_ledger, dict) else []
+    rows = []
+    for cp in counterparties or []:
+        if not isinstance(cp, dict):
+            continue
+        amount = safe_float(cp.get(amount_column, 0))
+        if amount <= 0:
+            continue
+        rows.append(
+            {
+                "Counterparty": cp.get("counterparty_name", cp.get("counterparty", "")),
+                "Total Txn": int(safe_float(cp.get(count_column, cp.get("transaction_count", 0)))),
+                "Total Amnt of Txn": f"RM {amount:,.2f}",
+                "_sort_amount": amount,
+            }
+        )
+
+    rows.sort(key=lambda row: row["_sort_amount"], reverse=True)
+    return [
+        {key: value for key, value in row.items() if key != "_sort_amount"}
+        for row in rows[:10]
+    ]
+
+
 def generate_excel_report(data: dict) -> BytesIO:
     """Generate a multi-sheet XLSX report matching the HTML report tabs."""
     report_data = normalize_report_data_for_export(data)
@@ -3053,6 +3200,8 @@ def generate_excel_report(data: dict) -> BytesIO:
     loans = report_data.get("loan_transactions", {}) or {}
     flags = report_data.get("flags", {}) or {}
     cp_ledger = report_data.get("counterparty_ledger", {}) or {}
+    if (not cp_ledger or not cp_ledger.get("counterparties")) and report_data.get("transactions"):
+        cp_ledger = build_track2_counterparty_ledger(report_data.get("transactions", []))
     parsing = report_data.get("parsing_metadata", {}) or {}
     pdf_integrity = report_data.get("pdf_integrity", {}) or {}
 
@@ -3101,6 +3250,25 @@ def generate_excel_report(data: dict) -> BytesIO:
             "Large Transactions",
             _records_to_excel_df(large_txns),
             f"Large Transactions (≥ RM {report_data.get('consolidated', {}).get('high_value_threshold', 100000):,.0f})",
+        )
+
+        _write_excel_sheet(
+            writer,
+            "Top 10 Credit CP",
+            _records_to_excel_df(
+                _top_counterparty_excel_rows(cp_ledger, "total_credits", "credit_count"),
+                ["Counterparty", "Total Txn", "Total Amnt of Txn"],
+            ),
+            "Top 10 Counterparties by Credit",
+        )
+        _write_excel_sheet(
+            writer,
+            "Top 10 Debit CP",
+            _records_to_excel_df(
+                _top_counterparty_excel_rows(cp_ledger, "total_debits", "debit_count"),
+                ["Counterparty", "Total Txn", "Total Amnt of Txn"],
+            ),
+            "Top 10 Counterparties by Debit",
         )
 
         cp_rows = _records_to_excel_df(cp_ledger.get("counterparties", []))
@@ -3183,8 +3351,16 @@ def generate_excel_report(data: dict) -> BytesIO:
             integrity_rows = []
             for file_name, result in pdf_integrity.items():
                 if isinstance(result, dict):
-                    integrity_rows.append({"file_name": file_name, **result})
-            _write_excel_sheet(writer, "Fraud Detector", _records_to_excel_df(integrity_rows), "Fraud Detector")
+                    integrity_rows.extend(_normalise_pdf_integrity_layer_rows(file_name, result))
+            _write_excel_sheet(
+                writer,
+                "Fraud Detector",
+                _records_to_excel_df(
+                    integrity_rows,
+                    ["file_name", "overall_risk", "layer", "severity", "finding", "anomaly_count", "detail"],
+                ),
+                "Fraud Detector",
+            )
 
         if report_data.get("transactions"):
             _write_excel_sheet(
