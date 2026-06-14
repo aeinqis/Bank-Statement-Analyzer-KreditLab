@@ -3044,6 +3044,71 @@ def _write_excel_sheet(writer, sheet_name: str, df: pd.DataFrame, title: str | N
         worksheet.autofilter(startrow, 0, startrow + len(df_to_write), max(len(df_to_write.columns) - 1, 0))
 
 
+def _write_excel_sections_sheet(writer, sheet_name: str, sections: List[Tuple[str, pd.DataFrame]]) -> None:
+    workbook = writer.book
+    safe_sheet_name = sheet_name[:31]
+    worksheet = workbook.add_worksheet(safe_sheet_name)
+    writer.sheets[safe_sheet_name] = worksheet
+
+    header_format = workbook.add_format(
+        {"bold": True, "font_color": "white", "bg_color": "#1B4F72", "border": 1}
+    )
+    title_format = workbook.add_format({"bold": True, "font_size": 14, "font_color": "#1B4F72"})
+    money_format = workbook.add_format({"num_format": "#,##0.00"})
+    startrow = 0
+    max_col_widths = {}
+
+    for title, df in sections:
+        df_to_write = df.copy()
+        for col in df_to_write.columns:
+            if pd.api.types.is_numeric_dtype(df_to_write[col]):
+                continue
+            df_to_write[col] = df_to_write[col].apply(
+                lambda x: str(x) if x is not None and pd.notna(x) else ""
+            )
+
+        worksheet.write(startrow, 0, title, title_format)
+        header_row = startrow + 2
+
+        for col_idx, col_name in enumerate(df_to_write.columns):
+            try:
+                col_values = df_to_write[col_name].astype(str).tolist() if not df_to_write.empty else []
+                max_len = len(str(col_name))
+                for val in col_values[:200]:
+                    if val:
+                        max_len = max(max_len, len(val))
+                col_width = min(max(max_len + 2, 12), 42)
+            except Exception:
+                col_width = 15
+            max_col_widths[col_idx] = max(max_col_widths.get(col_idx, 0), col_width)
+
+            if any(token in str(col_name).lower() for token in ("amount", "credit", "debit", "balance", "gross", "net")):
+                worksheet.set_column(col_idx, col_idx, max_col_widths[col_idx], money_format)
+            else:
+                worksheet.set_column(col_idx, col_idx, max_col_widths[col_idx])
+
+        if len(df_to_write.columns):
+            if df_to_write.empty:
+                for col_idx, col_name in enumerate(df_to_write.columns):
+                    worksheet.write(header_row, col_idx, col_name, header_format)
+            else:
+                worksheet.add_table(
+                    header_row,
+                    0,
+                    header_row + len(df_to_write),
+                    len(df_to_write.columns) - 1,
+                    {
+                        "columns": [{"header": str(col_name)} for col_name in df_to_write.columns],
+                        "data": [list(row) for row in df_to_write.itertuples(index=False, name=None)],
+                        "style": "Table Style Medium 2",
+                    },
+                )
+
+        startrow = header_row + len(df_to_write) + 3
+
+    worksheet.freeze_panes(3, 0)
+
+
 def _pdf_detail_to_excel_text(value) -> str:
     if value in (None, "", [], {}):
         return ""
@@ -3193,7 +3258,6 @@ def _top_counterparty_excel_rows(cp_ledger: dict, amount_column: str, count_colu
 def generate_excel_report(data: dict) -> BytesIO:
     """Generate a multi-sheet XLSX report matching the HTML report tabs."""
     report_data = normalize_report_data_for_export(data)
-    top_parties = report_data.get("top_parties", {}) or {}
     own_related = report_data.get("own_related_transactions", {}) or {}
     if isinstance(own_related, list):
         own_related = {"transactions": own_related, "summary": {}}
@@ -3232,14 +3296,26 @@ def generate_excel_report(data: dict) -> BytesIO:
             "Monthly Cash Flow",
         )
 
-        party_rows = []
-        for party_type, parties in (
-            ("Top Payer", top_parties.get("top_payers") or top_parties.get("top_creditors") or []),
-            ("Top Payee", top_parties.get("top_payees") or top_parties.get("top_debtors") or []),
-        ):
-            for idx, row in enumerate(parties, start=1):
-                party_rows.append({"type": party_type, "rank": row.get("rank", idx), **row})
-        _write_excel_sheet(writer, "Top Parties", _records_to_excel_df(party_rows), "Top Parties")
+        _write_excel_sections_sheet(
+            writer,
+            "Top Parties",
+            [
+                (
+                    "Top 10 Counterparties by Credit",
+                    _records_to_excel_df(
+                        _top_counterparty_excel_rows(cp_ledger, "total_credits", "credit_count"),
+                        ["Counterparty", "Total Txn", "Total Amnt of Txn"],
+                    ),
+                ),
+                (
+                    "Top 10 Counterparties by Debit",
+                    _records_to_excel_df(
+                        _top_counterparty_excel_rows(cp_ledger, "total_debits", "debit_count"),
+                        ["Counterparty", "Total Txn", "Total Amnt of Txn"],
+                    ),
+                ),
+            ],
+        )
 
         large_txns = report_data.get("large_transactions", [])
         if not large_txns:
@@ -3250,25 +3326,6 @@ def generate_excel_report(data: dict) -> BytesIO:
             "Large Transactions",
             _records_to_excel_df(large_txns),
             f"Large Transactions (≥ RM {report_data.get('consolidated', {}).get('high_value_threshold', 100000):,.0f})",
-        )
-
-        _write_excel_sheet(
-            writer,
-            "Top 10 Credit CP",
-            _records_to_excel_df(
-                _top_counterparty_excel_rows(cp_ledger, "total_credits", "credit_count"),
-                ["Counterparty", "Total Txn", "Total Amnt of Txn"],
-            ),
-            "Top 10 Counterparties by Credit",
-        )
-        _write_excel_sheet(
-            writer,
-            "Top 10 Debit CP",
-            _records_to_excel_df(
-                _top_counterparty_excel_rows(cp_ledger, "total_debits", "debit_count"),
-                ["Counterparty", "Total Txn", "Total Amnt of Txn"],
-            ),
-            "Top 10 Counterparties by Debit",
         )
 
         cp_rows = _records_to_excel_df(cp_ledger.get("counterparties", []))
