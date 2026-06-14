@@ -170,14 +170,53 @@ def generate_interactive_html(data):
     has_parsing = bool(parsing)
     has_monthly_bd = any(p.get('monthly_breakdown') for p in (top_parties.get('top_payers') or top_parties.get('top_creditors') or []) + (top_parties.get('top_payees') or top_parties.get('top_debtors') or []))
 
-    # v6.2.1: Data quality detection
+    # v6.2.1: Data quality detection. Prefer parsing_metadata checks because
+    # this is the same source rendered in Balance Reconciliation Detail.
+    parsing_checks = parsing.get('account_month_checks', []) if isinstance(parsing, dict) else []
+    recon_lookup = {}
+    for chk in parsing_checks:
+        month_key = str(chk.get('month', '') or '')
+        account_key = str(chk.get('account_number', '') or '')
+        recon_lookup[(month_key, account_key)] = chk
+
+    def _recon_check_for_month_row(row):
+        if not isinstance(row, dict):
+            return None
+        month_key = str(row.get('month', '') or '')
+        account_key = str(row.get('account_number', '') or '')
+        return recon_lookup.get((month_key, account_key)) or recon_lookup.get((month_key, ''))
+
+    def _recon_status_for_month_row(row):
+        chk = _recon_check_for_month_row(row)
+        if chk is not None:
+            return 'PASS' if chk.get('passed', False) else 'FAIL'
+        return row.get('reconciliation_status', '')
+
+    def _recon_gap_count_for_month_row(row):
+        chk = _recon_check_for_month_row(row)
+        if chk is not None:
+            return int(chk.get('extraction_gaps', 0) or 0)
+        return int(row.get('extraction_gaps', 0) or 0)
+
     data_completeness = consol.get('data_completeness', 'COMPLETE')
-    has_recon = any(m.get('reconciliation_status') for m in monthly)
-    is_incomplete = data_completeness == 'INCOMPLETE'
-    total_missing_dr = consol.get('total_missing_debits', 0) or 0
-    total_missing_cr = consol.get('total_missing_credits', 0) or 0
-    months_with_gaps = consol.get('months_with_gaps', 0) or 0
-    total_gaps = consol.get('total_extraction_gaps', 0) or 0
+    has_recon = bool(parsing_checks) or any(m.get('reconciliation_status') for m in monthly)
+    if parsing_checks:
+        failed_checks = [chk for chk in parsing_checks if not chk.get('passed', False)]
+        is_incomplete = bool(failed_checks)
+        months_with_gaps = len({str(chk.get('month', '') or '') for chk in failed_checks if chk.get('month')})
+        total_gaps = sum(int(chk.get('extraction_gaps', 0) or 0) for chk in parsing_checks)
+        if not failed_checks:
+            total_missing_dr = 0
+            total_missing_cr = 0
+        else:
+            total_missing_dr = consol.get('total_missing_debits', 0) or 0
+            total_missing_cr = consol.get('total_missing_credits', 0) or 0
+    else:
+        is_incomplete = data_completeness == 'INCOMPLETE'
+        total_missing_dr = consol.get('total_missing_debits', 0) or 0
+        total_missing_cr = consol.get('total_missing_credits', 0) or 0
+        months_with_gaps = consol.get('months_with_gaps', 0) or 0
+        total_gaps = consol.get('total_extraction_gaps', 0) or 0
     dq_warning = consol.get('data_quality_warning', '')
 
     company = r.get('company_name', 'Company')
@@ -190,21 +229,43 @@ def generate_interactive_html(data):
     dq_banner_html = ''
     if has_recon:
         if is_incomplete:
-            affected_months = ', '.join(m.get('month', '') for m in monthly if m.get('reconciliation_status') == 'FAIL')
-            dq_banner_html = f'''
-            <div class="dq-banner dq-fail">
-                <div class="dq-icon">⚠️</div>
-                <div>
-                    <div class="dq-title">Incomplete Extraction — {months_with_gaps} of {total_months} Months Affected</div>
-                    <div class="dq-detail">Balance trail reconciliation detected {total_gaps} extraction gap(s) where transactions exist in the source PDF but were not captured. Figures marked with ⚠️ are understated.</div>
-                    <div class="dq-stats">
-                        <div><div class="dq-stat-label">Missing Debits</div><div class="dq-stat-val">RM {total_missing_dr:,.2f}</div></div>
-                        <div><div class="dq-stat-label">Missing Credits</div><div class="dq-stat-val" style="color:var(--green)">RM {total_missing_cr:,.2f}</div></div>
-                        <div><div class="dq-stat-label">Gaps</div><div class="dq-stat-val">{total_gaps}</div></div>
-                        <div><div class="dq-stat-label">Months Affected</div><div class="dq-stat-val">{affected_months}</div></div>
+            if parsing_checks:
+                failed_months = [chk for chk in parsing_checks if not chk.get('passed', False)]
+            else:
+                failed_months = [m for m in monthly if m.get('reconciliation_status') == 'FAIL']
+            affected_months = ', '.join(sorted({str(m.get('month', '') or '') for m in failed_months if m.get('month')}))
+            has_identified_gaps = total_gaps > 0 or total_missing_dr > 0 or total_missing_cr > 0
+            if has_identified_gaps:
+                dq_banner_html = f'''
+                <div class="dq-banner dq-fail">
+                    <div class="dq-icon">⚠️</div>
+                    <div>
+                        <div class="dq-title">Incomplete Extraction — {months_with_gaps} of {total_months} Months Affected</div>
+                        <div class="dq-detail">Balance trail reconciliation detected {total_gaps} extraction gap(s) where transactions exist in the source PDF but were not captured. Figures marked with ⚠️ are understated.</div>
+                        <div class="dq-stats">
+                            <div><div class="dq-stat-label">Missing Debits</div><div class="dq-stat-val">RM {total_missing_dr:,.2f}</div></div>
+                            <div><div class="dq-stat-label">Missing Credits</div><div class="dq-stat-val" style="color:var(--green)">RM {total_missing_cr:,.2f}</div></div>
+                            <div><div class="dq-stat-label">Gaps</div><div class="dq-stat-val">{total_gaps}</div></div>
+                            <div><div class="dq-stat-label">Months Affected</div><div class="dq-stat-val">{affected_months}</div></div>
+                        </div>
                     </div>
-                </div>
-            </div>'''
+                </div>'''
+            else:
+                largest_delta = max((abs(float(m.get('reconciliation_delta') or 0)) for m in failed_months), default=0)
+                dq_banner_html = f'''
+                <div class="dq-banner dq-fail">
+                    <div class="dq-icon">⚠️</div>
+                    <div>
+                        <div class="dq-title">Balance Reconciliation Warning — {months_with_gaps} of {total_months} Months Failed</div>
+                        <div class="dq-detail">No extraction gaps were identified, but the expected closing balance does not match the statement closing balance for the affected month(s). Review opening balance, closing balance, and parsed transaction totals.</div>
+                        <div class="dq-stats">
+                            <div><div class="dq-stat-label">Failed Checks</div><div class="dq-stat-val">{len(failed_months)}</div></div>
+                            <div><div class="dq-stat-label">Largest Delta</div><div class="dq-stat-val">RM {largest_delta:,.2f}</div></div>
+                            <div><div class="dq-stat-label">Gaps</div><div class="dq-stat-val">{total_gaps}</div></div>
+                            <div><div class="dq-stat-label">Months Affected</div><div class="dq-stat-val">{affected_months}</div></div>
+                        </div>
+                    </div>
+                </div>'''
         else:
             dq_banner_html = f'''
             <div class="dq-banner dq-pass">
@@ -372,9 +433,9 @@ def generate_interactive_html(data):
             # v6.2.1: aggregate reconciliation for multi-account month
             month_recon_cell = ''
             if has_recon:
-                any_fail = any(r.get('reconciliation_status') == 'FAIL' for r in rows)
+                any_fail = any(_recon_status_for_month_row(r) == 'FAIL' for r in rows)
                 if any_fail:
-                    total_gaps = sum(r.get('extraction_gaps', 0) for r in rows)
+                    total_gaps = sum(_recon_gap_count_for_month_row(r) for r in rows)
                     total_miss = sum(r.get('missing_debit_amount', 0) for r in rows)
                     month_recon_cell = f'<td><span class="recon-badge fail">✗ FAIL</span> <span class="gap-pill">{total_gaps} gap{"s" if total_gaps > 1 else ""} · RM {total_miss:,.0f}</span></td>'
                 else:
@@ -418,12 +479,12 @@ def generate_interactive_html(data):
         else:
             # Single account or v6.0.0 consolidated — single row per month
             m = rows[0] if rows else {}
-            recon_status = m.get('reconciliation_status', '')
+            recon_status = _recon_status_for_month_row(m)
             row_class = ' class="row-fail"' if recon_status == 'FAIL' else ''
             recon_cell = ''
             if has_recon:
                 if recon_status == 'FAIL':
-                    gap_count = m.get('extraction_gaps', 0)
+                    gap_count = _recon_gap_count_for_month_row(m)
                     miss_dr = m.get('missing_debit_amount', 0)
                     recon_cell = f'<td><span class="recon-badge fail">✗ FAIL</span> <span class="gap-pill">{gap_count} gap{"s" if gap_count > 1 else ""} · RM {miss_dr:,.0f}</span></td>'
                 else:
@@ -1343,9 +1404,10 @@ def generate_interactive_html(data):
     parsing_tab_html = ''
     if has_parsing:
         success_rate = parsing.get('overall_success_rate', 0)
-        rate_color = 'green' if success_rate >= 95 else 'amber' if success_rate >= 80 else 'red'
+        success_rate_pct = success_rate * 100 if success_rate <= 1 else success_rate
+        rate_color = 'green' if success_rate_pct >= 95 else 'amber' if success_rate_pct >= 80 else 'red'
         # v6.2.1: Additional gap stats
-        p_total_gaps = len(parsing.get('extraction_gaps', []) or [])
+        p_total_gaps = int(consol.get('total_extraction_gaps') or len(parsing.get('extraction_gaps', []) or []))
         p_missing_dr = consol.get('total_missing_debits', 0) or 0
         p_missing_cr = consol.get('total_missing_credits', 0) or 0
         gap_cards = ''
@@ -1358,7 +1420,7 @@ def generate_interactive_html(data):
         <div id="tab-parsing" class="tab">
             {dq_banner_html}
             <div class="summary-grid">
-                <div class="summary-card"><div class="val" style="color:var(--{rate_color})">{success_rate:.1f}%</div><div class="lbl">Success Rate</div></div>
+                <div class="summary-card"><div class="val" style="color:var(--{rate_color})">{success_rate_pct:.1f}%</div><div class="lbl">Success Rate</div></div>
                 <div class="summary-card"><div class="val">{parsing.get('total_transactions_extracted',0):,}</div><div class="lbl">Txns Extracted</div></div>
                 <div class="summary-card"><div class="val">{parsing.get('total_balance_checks_passed',0)}/{parsing.get('total_balance_checks',0)}</div><div class="lbl">Balance Checks Passed</div></div>
                 {gap_cards}
