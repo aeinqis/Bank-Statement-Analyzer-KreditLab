@@ -2646,6 +2646,151 @@ def get_round_transactions_for_report(data: dict) -> List[dict]:
     return rows
 
 
+def apply_standard_monthly_summary_to_report(data: dict, monthly_summary: List[dict]) -> dict:
+    """Align report balances with the Railway standardized monthly summary."""
+    if not isinstance(data, dict) or not monthly_summary:
+        return data
+
+    def has_value(value) -> bool:
+        return value is not None and str(value).strip() != ""
+
+    def num(row: dict, key: str):
+        if not has_value(row.get(key)):
+            return None
+        return round(safe_float(row.get(key)), 2)
+
+    summary_by_key = {}
+    summary_by_month = {}
+    month_counts = {}
+    for row in monthly_summary or []:
+        if not isinstance(row, dict):
+            continue
+        month = str(row.get("month", "") or "")
+        account = str(row.get("account_no", row.get("account_number", "")) or "")
+        if not month:
+            continue
+        if account:
+            summary_by_key[(month, account)] = row
+        month_counts[month] = month_counts.get(month, 0) + 1
+        summary_by_month.setdefault(month, row)
+
+    def find_summary(row: dict):
+        month = str(row.get("month", "") or "")
+        account = str(row.get("account_number", row.get("account_no", "")) or "")
+        if (month, account) in summary_by_key:
+            return summary_by_key[(month, account)]
+        if month_counts.get(month) == 1:
+            return summary_by_month.get(month)
+        return None
+
+    monthly_rows = data.get("monthly_analysis", [])
+    if isinstance(monthly_rows, list):
+        for row in monthly_rows:
+            if not isinstance(row, dict):
+                continue
+            ref = find_summary(row)
+            if not ref:
+                continue
+            opening = num(ref, "opening_balance")
+            closing = num(ref, "ending_balance")
+            total_credit = num(ref, "total_credit")
+            total_debit = num(ref, "total_debit")
+            if opening is not None:
+                row["opening_balance"] = opening
+            if closing is not None:
+                row["closing_balance"] = closing
+            if total_credit is not None:
+                row["gross_credits"] = total_credit
+            if total_debit is not None:
+                row["gross_debits"] = total_debit
+            if has_value(ref.get("transaction_count")):
+                row["transaction_count"] = int(safe_float(ref.get("transaction_count")))
+
+    account_refs = {}
+    for row in monthly_summary or []:
+        if not isinstance(row, dict):
+            continue
+        account = str(row.get("account_no", row.get("account_number", "")) or "")
+        if account:
+            account_refs.setdefault(account, []).append(row)
+
+    accounts = data.get("accounts", [])
+    if isinstance(accounts, list):
+        for account in accounts:
+            if not isinstance(account, dict):
+                continue
+            account_number = str(account.get("account_number", account.get("account_no", "")) or "")
+            refs = sorted(account_refs.get(account_number, []), key=lambda item: str(item.get("month", "")))
+            if not refs and len(account_refs) == 1:
+                refs = sorted(next(iter(account_refs.values())), key=lambda item: str(item.get("month", "")))
+            if not refs:
+                continue
+            opening = num(refs[0], "opening_balance")
+            closing = num(refs[-1], "ending_balance")
+            if opening is not None:
+                account["opening_balance"] = opening
+            if closing is not None:
+                account["closing_balance"] = closing
+            account["total_credits"] = round(sum(safe_float(ref.get("total_credit", 0)) for ref in refs), 2)
+            account["total_debits"] = round(sum(safe_float(ref.get("total_debit", 0)) for ref in refs), 2)
+            account["transaction_count"] = int(sum(safe_float(ref.get("transaction_count", 0)) for ref in refs))
+
+    parsing = data.get("parsing_metadata", {})
+    checks = parsing.get("account_month_checks", []) if isinstance(parsing, dict) else []
+    if isinstance(checks, list):
+        for chk in checks:
+            if not isinstance(chk, dict):
+                continue
+            ref = find_summary(chk)
+            if not ref:
+                continue
+            opening = num(ref, "opening_balance")
+            closing = num(ref, "ending_balance")
+            total_credit = num(ref, "total_credit")
+            total_debit = num(ref, "total_debit")
+            if opening is not None:
+                chk["opening_balance"] = opening
+            if closing is not None:
+                chk["closing_balance"] = closing
+            if total_credit is not None:
+                chk["gross_credits"] = total_credit
+            if total_debit is not None:
+                chk["gross_debits"] = total_debit
+            if has_value(ref.get("transaction_count")):
+                chk["transactions_extracted"] = int(safe_float(ref.get("transaction_count")))
+            if all(value is not None for value in (opening, closing, total_credit, total_debit)):
+                expected = round(opening + total_credit - total_debit, 2)
+                delta = round(closing - expected, 2)
+                chk["expected_closing"] = expected
+                chk["reconciliation_delta"] = delta
+                chk["passed"] = abs(delta) <= 0.01
+                chk.setdefault("extraction_gaps", 0)
+
+        if checks:
+            passed_count = sum(1 for chk in checks if chk.get("passed", False))
+            parsing["total_balance_checks"] = len(checks)
+            parsing["total_balance_checks_passed"] = passed_count
+            parsing["overall_success_rate"] = round(passed_count / len(checks), 4)
+            parsing["total_transactions_extracted"] = sum(
+                int(safe_float(chk.get("transactions_extracted", 0))) for chk in checks
+            )
+            data["parsing_metadata"] = parsing
+
+            consolidated = data.setdefault("consolidated", {})
+            failed_checks = [chk for chk in checks if not chk.get("passed", False)]
+            total_extraction_gaps = sum(int(chk.get("extraction_gaps", 0) or 0) for chk in checks)
+            consolidated["data_completeness"] = "INCOMPLETE" if failed_checks else "COMPLETE"
+            consolidated["months_with_gaps"] = len(
+                {str(chk.get("month", "") or "") for chk in failed_checks if chk.get("month")}
+            )
+            consolidated["total_extraction_gaps"] = total_extraction_gaps
+            if not failed_checks:
+                consolidated["total_missing_debits"] = 0.0
+                consolidated["total_missing_credits"] = 0.0
+
+    return data
+
+
 def build_report_data_from_analysis(
     transactions: List[dict],
     monthly_summary: List[dict],
@@ -2705,6 +2850,8 @@ def build_report_data_from_analysis(
         adapted_data['consolidated']['high_value_threshold'] = threshold
         # Also store as large_credit_threshold for consistency
         adapted_data['consolidated']['large_credit_threshold'] = threshold
+
+    adapted_data = apply_standard_monthly_summary_to_report(adapted_data, monthly_summary)
     
     return adapted_data
 
@@ -2750,6 +2897,8 @@ def normalize_report_data_for_export(data: dict) -> dict:
     round_transactions = get_round_transactions_for_report(normalized)
     normalized["round_transactions"] = round_transactions
     normalized["round_figure_credits"] = round_transactions
+    if source.get("monthly_summary"):
+        normalized = apply_standard_monthly_summary_to_report(normalized, source.get("monthly_summary", []))
     return normalized
 
 
@@ -3146,6 +3295,7 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
             round_transactions = build_round_transactions(transactions)
             data['round_transactions'] = round_transactions
             data['round_figure_credits'] = round_transactions
+            data = apply_standard_monthly_summary_to_report(data, monthly_summary)
             
             return generate_interactive_html(data)
         except Exception as _track2_err:
