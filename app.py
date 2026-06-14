@@ -2646,10 +2646,58 @@ def get_round_transactions_for_report(data: dict) -> List[dict]:
     return rows
 
 
+def standardize_monthly_summary_balance_chain(monthly_summary: List[dict]) -> List[dict]:
+    """Use opening + net movement as the standardized closing balance chain."""
+    rows = [dict(row) for row in (monthly_summary or []) if isinstance(row, dict)]
+    grouped: Dict[str, List[dict]] = {}
+    for row in rows:
+        account = str(row.get("account_no", row.get("account_number", "")) or "__single_account__")
+        grouped.setdefault(account, []).append(row)
+
+    for account_rows in grouped.values():
+        account_rows.sort(key=lambda row: str(row.get("month", "") or ""))
+        previous_ending = None
+
+        for row in account_rows:
+            total_credit = safe_float(row.get("total_credit", row.get("gross_credits", 0)))
+            total_debit = safe_float(row.get("total_debit", row.get("gross_debits", 0)))
+            net_change = row.get("net_change")
+            if net_change is None:
+                net_change = round(total_credit - total_debit, 2)
+                row["net_change"] = net_change
+
+            opening = row.get("opening_balance")
+            if previous_ending is not None:
+                opening = previous_ending
+                row["opening_balance"] = opening
+            elif opening is None or str(opening).strip() == "":
+                raw_ending = row.get("ending_balance", row.get("closing_balance"))
+                if raw_ending is not None and str(raw_ending).strip() != "":
+                    opening = round(safe_float(raw_ending) - safe_float(net_change), 2)
+                    row["opening_balance"] = opening
+
+            if opening is None or str(opening).strip() == "":
+                raw_ending = row.get("ending_balance", row.get("closing_balance"))
+                if raw_ending is not None and str(raw_ending).strip() != "":
+                    previous_ending = round(safe_float(raw_ending), 2)
+                continue
+
+            expected_ending = round(safe_float(opening) + safe_float(net_change), 2)
+            raw_ending = row.get("ending_balance", row.get("closing_balance"))
+            if raw_ending is None or abs(expected_ending - safe_float(raw_ending)) > 0.01:
+                row["raw_ending_balance"] = raw_ending
+            row["ending_balance"] = expected_ending
+            row["closing_balance"] = expected_ending
+            previous_ending = expected_ending
+
+    return rows
+
+
 def apply_standard_monthly_summary_to_report(data: dict, monthly_summary: List[dict]) -> dict:
     """Align report balances with the Railway standardized monthly summary."""
     if not isinstance(data, dict) or not monthly_summary:
         return data
+    monthly_summary = standardize_monthly_summary_balance_chain(monthly_summary)
 
     def has_value(value) -> bool:
         return value is not None and str(value).strip() != ""
@@ -5699,10 +5747,19 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
                     except Exception:
                         r["opening_balance"] = None
 
+        opening = r.get("opening_balance")
+        net_change = r.get("net_change")
+        if opening is not None and net_change is not None:
+            expected_ending = round(safe_float(opening) + safe_float(net_change), 2)
+            raw_ending = r.get("ending_balance")
+            if raw_ending is None or abs(expected_ending - safe_float(raw_ending)) > 0.01:
+                r["raw_ending_balance"] = raw_ending
+                r["ending_balance"] = expected_ending
+
         if r.get("ending_balance") is not None:
             prev_end = safe_float(r.get("ending_balance"))
 
-    return monthly_summary_sorted
+    return standardize_monthly_summary_balance_chain(monthly_summary_sorted)
 
 
 def present_monthly_summary_standard(rows: List[dict]) -> List[dict]:
