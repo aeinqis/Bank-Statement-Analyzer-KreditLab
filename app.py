@@ -772,12 +772,15 @@ def generate_interactive_html(data):
 
         # ── Large transactions (both credits and debits above threshold) ──
     # Get threshold from consolidated or report_info
-    large_threshold = consol.get('high_value_threshold', 100000)
-    if large_threshold is None or large_threshold == 0:
+    large_threshold = safe_float(
+        consol.get('high_value_threshold')
+        or consol.get('large_credit_threshold')
+        or _fallback_summary.get('high_value_threshold')
+        or _fallback_config.get('large_credit_threshold')
+        or 100000
+    )
+    if large_threshold <= 0:
         large_threshold = 100000
-    
-    # Debug: Print to console for troubleshooting
-    print(f"[DEBUG] Large threshold: {large_threshold}")
     
     # Get large transactions data - support multiple formats
     large_txns = data.get('large_transactions', [])
@@ -787,7 +790,6 @@ def generate_interactive_html(data):
         # Use the external build_large_transactions function
         try:
             large_txns = build_large_transactions(data.get('transactions', []), large_threshold)
-            print(f"[DEBUG] Built {len(large_txns)} large transactions from transactions")
         except Exception as e:
             print(f"[DEBUG] Error building large transactions: {e}")
             large_txns = []
@@ -806,9 +808,6 @@ def generate_interactive_html(data):
                     'balance': t.get('balance', 0),
                     'type': 'CREDIT'
                 })
-        print(f"[DEBUG] Converted {len(large_txns)} from large_credits")
-    
-    print(f"[DEBUG] Final large_txns count: {len(large_txns)}")
     
     # Build the large transaction rows HTML as a proper table
     large_txn_rows = ""
@@ -863,6 +862,13 @@ def generate_interactive_html(data):
                 </tr>'''
     if not rf_cr_rows:
         rf_cr_rows = '<tr><td colspan="4" class="note">No round-figure transactions detected.</td></tr>'
+
+    _sync_transaction_pattern_flags(
+        data,
+        round_transactions=round_figure_credits,
+        large_transactions=large_txns,
+        large_threshold=large_threshold,
+    )
 
     # ── Related party transactions ──
     rp_summary = own_related.get('summary', {}) or {}
@@ -2855,6 +2861,81 @@ def _sync_data_quality_status(data: dict) -> dict:
     return data
 
 
+def _sync_transaction_pattern_flags(
+    data: dict,
+    *,
+    round_transactions: List[dict] | None = None,
+    large_transactions: List[dict] | None = None,
+    large_threshold: float | int | str | None = None,
+) -> dict:
+    """Keep pattern risk-signal remarks aligned with the rendered detail tabs."""
+    if not isinstance(data, dict):
+        return data
+
+    flags = data.get("flags")
+    indicators = flags.get("indicators", []) if isinstance(flags, dict) else []
+    if not isinstance(indicators, list):
+        return data
+
+    if round_transactions is None:
+        round_transactions = get_round_transactions_for_report(data)
+    if large_transactions is None:
+        threshold = safe_float(large_threshold)
+        if threshold <= 0:
+            threshold = safe_float((data.get("consolidated") or {}).get("high_value_threshold")) or 100000.0
+        large_transactions = data.get("large_transactions") or []
+        if not large_transactions and data.get("transactions"):
+            large_transactions = build_large_transactions(data.get("transactions", []), threshold)
+
+    threshold = safe_float(large_threshold)
+    if threshold <= 0:
+        threshold = safe_float((data.get("consolidated") or {}).get("high_value_threshold")) or 100000.0
+
+    round_count = len(round_transactions or [])
+    round_total = round(
+        sum(abs(safe_float(row.get("amount", row.get("credit", row.get("debit", 0)))))
+            for row in (round_transactions or [])
+            if isinstance(row, dict)),
+        2,
+    )
+    large_count = len(large_transactions or [])
+    large_total = round(
+        sum(abs(safe_float(row.get("amount", row.get("credit", row.get("debit", 0)))))
+            for row in (large_transactions or [])
+            if isinstance(row, dict)),
+        2,
+    )
+    threshold_label = f"RM{threshold:,.0f}"
+
+    for flag in indicators:
+        if not isinstance(flag, dict):
+            continue
+        try:
+            flag_id = int(flag.get("id"))
+        except (TypeError, ValueError):
+            flag_id = None
+        flag_name = str(flag.get("name") or "")
+
+        if flag_id == 3 or flag_name.startswith("Round Figure"):
+            flag["name"] = "Round Figure Transactions (AML)"
+            flag["detected"] = round_count > 0
+            flag["remarks"] = (
+                f"{round_count} round-figure transactions totalling RM {round_total:,.2f}."
+                if round_count > 0
+                else "No round-figure transactions detected."
+            )
+        elif flag_id == 9 or flag_name.startswith("Large Credit") or flag_name.startswith("Large Transaction"):
+            flag["name"] = f"Large Transactions (>={threshold_label})"
+            flag["detected"] = large_count > 0
+            flag["remarks"] = (
+                f"{large_count} large transactions (>={threshold_label}) totalling RM {large_total:,.2f}."
+                if large_count > 0
+                else f"No transactions at or above {threshold_label}."
+            )
+
+    return data
+
+
 def standardize_monthly_summary_balance_chain(monthly_summary: List[dict]) -> List[dict]:
     """Use opening + net movement as the standardized closing balance chain."""
     rows = [dict(row) for row in (monthly_summary or []) if isinstance(row, dict)]
@@ -3109,6 +3190,12 @@ def build_report_data_from_analysis(
         adapted_data['consolidated']['large_credit_threshold'] = threshold
 
     adapted_data = apply_standard_monthly_summary_to_report(adapted_data, monthly_summary)
+    adapted_data = _sync_transaction_pattern_flags(
+        adapted_data,
+        round_transactions=round_transactions,
+        large_transactions=adapted_data.get('large_transactions', []),
+        large_threshold=threshold,
+    )
     
     return adapted_data
 
@@ -3151,11 +3238,29 @@ def normalize_report_data_for_export(data: dict) -> dict:
     normalized.setdefault("observations", {"positive": [], "concerns": []})
     normalized.setdefault("counterparty_ledger", {})
     normalized.setdefault("parsing_metadata", {})
+    threshold = safe_float(
+        normalized.get("consolidated", {}).get("high_value_threshold")
+        or normalized.get("consolidated", {}).get("large_credit_threshold")
+        or normalized.get("summary", {}).get("high_value_threshold")
+        or normalized.get("classification_config", {}).get("large_credit_threshold")
+    )
+    if threshold <= 0:
+        threshold = safe_float(normalized.get("summary", {}).get("high_value_threshold")) or 100000.0
+    if normalized.get("transactions"):
+        normalized["large_transactions"] = build_large_transactions(normalized.get("transactions", []), threshold)
+    else:
+        normalized.setdefault("large_transactions", [])
     round_transactions = get_round_transactions_for_report(normalized)
     normalized["round_transactions"] = round_transactions
     normalized["round_figure_credits"] = round_transactions
     if source.get("monthly_summary"):
         normalized = apply_standard_monthly_summary_to_report(normalized, source.get("monthly_summary", []))
+    normalized = _sync_transaction_pattern_flags(
+        normalized,
+        round_transactions=round_transactions,
+        large_transactions=normalized.get("large_transactions", []),
+        large_threshold=threshold,
+    )
     return normalized
 
 
@@ -3778,9 +3883,8 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
                 data['consolidated']['high_value_threshold'] = threshold
                 data['consolidated']['large_credit_threshold'] = threshold
             
-            # Ensure large_transactions is populated
-            if 'large_transactions' not in data or not data['large_transactions']:
-                data['large_transactions'] = build_large_transactions(transactions, threshold)
+            # Keep Large Transactions tied to the active UI threshold and include both sides.
+            data['large_transactions'] = build_large_transactions(transactions, threshold)
             data['transactions'] = transactions
             round_transactions = build_round_transactions(transactions)
             data['round_transactions'] = round_transactions
