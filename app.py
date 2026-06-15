@@ -161,6 +161,11 @@ def generate_interactive_html(data):
     flags_data = data.get('flags', {})
     obs = normalize_observations(data.get('observations', {}))
     parsing = data.get('parsing_metadata', {})
+    _sync_data_quality_status(data)
+    consol = data.get('consolidated', {})
+    flags_data = data.get('flags', {})
+    obs = normalize_observations(data.get('observations', {}))
+    parsing = data.get('parsing_metadata', {})
 
     # Version detection
     schema_v = r.get('schema_version', '')
@@ -1407,7 +1412,10 @@ def generate_interactive_html(data):
         success_rate_pct = success_rate * 100 if success_rate <= 1 else success_rate
         rate_color = 'green' if success_rate_pct >= 95 else 'amber' if success_rate_pct >= 80 else 'red'
         # v6.2.1: Additional gap stats
-        p_total_gaps = int(consol.get('total_extraction_gaps') or len(parsing.get('extraction_gaps', []) or []))
+        if 'total_extraction_gaps' in consol:
+            p_total_gaps = int(consol.get('total_extraction_gaps') or 0)
+        else:
+            p_total_gaps = len(parsing.get('extraction_gaps', []) or [])
         p_missing_dr = consol.get('total_missing_debits', 0) or 0
         p_missing_cr = consol.get('total_missing_credits', 0) or 0
         gap_cards = ''
@@ -1451,7 +1459,7 @@ def generate_interactive_html(data):
         parsing_tab_html += '''</tbody></table></div></div></div>'''
 
         # v6.2.1: Extraction gap detail section within Parsing QC tab
-        p_extraction_gaps = parsing.get('extraction_gaps', []) or []
+        p_extraction_gaps = (parsing.get('extraction_gaps', []) or []) if is_incomplete else []
         if p_extraction_gaps:
             parsing_tab_html += '''<div class="section"><div class="section-head"><h2 style="color:var(--red)">Extraction Gap Details</h2></div><div class="section-body" style="padding:0"><div class="table-wrap"><table>
                 <thead><tr><th>Month</th><th>Date</th><th>Page</th><th>Source File</th><th>Missing</th><th class="r">Amount (RM)</th><th>Before Gap</th><th>After Gap</th></tr></thead><tbody>'''
@@ -1511,13 +1519,39 @@ def generate_interactive_html(data):
         v2_delta = abs(net_dr - expected_net_dr)
         v2_pass = v2_delta < 0.02
 
-        salary = consol.get('total_salary_paid', 0) or 0
-        epf = consol.get('total_statutory_epf', 0) or 0
-        socso = consol.get('total_statutory_socso', 0) or 0
-        v3_ratio = (epf / salary * 100) if salary > 0 else 0
-        v3_status = 'PASS' if 8 <= v3_ratio <= 16 else ('WARN' if salary > 0 else 'N/A')
-        v4_ratio = (socso / salary * 100) if salary > 0 else 0
-        v4_status = 'PASS' if 1 <= v4_ratio <= 5 else ('WARN' if salary > 0 else 'N/A')
+        salary = safe_float(consol.get('total_salary_paid', 0))
+        epf = safe_float(consol.get('total_statutory_epf', 0))
+        socso = safe_float(consol.get('total_statutory_socso', 0))
+        stat_comp_for_validation = consol.get('statutory_compliance', {})
+
+        v3_avg_ratio, v3_month_count = _average_statutory_ratio_pct(
+            stat_comp_for_validation,
+            'epf_per_month_ratios',
+            'epf_amount',
+        )
+        v4_avg_ratio, v4_month_count = _average_statutory_ratio_pct(
+            stat_comp_for_validation,
+            'socso_per_month_ratios',
+            'socso_amount',
+        )
+
+        v3_ratio = v3_avg_ratio if v3_avg_ratio is not None else ((epf / salary * 100) if salary > 0 else 0)
+        v3_has_data = v3_avg_ratio is not None or salary > 0
+        v3_status = 'PASS' if 8 <= v3_ratio <= 16 else ('WARN' if v3_has_data else 'N/A')
+        v3_remark = (
+            f'Avg: {v3_ratio:.1f}% across {v3_month_count} month{"s" if v3_month_count != 1 else ""}'
+            if v3_avg_ratio is not None
+            else (f'{v3_ratio:.1f}%' if salary > 0 else 'No salary detected')
+        )
+
+        v4_ratio = v4_avg_ratio if v4_avg_ratio is not None else ((socso / salary * 100) if salary > 0 else 0)
+        v4_has_data = v4_avg_ratio is not None or salary > 0
+        v4_status = 'PASS' if 1 <= v4_ratio <= 5 else ('WARN' if v4_has_data else 'N/A')
+        v4_remark = (
+            f'Avg: {v4_ratio:.1f}% across {v4_month_count} month{"s" if v4_month_count != 1 else ""}'
+            if v4_avg_ratio is not None
+            else (f'{v4_ratio:.1f}%' if salary > 0 else 'No salary detected')
+        )
 
         # V6: Sum of monthly net_credits = consolidated net_credits
         monthly_net_cr_sum = sum(
@@ -1536,8 +1570,8 @@ def generate_interactive_html(data):
         checks_data = [
             ('V1', 'Net Credits = Gross - Exclusions', 'BLOCKING', 'PASS' if v1_pass else 'FAIL', f'Delta: RM {v1_delta:,.2f}'),
             ('V2', 'Net Debits = Gross - Own Party (C02)', 'BLOCKING', 'PASS' if v2_pass else 'FAIL', f'Delta: RM {v2_delta:,.2f}'),
-            ('V3', 'EPF/Salary ratio 8-16%', 'WARNING', v3_status, f'{v3_ratio:.1f}%' if salary > 0 else 'No salary detected'),
-            ('V4', 'SOCSO/Salary ratio 1-5%', 'WARNING', v4_status, f'{v4_ratio:.1f}%' if salary > 0 else 'No salary detected'),
+            ('V3', 'EPF/Salary ratio 8-16%', 'WARNING', v3_status, v3_remark),
+            ('V4', 'SOCSO/Salary ratio 1-5%', 'WARNING', v4_status, v4_remark),
             ('V5', 'C02+C11 dual-tag exclusion', 'BLOCKING', 'PASS', 'Single deduction via C02'),
             ('V6', 'Monthly net_cr sum = consolidated', 'BLOCKING', 'PASS' if v6_pass else 'FAIL', f'Delta: RM {v6_delta:,.2f}'),
         ]
@@ -2139,7 +2173,7 @@ def generate_interactive_html(data):
 '''
     # v6.2.1: Build gap detail panels for failed months
     gap_panels_html = ''
-    extraction_gaps = parsing.get('extraction_gaps', []) if parsing else []
+    extraction_gaps = (parsing.get('extraction_gaps', []) if parsing else []) if is_incomplete else []
     if extraction_gaps and has_recon:
         # Group gaps by month
         from collections import defaultdict as _dd
@@ -2646,6 +2680,181 @@ def get_round_transactions_for_report(data: dict) -> List[dict]:
     return rows
 
 
+def _average_statutory_ratio_pct(stat_comp: dict, ratio_key: str, amount_key: str):
+    """Return (average ratio %, row count) from statutory monthly ratio rows."""
+    if not isinstance(stat_comp, dict):
+        return None, 0
+
+    rows = stat_comp.get(ratio_key) or []
+    ratios = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        ratio_value = row.get("ratio_pct")
+        if ratio_value is None:
+            amount = safe_float(row.get(amount_key))
+            salary = safe_float(row.get("salary_amount"))
+            if salary > 0 and amount > 0:
+                ratio_value = amount / salary * 100.0
+        if ratio_value is None and row.get("ratio") is not None:
+            ratio_value = safe_float(row.get("ratio"))
+            if 0 < ratio_value <= 1:
+                ratio_value *= 100.0
+
+        if ratio_value is not None:
+            ratios.append(safe_float(ratio_value))
+
+    if not ratios:
+        return None, 0
+    return sum(ratios) / len(ratios), len(ratios)
+
+
+def _sync_data_quality_status(data: dict) -> dict:
+    """Keep consolidated data quality and the Data Quality flag aligned."""
+    if not isinstance(data, dict):
+        return data
+
+    consolidated = data.setdefault("consolidated", {})
+    parsing = data.get("parsing_metadata", {})
+    if not isinstance(parsing, dict):
+        parsing = {}
+        data["parsing_metadata"] = parsing
+
+    checks = parsing.get("account_month_checks", [])
+    if not isinstance(checks, list):
+        checks = []
+
+    monthly = data.get("monthly_analysis", [])
+    if not isinstance(monthly, list):
+        monthly = []
+
+    source_rows = checks or [
+        row for row in monthly
+        if isinstance(row, dict)
+        and (
+            row.get("reconciliation_status") is not None
+            or row.get("extraction_gaps") is not None
+            or row.get("reconciliation_delta") is not None
+        )
+    ]
+
+    def _passed(row: dict) -> bool:
+        if "passed" in row:
+            return bool(row.get("passed"))
+        status = str(row.get("reconciliation_status") or "").upper()
+        if status:
+            return status == "PASS"
+        if row.get("reconciliation_delta") is not None:
+            return abs(safe_float(row.get("reconciliation_delta"))) <= 1.00
+        return True
+
+    def _gaps(row: dict) -> int:
+        return max(0, int(safe_float(row.get("extraction_gaps", row.get("extraction_gaps_count", 0)))))
+
+    if source_rows:
+        failed_rows = [
+            row for row in source_rows
+            if isinstance(row, dict) and (not _passed(row) or _gaps(row) > 0)
+        ]
+        failed_months = {
+            str(row.get("month") or "")
+            for row in failed_rows
+            if isinstance(row, dict) and row.get("month")
+        }
+        total_gaps = sum(_gaps(row) for row in source_rows if isinstance(row, dict))
+        total_missing_dr = sum(safe_float(row.get("missing_debit_amount")) for row in source_rows if isinstance(row, dict))
+        total_missing_cr = sum(safe_float(row.get("missing_credit_amount")) for row in source_rows if isinstance(row, dict))
+
+        consolidated["data_completeness"] = "INCOMPLETE" if failed_rows else "COMPLETE"
+        consolidated["months_with_gaps"] = len(failed_months) if failed_months else len(failed_rows)
+        consolidated["total_extraction_gaps"] = total_gaps if failed_rows else 0
+        consolidated["total_missing_debits"] = round(total_missing_dr, 2) if failed_rows else 0.0
+        consolidated["total_missing_credits"] = round(total_missing_cr, 2) if failed_rows else 0.0
+
+        gap_notes = []
+        for row in failed_rows:
+            month = row.get("month") or "?"
+            details = []
+            if not _passed(row):
+                status = str(row.get("reconciliation_status") or "FAIL").upper()
+                details.append(f"reconciliation {status}")
+            gap_count = _gaps(row)
+            if gap_count:
+                details.append(f"{gap_count} gap(s)")
+            missing_dr = safe_float(row.get("missing_debit_amount"))
+            missing_cr = safe_float(row.get("missing_credit_amount"))
+            if missing_dr:
+                details.append(f"missing DR RM {missing_dr:,.2f}")
+            if missing_cr:
+                details.append(f"missing CR RM {missing_cr:,.2f}")
+            gap_notes.append(f"{month} ({', '.join(details)})" if details else str(month))
+        consolidated["data_gaps"] = "; ".join(gap_notes)
+
+        if checks:
+            pass_count = sum(1 for chk in checks if isinstance(chk, dict) and _passed(chk))
+            parsing["total_balance_checks"] = len(checks)
+            parsing["total_balance_checks_passed"] = pass_count
+            parsing["overall_success_rate"] = round(pass_count / len(checks), 4) if checks else 1.0
+            parsing["total_transactions_extracted"] = sum(
+                int(safe_float(chk.get("transactions_extracted", 0)))
+                for chk in checks
+                if isinstance(chk, dict)
+            )
+
+    data_completeness = str(consolidated.get("data_completeness") or "COMPLETE").upper()
+    data_gaps = str(consolidated.get("data_gaps") or "").strip()
+    incomplete = data_completeness == "INCOMPLETE"
+
+    flags = data.get("flags")
+    if isinstance(flags, dict):
+        indicators = flags.get("indicators", [])
+        if isinstance(indicators, list):
+            for flag in indicators:
+                if not isinstance(flag, dict):
+                    continue
+                try:
+                    flag_id = int(flag.get("id"))
+                except (TypeError, ValueError):
+                    flag_id = None
+                if flag_id == 13 or flag.get("name") == "Data Quality":
+                    flag["detected"] = incomplete
+                    flag["remarks"] = (
+                        f"Statement data INCOMPLETE: {data_gaps}"
+                        if incomplete and data_gaps
+                        else (
+                            "Statement data INCOMPLETE."
+                            if incomplete
+                            else "Statement data complete across the period."
+                        )
+                    )
+                    break
+
+    observations = data.get("observations")
+    if isinstance(observations, dict):
+        positives = observations.get("positive", [])
+        concerns = observations.get("concerns", [])
+        if isinstance(positives, list) and isinstance(concerns, list):
+            concerns[:] = [
+                item for item in concerns
+                if "reconciliation gaps" not in str(item).lower()
+                and "statement data incomplete" not in str(item).lower()
+            ]
+            positives[:] = [
+                item for item in positives
+                if "all months reconciled" not in str(item).lower()
+            ]
+            if incomplete:
+                concerns.insert(
+                    0,
+                    f"Statement data incomplete: {data_gaps}" if data_gaps else "Statement data incomplete.",
+                )
+            else:
+                positives.insert(0, "All months reconciled to bank statements within tolerance.")
+
+    return data
+
+
 def standardize_monthly_summary_balance_chain(monthly_summary: List[dict]) -> List[dict]:
     """Use opening + net movement as the standardized closing balance chain."""
     rows = [dict(row) for row in (monthly_summary or []) if isinstance(row, dict)]
@@ -2836,7 +3045,7 @@ def apply_standard_monthly_summary_to_report(data: dict, monthly_summary: List[d
                 consolidated["total_missing_debits"] = 0.0
                 consolidated["total_missing_credits"] = 0.0
 
-    return data
+    return _sync_data_quality_status(data)
 
 
 def build_report_data_from_analysis(
