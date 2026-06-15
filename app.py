@@ -6937,18 +6937,24 @@ if st.session_state.results:
         )
 
     with col3:
-        # Make sure data is JSON serializable first
+    # Make sure data is JSON serializable first
         serialized_transactions = make_json_serializable(st.session_state.results)
         serialized_monthly_summary = make_json_serializable(monthly_summary)
         serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
-    
+
         report_excel_data = build_report_data_from_analysis(
             serialized_transactions,
             serialized_monthly_summary,
             serialized_transaction_analysis,
             high_value_threshold,
         )
-        output = generate_excel_report(report_excel_data)
+        
+        # Pass monthly_summary and transaction_analysis to generate_excel_report
+        output = generate_excel_report(
+            report_excel_data, 
+            monthly_summary=serialized_monthly_summary, 
+            transaction_analysis=serialized_transaction_analysis
+        )
 
         st.download_button(
             "📊 Download Full Report (XLSX)",
