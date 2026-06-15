@@ -3609,6 +3609,116 @@ def build_parsing_qc_dataframe_from_parsing_metadata(parsing_metadata: dict) -> 
     
     return pd.DataFrame(rows)
 
+def build_risk_signals_dataframe(flags_data: dict, consolidated: dict, statutory_compliance: dict = None) -> pd.DataFrame:
+    """Build the 16-row Risk Signals DataFrame matching the HTML report."""
+    
+    # Default 16-row structure (matching your HTML)
+    risk_signals = [
+        {"#": 1, "Signal": "Returned Cheques (Inward)", "Detected": "NO", "Remarks": "No inward returned cheques in the period."},
+        {"#": 2, "Signal": "Returned Cheques (Outward)", "Detected": "NO", "Remarks": "No outward returned cheques in the period."},
+        {"#": 3, "Signal": "Round Figure Credits (AML)", "Detected": "NO", "Remarks": "No round-figure credits flagged."},
+        {"#": 4, "Signal": "High Value Credits (>3x EOD)", "Detected": "NO", "Remarks": "No credits exceeded 3x daily EOD."},
+        {"#": 5, "Signal": "Cash Deposits (AML)", "Detected": "NO", "Remarks": "No cash deposits in the period."},
+        {"#": 6, "Signal": "EPF Compliance", "Detected": "NO", "Remarks": "EPF coverage 100% across salary months."},
+        {"#": 7, "Signal": "SOCSO Compliance", "Detected": "NO", "Remarks": "SOCSO coverage 100% across salary months."},
+        {"#": 8, "Signal": "LHDN Tax Payments", "Detected": "NO", "Remarks": "No LHDN tax payments detected."},
+        {"#": 9, "Signal": "Large Credits (>=RM100K)", "Detected": "NO", "Remarks": "No credits at or above RM100,000."},
+        {"#": 10, "Signal": "Own Party Transactions", "Detected": "NO", "Remarks": "No own-party transactions detected."},
+        {"#": 11, "Signal": "Related Party Transactions", "Detected": "NO", "Remarks": "No related-party transactions detected."},
+        {"#": 12, "Signal": "Loan Activity", "Detected": "NO", "Remarks": "No loan disbursements or repayments detected."},
+        {"#": 13, "Signal": "Data Quality", "Detected": "NO", "Remarks": "Statement data complete across the period."},
+        {"#": 14, "Signal": "FX Transactions", "Detected": "NO", "Remarks": "No FX (foreign-currency) activity detected."},
+        {"#": 15, "Signal": "Low Closing Balance", "Detected": "NO", "Remarks": "Closing balance stayed at or above RM 1,000.00 every month."},
+        {"#": 16, "Signal": "HRDF Payments", "Detected": "NO", "Remarks": "No HRDF payments detected."},
+    ]
+    
+    # Map flag IDs to their index (0-based)
+    flags_map = {flag.get("id", 0): flag for flag in (flags_data.get("indicators", []) or [])}
+    
+    # Update each row with actual data
+    for row in risk_signals:
+        flag_id = row["#"]
+        flag = flags_map.get(flag_id)
+        
+        if flag:
+            row["Detected"] = "YES" if flag.get("detected") else "NO"
+            remarks = flag.get("remarks", "")
+            if remarks:
+                row["Remarks"] = remarks
+    
+    # Override specific fields from consolidated data if needed
+    if consolidated:
+        # Round Figure Credits (ID 3)
+        rf_count = consolidated.get("total_round_figure_cr_count", 0)
+        rf_amount = consolidated.get("total_round_figure_cr", 0)
+        if rf_count > 0:
+            risk_signals[2]["Detected"] = "YES"
+            risk_signals[2]["Remarks"] = f"{rf_count} round-figure credits totalling RM {rf_amount:,.2f}."
+        
+        # Large Credits (ID 9)
+        large_count = len(consolidated.get("large_credits", []))
+        large_total = consolidated.get("total_large_credits", 0)
+        if large_count > 0:
+            risk_signals[8]["Detected"] = "YES"
+            risk_signals[8]["Remarks"] = f"{large_count} large credits (>=RM100K) totalling RM {large_total:,.2f}."
+        
+        # Own Party Transactions (ID 10)
+        own_cr = consolidated.get("total_own_party_cr", 0)
+        own_dr = consolidated.get("total_own_party_dr", 0)
+        if own_cr > 0 or own_dr > 0:
+            gross_cr = consolidated.get("gross_credits", 1)
+            gross_dr = consolidated.get("gross_debits", 1)
+            risk_signals[9]["Detected"] = "YES"
+            risk_signals[9]["Remarks"] = (
+                f"Own-party CR RM {own_cr:,.2f} ({own_cr/gross_cr*100:.1f}% of gross credits); "
+                f"DR RM {own_dr:,.2f} ({own_dr/gross_dr*100:.1f}% of gross debits)."
+            )
+        
+        # Loan Activity (ID 12)
+        loan_disb = consolidated.get("total_loan_disbursement_cr", 0)
+        loan_repay = consolidated.get("total_loan_repayment_dr", 0)
+        if loan_disb > 0 or loan_repay > 0:
+            risk_signals[11]["Detected"] = "YES"
+            risk_signals[11]["Remarks"] = f"Loan disbursements RM {loan_disb:,.2f}; loan repayments RM {loan_repay:,.2f}."
+        
+        # Data Quality (ID 13)
+        if consolidated.get("data_completeness") == "INCOMPLETE":
+            risk_signals[12]["Detected"] = "YES"
+            risk_signals[12]["Remarks"] = f"Statement data INCOMPLETE: {consolidated.get('data_gaps', '')}"
+        
+        # FX Transactions (ID 14)
+        fx_cr = consolidated.get("total_fx_credits", 0)
+        fx_dr = consolidated.get("total_fx_debits", 0)
+        if fx_cr > 0 or fx_dr > 0:
+            risk_signals[13]["Detected"] = "YES"
+            risk_signals[13]["Remarks"] = f"FX credits RM {fx_cr:,.2f}; FX debits RM {fx_dr:,.2f}."
+    
+    # EPF Compliance (ID 6) from statutory_compliance
+    if statutory_compliance:
+        epf_pct = statutory_compliance.get("epf_coverage_pct", 100)
+        salary_months = statutory_compliance.get("salary_months_active", 0)
+        if epf_pct < 100 and salary_months > 0:
+            risk_signals[5]["Detected"] = "YES"
+            risk_signals[5]["Remarks"] = f"EPF coverage {epf_pct:.1f}% across {salary_months} salary months."
+        
+        # SOCSO Compliance (ID 7)
+        socso_pct = statutory_compliance.get("socso_coverage_pct", 100)
+        if socso_pct < 100 and salary_months > 0:
+            risk_signals[6]["Detected"] = "YES"
+            risk_signals[6]["Remarks"] = f"SOCSO coverage {socso_pct:.1f}% across {salary_months} salary months."
+        
+        # LHDN (ID 8)
+        if statutory_compliance.get("lhdn_detected"):
+            risk_signals[7]["Detected"] = "NO"  # Informational only
+            risk_signals[7]["Remarks"] = f"LHDN payments detected: {statutory_compliance.get('lhdn_count', 0)} tx totalling RM {statutory_compliance.get('lhdn_total', 0):,.2f} (informational only)."
+        
+        # HRDF (ID 16)
+        if statutory_compliance.get("hrdf_detected"):
+            risk_signals[15]["Detected"] = "NO"
+            risk_signals[15]["Remarks"] = f"HRDF payments detected: {statutory_compliance.get('hrdf_count', 0)} tx totalling RM {statutory_compliance.get('hrdf_total', 0):,.2f} (informational)."
+    
+    return pd.DataFrame(risk_signals)
+
 def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transaction_analysis: dict = None) -> BytesIO:
     """Generate a multi-sheet XLSX report matching the HTML report tabs."""
     report_data = normalize_report_data_for_export(data)
@@ -3705,12 +3815,23 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                 loan_rows.append({"facility_type": txn_type, **row})
         _write_excel_sheet(writer, "Facilities", _records_to_excel_df(loan_rows), "Facilities")
 
+       # Get statutory_compliance from consolidated if available
+        statutory_compliance = consolidated.get("statutory_compliance", {}) if isinstance(consolidated, dict) else {}
+
+        # Build the formatted risk signals DataFrame
+        risk_signals_df = build_risk_signals_dataframe(
+            flags, 
+            consolidated, 
+            statutory_compliance
+        )
+
         _write_excel_sheet(
             writer,
             "Risk Signals",
-            _records_to_excel_df(flags.get("indicators", [])),
+            risk_signals_df,
             "Risk Signals",
         )
+        
         round_rows = []
         for row in get_round_transactions_for_report(report_data):
             amount = safe_float(row.get("amount", 0))
