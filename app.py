@@ -3569,7 +3569,7 @@ def _top_counterparty_excel_rows(cp_ledger: dict, amount_column: str, count_colu
     ]
 
 
-def generate_excel_report(data: dict) -> BytesIO:
+def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transaction_analysis: dict = None) -> BytesIO:
     """Generate a multi-sheet XLSX report matching the HTML report tabs."""
     report_data = normalize_report_data_for_export(data)
     own_related = report_data.get("own_related_transactions", {}) or {}
@@ -3703,13 +3703,39 @@ def generate_excel_report(data: dict) -> BytesIO:
         if unclassified_rows:
             _write_excel_sheet(writer, "Unclassified", _records_to_excel_df(unclassified_rows), "Unclassified Transactions")
 
+        # ===== PARSING QC SHEET (NEW) - Build from parsing metadata =====
         if parsing:
-            _write_excel_sheet(
-                writer,
-                "Parsing QC",
-                _records_to_excel_df(parsing.get("account_month_checks", [])),
-                "Parsing Quality Checks",
-            )
+            # Get account month checks for the detailed table
+            account_month_checks = parsing.get("account_month_checks", [])
+            if account_month_checks:
+                # Create a dataframe from account_month_checks
+                qc_df = _records_to_excel_df(account_month_checks)
+                # Rename columns to match the image format if needed
+                column_mapping = {
+                    "month": "Month",
+                    "account_number": "Account",
+                    "opening_balance": "Opening Balance",
+                    "closing_balance": "Closing Balance",
+                    "gross_credits": "Gross Credits",
+                    "gross_debits": "Gross Debits",
+                    "expected_closing": "Expected Close",
+                    "reconciliation_delta": "Recon Delta",
+                    "passed": "Status",
+                    "transactions_extracted": "Transactions Extracted",
+                    "extraction_gaps": "Gaps",
+                    "notes": "Notes"
+                }
+                # Rename columns that exist
+                for old_name, new_name in column_mapping.items():
+                    if old_name in qc_df.columns:
+                        qc_df = qc_df.rename(columns={old_name: new_name})
+                # Convert Status from boolean to PASS/FAIL
+                if "Status" in qc_df.columns:
+                    qc_df["Status"] = qc_df["Status"].apply(lambda x: "PASS" if x else "FAIL")
+                
+                _write_excel_sheet(writer, "Parsing QC", qc_df, "Parsing Quality Control")
+            
+            # Also include extraction gaps sheet if available
             if parsing.get("extraction_gaps"):
                 _write_excel_sheet(
                     writer,
