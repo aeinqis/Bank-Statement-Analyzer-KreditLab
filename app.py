@@ -3568,6 +3568,46 @@ def _top_counterparty_excel_rows(cp_ledger: dict, amount_column: str, count_colu
         for row in rows[:10]
     ]
 
+def build_parsing_qc_dataframe_from_parsing_metadata(parsing_metadata: dict) -> pd.DataFrame:
+    """Build Parsing QC dataframe from parsing_metadata for Excel export."""
+    if not parsing_metadata:
+        return pd.DataFrame()
+    
+    account_month_checks = parsing_metadata.get("account_month_checks", [])
+    if not account_month_checks:
+        return pd.DataFrame()
+    
+    rows = []
+    for chk in account_month_checks:
+        month = chk.get("month", "")
+        account_number = chk.get("account_number", "")
+        opening_balance = safe_float(chk.get("opening_balance", 0))
+        closing_balance = safe_float(chk.get("closing_balance", 0))
+        gross_credits = safe_float(chk.get("gross_credits", 0))
+        gross_debits = safe_float(chk.get("gross_debits", 0))
+        expected_closing = safe_float(chk.get("expected_closing", 0))
+        reconciliation_delta = safe_float(chk.get("reconciliation_delta", 0))
+        passed = chk.get("passed", False)
+        transactions_extracted = chk.get("transactions_extracted", 0)
+        extraction_gaps = chk.get("extraction_gaps", 0)
+        notes = chk.get("notes", "")
+        
+        rows.append({
+            "Month": month,
+            "Account": account_number,
+            "Opening Balance": opening_balance,
+            "Closing Balance": closing_balance,
+            "Gross Credits": gross_credits,
+            "Gross Debits": gross_debits,
+            "Expected Close": expected_closing,
+            "Recon Delta": reconciliation_delta,
+            "Status": "PASS" if passed else "FAIL",
+            "Transactions Extracted": transactions_extracted,
+            "Gaps": extraction_gaps,
+            "Notes": notes
+        })
+    
+    return pd.DataFrame(rows)
 
 def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transaction_analysis: dict = None) -> BytesIO:
     """Generate a multi-sheet XLSX report matching the HTML report tabs."""
@@ -3703,37 +3743,12 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         if unclassified_rows:
             _write_excel_sheet(writer, "Unclassified", _records_to_excel_df(unclassified_rows), "Unclassified Transactions")
 
-        # ===== PARSING QC SHEET (NEW) - Build from parsing metadata =====
+        # ===== PARSING QC SHEET =====
         if parsing:
-            # Get account month checks for the detailed table
-            account_month_checks = parsing.get("account_month_checks", [])
-            if account_month_checks:
-                # Create a dataframe from account_month_checks
-                qc_df = _records_to_excel_df(account_month_checks)
-                # Rename columns to match the image format if needed
-                column_mapping = {
-                    "month": "Month",
-                    "account_number": "Account",
-                    "opening_balance": "Opening Balance",
-                    "closing_balance": "Closing Balance",
-                    "gross_credits": "Gross Credits",
-                    "gross_debits": "Gross Debits",
-                    "expected_closing": "Expected Close",
-                    "reconciliation_delta": "Recon Delta",
-                    "passed": "Status",
-                    "transactions_extracted": "Transactions Extracted",
-                    "extraction_gaps": "Gaps",
-                    "notes": "Notes"
-                }
-                # Rename columns that exist
-                for old_name, new_name in column_mapping.items():
-                    if old_name in qc_df.columns:
-                        qc_df = qc_df.rename(columns={old_name: new_name})
-                # Convert Status from boolean to PASS/FAIL
-                if "Status" in qc_df.columns:
-                    qc_df["Status"] = qc_df["Status"].apply(lambda x: "PASS" if x else "FAIL")
-                
-                _write_excel_sheet(writer, "Parsing QC", qc_df, "Parsing Quality Control")
+            # Build Parsing QC dataframe from parsing_metadata
+            parsing_qc_df = build_parsing_qc_dataframe_from_parsing_metadata(parsing)
+            if not parsing_qc_df.empty:
+                _write_excel_sheet(writer, "Parsing QC", parsing_qc_df, "Parsing Quality Control")
             
             # Also include extraction gaps sheet if available
             if parsing.get("extraction_gaps"):
