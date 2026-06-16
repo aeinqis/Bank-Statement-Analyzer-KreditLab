@@ -49,16 +49,53 @@ from fraud_logic import (
     detect_font_anomalies,
 )
 
-# Track 2 classifier — build_track2_result produces the full v6.3.5 schema
-# that generate_interactive_html expects (flags, statutory compliance, risk
-# indicators, RP detection, etc.)
+# Track 2 classifier — import ALL functions needed
 try:
     from kredit_lab_classify_track2 import (
+        # Core engine functions
         build_track2_result,
         account_meta_from_determinations,
+        classify_transactions,
+        compute_risk_flags,
+        
+        # Pattern matching for loans (CRITICAL for loan detection)
+        LOAN_DISBURSEMENT_RE,
+        LOAN_REPAYMENT_RE,
+        
+        # Statutory compliance
+        compute_statutory_compliance,
+        compute_salary_payments,
+        compute_epf_payments,
+        compute_socso_payments,
+        compute_lhdn_tax_payments,
+        compute_hrdf_payments,
+        
+        # FX and other detectors
+        compute_fx_totals,
+        compute_round_figure_credits,
+        compute_high_value_credits,
+        compute_returned_cheques,
+        
+        # Counterparty ledger functions
+        scan_related_party_candidates,
+        auto_confirmed_related_parties,
+        dedup_counterparty_entries,
+        
+        # Monthly aggregator
+        compute_monthly_aggregates,
+        compute_monthly_eod,
+        
+        # Constants
+        CANONICAL_FLAGS,
+        LOW_CLOSING_THRESHOLD_CR,
+        OD_HIGH_UTILISATION_RATIO,
+        SUBTHRESHOLD_TOTAL_SALARY_RM,
+        CHANNEL_BLIND_CHEQUE_DR_MIN_RM,
+        CHANNEL_BLIND_CHEQUE_DR_MIN_RATIO,
     )
     _TRACK2_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    print(f"[WARNING] Track 2 import failed: {e}")
     _TRACK2_AVAILABLE = False
 
 def build_large_transactions(transactions: List[dict], threshold: float) -> List[dict]:
@@ -4000,13 +4037,14 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
 
 def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
                                    transaction_analysis: dict, high_value_threshold: float) -> str:
-    """Generate interactive HTML report from parsed transactions."""
+    """Generate interactive HTML report from parsed transactions using Track 2 engine."""
     # Get pdf_integrity from session state
     pdf_integrity = st.session_state.get("integrity_analysis_results") or {}
     
     # Ensure threshold is a float
     threshold = float(high_value_threshold) if high_value_threshold else 100000.0
     
+    # ALWAYS use Track 2 if available - this is the key change
     if _TRACK2_AVAILABLE:
         try:
             # Build counterparty ledger in the format Track 2 expects
@@ -4029,35 +4067,56 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
             # Analyst-supplied related parties
             related_parties = st.session_state.get("related_parties_override") or []
 
+            # CRITICAL: Pass factoring_entities if you have them
+            # This helps with loan detection for factoring companies
+            factoring_entities = st.session_state.get("factoring_entities_override") or []
+
+            # Build Track 2 result - THIS IS WHERE LOAN DETECTION HAPPENS
             data = build_track2_result(
-                transactions,
+                transactions=transactions,
                 counterparty_ledger=cp_ledger,
                 pdf_integrity=pdf_integrity if pdf_integrity else None,
                 company_names=company_names or None,
                 related_parties=related_parties or None,
+                factoring_entities=factoring_entities or None,
                 account_meta=account_meta or None,
             )
             
-            # Ensure the threshold is set in the consolidated data
-            if 'consolidated' in data:
-                data['consolidated']['high_value_threshold'] = threshold
-                data['consolidated']['large_credit_threshold'] = threshold
+            # DO NOT override large_transactions - Track 2 already computed them correctly
+            # Track 2's compute_large_credits uses the same threshold but has loan context
             
-            # Keep Large Transactions tied to the active UI threshold and include both sides.
-            data['large_transactions'] = build_large_transactions(transactions, threshold)
-            data['transactions'] = transactions
+            # Preserve the original Track 2 loan detection results
+            # Only add missing fields that Track 2 doesn't compute
+            if 'transactions' not in data:
+                data['transactions'] = transactions
+            
+            # Add round transactions for display (Track 2 may not have this exact field)
             round_transactions = build_round_transactions(transactions)
             data['round_transactions'] = round_transactions
             data['round_figure_credits'] = round_transactions
+            
+            # Apply monthly summary standardization if needed
             data = apply_standard_monthly_summary_to_report(data, monthly_summary)
             
+            # Debug: Print loan counts to verify detection
+            loan_txns = data.get('loan_transactions', {})
+            disbursements = loan_txns.get('disbursements', [])
+            repayments = loan_txns.get('repayments', [])
+            print(f"[Track2] Loan disbursements: {len(disbursements)} rows, total: {sum(d.get('amount',0) for d in disbursements):,.2f}")
+            print(f"[Track2] Loan repayments: {len(repayments)} rows, total: {sum(r.get('amount',0) for r in repayments):,.2f}")
+            
+            # Use Track 2's HTML generator (it has the full loan transactions tab)
             return generate_interactive_html(data)
+            
         except Exception as _track2_err:
             import traceback
-            print(f"[Track2] build_track2_result failed, falling back: {_track2_err}")
+            print(f"[Track2] ERROR in build_track2_result: {_track2_err}")
             traceback.print_exc()
+            st.error(f"Track 2 engine failed: {_track2_err}")
+            # Fall through to legacy
 
-    # Legacy fallback path
+    # Legacy fallback path (only if Track 2 fails or is unavailable)
+    print("[Track2] Using legacy fallback (loan detection may be incomplete)")
     report_data = build_report_data_from_analysis(
         transactions,
         monthly_summary,
