@@ -1265,35 +1265,65 @@ def generate_interactive_html(data):
             </div>'''
 
     # ── Loan transactions ──
+    # ── Loan transactions / Facilities ──
+    def _facility_amount(t):
+        try:
+            return float(t.get("amount") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _is_real_facility(t, expected_category):
+        if not isinstance(t, dict):
+            return False
+        # Only Track 2 booked facility categories count.
+        # Do NOT include loans["review"] / loan-shaped / unclassified rows.
+        return t.get("category") == expected_category and _facility_amount(t) > 0
+
+    loan_disbursements = [
+        t for t in (loans.get("disbursements") or [])
+        if _is_real_facility(t, "loan_disbursement")
+    ]
+
+    loan_repayments = [
+        t for t in (loans.get("repayments") or [])
+        if _is_real_facility(t, "loan_repayment")
+    ]
+
+    loan_disb_total = round(sum(_facility_amount(t) for t in loan_disbursements), 2)
+    loan_repay_total = round(sum(_facility_amount(t) for t in loan_repayments), 2)
+
     loan_disb_rows = ""
-    for t in loans.get('disbursements', []):
+    for t in loan_disbursements:
         loan_disb_rows += f'''<tr>
-            <td>{t.get('date','')}</td><td>{t.get('description','')[:55]}</td>
-            <td class="mono r credit">RM {t.get('amount',0):,.2f}</td>
-            <td>{t.get('category','')}</td>
-        </tr>'''
-    loan_repay_rows = ""
-    for t in loans.get('repayments', []):
-        loan_repay_rows += f'''<tr>
-            <td>{t.get('date','')}</td><td>{t.get('description','')[:55]}</td>
-            <td class="mono r debit">RM {t.get('amount',0):,.2f}</td>
-            <td>{t.get('category','')}</td>
+            <td>{escape(str(t.get('date','')))}</td>
+            <td>{escape(str(t.get('description',''))[:55])}</td>
+            <td class="mono r credit">RM {_facility_amount(t):,.2f}</td>
+            <td>{escape(str(t.get('category','')))}</td>
         </tr>'''
 
-    # ── Flags ──
-    flag_rows = ""
-    detected_count = 0
-    for f in flags_data.get('indicators', []):
-        detected = f.get('detected', False)
-        if detected:
-            detected_count += 1
-        status_cls = 'flag-yes' if detected else 'flag-no'
-        flag_rows += f'''<tr class="{status_cls}">
-            <td class="mono">{f.get('id','')}</td>
-            <td>{f.get('name','')}</td>
-            <td class="mono" style="text-align:center"><span class="flag-dot {'detected' if detected else 'clear'}"></span> {'YES' if detected else 'NO'}</td>
-            <td>{f.get('remarks','')}</td>
+    loan_repay_rows = ""
+    for t in loan_repayments:
+        loan_repay_rows += f'''<tr>
+            <td>{escape(str(t.get('date','')))}</td>
+            <td>{escape(str(t.get('description',''))[:55])}</td>
+            <td class="mono r debit">RM {_facility_amount(t):,.2f}</td>
+            <td>{escape(str(t.get('category','')))}</td>
         </tr>'''
+
+        # ── Flags ──
+        flag_rows = ""
+        detected_count = 0
+        for f in flags_data.get('indicators', []):
+            detected = f.get('detected', False)
+            if detected:
+                detected_count += 1
+            status_cls = 'flag-yes' if detected else 'flag-no'
+            flag_rows += f'''<tr class="{status_cls}">
+                <td class="mono">{f.get('id','')}</td>
+                <td>{f.get('name','')}</td>
+                <td class="mono" style="text-align:center"><span class="flag-dot {'detected' if detected else 'clear'}"></span> {'YES' if detected else 'NO'}</td>
+                <td>{f.get('remarks','')}</td>
+            </tr>'''
 
     # ── Observations ──
     pos_obs = "".join([f'<li class="obs-item positive">{o}</li>' for o in obs.get('positive', [])])
@@ -2318,10 +2348,10 @@ def generate_interactive_html(data):
         <!-- LOANS TAB -->
         <div id="tab-loans" class="tab">
             <div class="summary-grid">
-                <div class="summary-card"><div class="val credit">{consol.get('total_loan_disbursement_cr',0):,.0f}</div><div class="lbl">Total Disbursements</div></div>
-                <div class="summary-card"><div class="val debit">{consol.get('total_loan_repayment_dr',0):,.0f}</div><div class="lbl">Total Repayments</div></div>
-                <div class="summary-card"><div class="val">{len(loans.get('disbursements',[])) or loans.get('summary',{}).get('disbursement_count',0)}</div><div class="lbl">Disbursement Txns</div></div>
-                <div class="summary-card"><div class="val">{len(loans.get('repayments',[])) or loans.get('summary',{}).get('repayment_count',0)}</div><div class="lbl">Repayment Txns</div></div>
+                <div class="summary-card"><div class="val credit">{loan_disb_total:,.0f}</div><div class="lbl">Total Disbursements</div></div>
+                <div class="summary-card"><div class="val debit">{loan_repay_total:,.0f}</div><div class="lbl">Total Repayments</div></div>
+                <div class="summary-card"><div class="val">{len(loan_disbursements)}</div><div class="lbl">Disbursement Txns</div></div>
+                <div class="summary-card"><div class="val">{len(loan_repayments)}</div><div class="lbl">Repayment Txns</div></div>
             </div>
             <div class="two-col">
                 <div class="section">
