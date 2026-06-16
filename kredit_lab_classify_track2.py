@@ -526,14 +526,31 @@ def compute_risk_flags(
     # --- Flag 12 — Loan Activity --------------------------------------------
     ld_cr = float(summary.get("loan_disbursement_cr") or 0)
     lr_dr = float(summary.get("loan_repayment_dr") or 0)
+    # Loan-review net: rows that look like facility activity but were booked as
+    # neither facility nor related-party (see ``_build_loan_review_track2``).
+    # Appended to the remarks so a non-zero count is never silent — the failure
+    # mode this guards against is "0 / No loan activity detected" printed over a
+    # statement that plainly carries monthly facility repayments.
+    review_count = int(summary.get("loan_review_count") or 0)
+    review_note = (
+        f" {review_count} loan-shaped row(s) unclassified — review."
+        if review_count > 0
+        else ""
+    )
     flags.append(
         _flag(
             11,
-            ld_cr > 0 or lr_dr > 0,
+            ld_cr > 0 or lr_dr > 0 or review_count > 0,
             (
                 f"Loan disbursements {_rm(ld_cr)}; loan repayments {_rm(lr_dr)}."
+                + review_note
                 if (ld_cr > 0 or lr_dr > 0)
-                else "No loan disbursements or repayments detected."
+                else (
+                    "No loan disbursements or repayments classified."
+                    + review_note
+                    if review_count > 0
+                    else "No loan disbursements or repayments detected."
+                )
             ),
         )
     )
@@ -3199,6 +3216,10 @@ LOAN_DISBURSEMENT_RE = re.compile(
     r"|\bBILL DISCOUNT\b"
     r"|\bBANKERS ACCEPTANCE\b"
     r"|\bFACILITY DRAWDOWN\b"
+    # RHB own-facility transaction-type token on the CR side = a loan/financing
+    # drawdown credited into the account (mirror of the C11 ``LOANS/FIN`` rung;
+    # side-disciplined by the CR gate at the dispatcher). 2026-06-14.
+    r"|\bLOANS?/FIN\b"
     # P2P / marketplace-lender drawdowns paid out via the platform's trustee
     # account (e.g. Funding Societies via MALAYSIAN TRUSTEES; CapBay; Fundaztic).
     # Cross-bank: these print the lender name in the memo regardless of bank.
@@ -3219,6 +3240,21 @@ LOAN_REPAYMENT_RE = re.compile(
     r"|\bTRANSFER TO LOAN\b"
     r"|\bDD CASA PYMT\b"
     r"|\bFINPAL ISSUER REPAYM"
+    # Per-bank own-facility loan-servicing TRANSACTION-TYPE labels (DR side).
+    # These key on the bank's transaction-type token, NOT on the word "loan"
+    # wherever it appears — so a transfer TO A PERSON that merely mentions a
+    # loan in its reference (e.g. RHB ``RFLX <person> / ALZA LOAN``, txn-type
+    # ``RFLX``) is NOT matched here and correctly stays a candidate for the
+    # RP rung / loan-review net. Each was verified against the source PDF as
+    # the statement owner servicing its OWN facility (s, 2026-06-14):
+    #   * RHB    — ``011 LOANS/FIN <company> AUTODEBIT`` / ``LOANS/FIN PAYMENT``
+    #              / ``LOANS/FIN CLEAR AUTODEBIT`` (own loan-account auto-debit).
+    #   * Public Bank — ``AUTOMATED LOAN PYMT TO <loan a/c>`` and
+    #              ``LOAN PYMT-ATM/EFT`` (both contain ``LOAN PYMT``).
+    #   * Bank Muamalat — ``... REPAYMENT LOAN`` (DR TRF/SAL/MISC/AFT).
+    r"|\bLOANS?/FIN\b"
+    r"|\bLOAN PYMT\b"
+    r"|\bREPAYMENT LOAN\b"
     # Asset / vehicle financing the company repays on its OWN facility.
     # Cross-bank: hire-purchase and "HP LOAN" memos appear under any bank.
     # A natural person's personal HP is caught by the C03/C04 RP rung first
@@ -3233,6 +3269,53 @@ LOAN_REPAYMENT_RE = re.compile(
     r"|\bCAPBAY\b"
     r"|\bFUNDAZTIC\b"
     r"|\bMICROLEAP\b",
+    re.IGNORECASE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Loan-review safety net (the "silent-zero" guard).
+#
+# C10/C11 are closed-vocabulary keyword rungs: a loan row is only counted as
+# facility activity if its memo matches a phrase we have ALREADY enumerated.
+# Two failure modes follow — (a) every bank names loans differently, so a new
+# format silently misses; (b) the miss is invisible (total stays 0, the HTML
+# prints "No loan activity detected"). This regex is the opposite design: a
+# DELIBERATELY BROAD net over loan-shaped transaction-type tokens. It NEVER
+# classifies a row (no category, no figure) — it only collects rows that look
+# like facility activity but landed in none of C03/C04/C10/C11, so the analyst
+# sees "N possible facility rows unclassified — review" instead of silence.
+# Because it only surfaces (never books), false positives here are cheap; a
+# missed loan is the expensive error, so the net is wide on purpose.
+#
+# Tuned to avoid marketing / disclosure prose that carries "financing" /
+# "pembiayaan" (Maybank PEMBIAYAAN RUMAH ad, Ambank Term Deposit-i footer, HLB
+# Kadar Pembiayaan Islamik rate notice) — those are excluded by _LOAN_NOISE_RE.
+LOAN_SHAPED_RE = re.compile(
+    r"\bLOANS?\b"
+    r"|\bLOANS?/FIN\b"
+    r"|\bFINANCING\b"
+    r"|\bPEMBIAYAAN\b"
+    r"|\bANGSURAN\b"
+    r"|\bINSTAL?MENT\b"
+    r"|\bHIRE\s*PURCHASE\b"
+    r"|\bHP\s+LOAN\b"
+    r"|\bREPAYMENT\b"
+    r"|\bDISBURS",
+    re.IGNORECASE,
+)
+
+# Marketing / rate-disclosure / product-name prose that mentions a loan word
+# but is NOT a transaction. Keeps the review net from flagging footer ads.
+_LOAN_NOISE_RE = re.compile(
+    r"PEMBIAYAAN\s+RUMAH"
+    r"|TERM\s+DEPOSIT"
+    r"|FIXED\s+DEPOSIT"
+    r"|FINANCE\s+ACT"
+    r"|KADAR\s+(?:ASAS|PEMBIAYAAN)"
+    r"|ISLAMIK?\s+\("            # "(IFR)" rate-notice fragment
+    r"|FINANCIAL\s+(?:SERVICES|MEDIATION|ACTIVITIES|INSTITUTION)"
+    r"|FINANCING-?I?\s+PRODUCTS",
     re.IGNORECASE,
 )
 
@@ -3564,9 +3647,57 @@ def _safe_amount(value: Any) -> float:
     return amount if amount > 0 else 0.0
 
 
+def _detect_od_balance_convention(
+    transactions: list[dict[str, Any]],
+) -> str:
+    """Decide which OD balance convention an account's rows actually follow.
+
+    Returns ``'signed'`` (modern default: overdrawn = negative balance,
+    CR-formula trail) or ``'legacy'`` (positive-magnitude: overdrawn stored
+    as a positive drawdown amount, inverted trail formula).
+
+    The old heuristic — "positive balance on an OD account = legacy" — broke
+    on accounts that OPEN a month in credit and dip overdrawn mid-month
+    (Wung Choon MBB 0651, 2026-06: two months flagged as RM~730k extraction
+    gaps that did not exist). The convention is a property of the PARSER
+    OUTPUT, not of any single balance's sign, so detect it from the data:
+
+      1. Any negative balance anywhere → ``signed``. The legacy magnitude
+         convention cannot emit negatives by construction.
+      2. Otherwise vote row-by-row: for each consecutive pair of balances,
+         check which formula (``prev + cr - dr`` vs ``prev + dr - cr``)
+         reproduces the next balance. Majority wins.
+      3. Tie / no usable pairs → ``signed`` (every modern parser since
+         2026-04-20; only historic Alliance JSONs are legacy).
+    """
+    votes_signed = 0
+    votes_legacy = 0
+    prev: float | None = None
+    for row in transactions:
+        balance = row.get("balance")
+        if balance is None:
+            continue
+        try:
+            b = float(balance)
+        except (TypeError, ValueError):
+            continue
+        if b < 0:
+            return "signed"
+        credit = _safe_amount(row.get("credit"))
+        debit = _safe_amount(row.get("debit"))
+        if prev is not None and (credit > 0) != (debit > 0):
+            if abs(prev + credit - debit - b) <= 0.02:
+                votes_signed += 1
+            elif abs(prev + debit - credit - b) <= 0.02:
+                votes_legacy += 1
+        prev = b
+    return "legacy" if votes_legacy > votes_signed else "signed"
+
+
 def _compute_opening_from_row(
     row: dict[str, Any],
     account_type: str,
+    convention: str = "signed",
 ) -> float | None:
     """Back-compute pre-row balance from the first row of a month.
 
@@ -3578,9 +3709,10 @@ def _compute_opening_from_row(
         balance is a positive number representing the drawdown amount.
         Credits reduce the magnitude, debits increase it — formula inverts.
 
-    Detection uses the sign of the row's balance. Positive balance on an OD
-    account = legacy magnitude convention; zero or negative = signed
-    convention (the modern default).
+    ``convention`` is the account-wide verdict from
+    ``_detect_od_balance_convention`` (the per-row balance sign is NOT a
+    reliable signal — a signed-convention account can open a month in
+    credit). Only honoured for OD accounts.
 
     Returns ``None`` when the row's ``balance`` is missing.
     """
@@ -3593,7 +3725,7 @@ def _compute_opening_from_row(
         return None
     credit = _safe_amount(row.get("credit"))
     debit = _safe_amount(row.get("debit"))
-    if account_type.upper() == "OD" and b > 0:
+    if account_type.upper() == "OD" and convention == "legacy":
         # Legacy positive-magnitude OD: opening = balance + credit - debit.
         return round(b + credit - debit, 2)
     # CR accounts AND signed-negative OD: opening = balance - credit + debit.
@@ -3751,6 +3883,8 @@ def compute_monthly_aggregates(
             continue
         grouped.setdefault(date[:7], []).append(row)
 
+    od_convention = _detect_od_balance_convention(transactions)
+
     results: list[dict[str, Any]] = []
     previous_closing: float | None = None
     for index, month in enumerate(sorted(grouped.keys())):
@@ -3778,7 +3912,9 @@ def compute_monthly_aggregates(
                     pass
 
         if index == 0:
-            opening_balance = _compute_opening_from_row(rows_in_month[0], account_type)
+            opening_balance = _compute_opening_from_row(
+                rows_in_month[0], account_type, od_convention
+            )
         else:
             opening_balance = previous_closing
 
@@ -6762,13 +6898,18 @@ def _build_monthly_for_account(
     # closing| <= RM 1.00. OD accounts in the signed-negative convention
     # (every modern parser as of 2026-04-20) use the same formula as CR.
     # Only OD in the legacy positive-magnitude convention (Alliance
-    # pre-2026-04-20) inverts the sign. Detected from sign of opening.
+    # pre-2026-04-20) inverts the sign. Detected account-wide from the
+    # balance trail (NOT from the sign of one month's opening — a signed-
+    # convention OD account can open a month in credit and dip overdrawn
+    # mid-month, which the old sign-of-opening check misread as legacy and
+    # reported as a phantom extraction gap).
+    od_convention = _detect_od_balance_convention(transactions)
     for entry in monthly_by_key.values():
         opening = float(entry["opening_balance"])
         closing = float(entry["closing_balance"])
         gross_credits = float(entry["gross_credits"])
         gross_debits = float(entry["gross_debits"])
-        if account_type == "OD" and opening > 0:
+        if account_type == "OD" and od_convention == "legacy":
             # Legacy positive-magnitude OD.
             expected_closing = opening + gross_debits - gross_credits
         else:
@@ -7352,6 +7493,58 @@ def _build_loan_transactions_track2(
     return {"disbursements": disbursements, "repayments": repayments}
 
 
+def _build_loan_review_track2(
+    classified: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Loan-shaped rows the classifier did NOT book as facility/RP activity.
+
+    The "silent-zero" safety net (see ``LOAN_SHAPED_RE``). A row is collected
+    when its description looks like facility activity (loan / financing /
+    instalment / hire-purchase / repayment / disbursement) but its primary is
+    NOT in ``_LOAN_REVIEW_SETTLED`` — i.e. it was neither booked C10/C11 nor
+    routed to the related-party rung. These are exactly the rows a closed
+    keyword vocabulary misses; surfacing them turns an invisible miss into an
+    analyst-visible "review" line. Marketing / rate-disclosure prose is
+    dropped via ``_LOAN_NOISE_RE`` and balance rows (C25) are skipped.
+
+    Each entry mirrors the ``transaction_entry`` shape used by the
+    disbursement / repayment lists, plus ``side`` and ``account_no`` so the
+    analyst can locate the row. Pure function.
+    """
+    review: list[dict[str, Any]] = []
+    for row in classified:
+        primary = (row.get("classification") or {}).get("primary")
+        # Only TRULY UNCLASSIFIED rows (primary is None) are "silently missed"
+        # loans — the exact failure this net guards. A row that received ANY
+        # category was a deliberate classifier decision and is NOT a hidden
+        # facility: in particular C24 bank-fee rows like "OTHER TRANSFER FEE
+        # Monthly Instalment" describe what a *fee* was for, not a repayment,
+        # and must not pollute the review list (corpus pass: CIMB 116→ the
+        # genuine person-loan remainder once the C24 fee noise is excluded).
+        if primary is not None:
+            continue
+        description = str(row.get("description") or "")
+        if not LOAN_SHAPED_RE.search(description):
+            continue
+        if _LOAN_NOISE_RE.search(description):
+            continue
+        amount, side = _row_amount_and_side(row)
+        if amount <= 0:
+            continue
+        entry: dict[str, Any] = {
+            "date": str(row.get("date") or ""),
+            "description": description,
+            "amount": round(amount, 2),
+            "side": side,
+            "account_no": _coerce_account_no(row),
+        }
+        balance = row.get("balance")
+        if isinstance(balance, (int, float)):
+            entry["balance"] = float(balance)
+        review.append(entry)
+    return review
+
+
 _OBSERVATION_MAX_ITEMS = 8  # v6.3.4 raised the cap from 5 → 8.
 
 
@@ -7719,6 +7912,11 @@ def build_track2_result(
         "hrdf_count": hrdf.get("hrdf_payments_count") or 0,
         "hrdf_total": hrdf.get("hrdf_payments_amount") or 0.0,
     }
+    # Loan-review safety net: loan-shaped rows booked as neither facility
+    # (C10/C11) nor related-party (C03/C04). Computed before the flags so
+    # Flag 12 can surface the count (turns a silent miss into a review line).
+    loan_review = _build_loan_review_track2(classified)
+    summary_for_flags["loan_review_count"] = len(loan_review)
     indicators = compute_risk_flags(
         summary_for_flags,
         monthly_analysis=monthly,
@@ -7734,6 +7932,9 @@ def build_track2_result(
         classified, counterparty_lookup=counterparty_lookup
     )
     loan_lists = _build_loan_transactions_track2(classified)
+    # Attach the loan-review net (computed above for Flag 12) alongside the
+    # booked disbursement / repayment lists so the renderer can surface it.
+    loan_lists["review"] = loan_review
     observations = _build_observations_track2(
         consolidated, indicators, statutory_compliance
     )
