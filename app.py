@@ -133,7 +133,7 @@ def build_large_transactions(transactions: List[dict], threshold: float) -> List
 def generate_interactive_html(data):
     """Generate interactive HTML report for v6.0.0 schema"""
 
-     # Define build_large_transactions inside the function if needed
+    # Define build_large_transactions inside the function if needed
     def build_large_transactions_internal(transactions, threshold):
         """Build list of large transactions from transaction list"""
         large_txns = []
@@ -169,7 +169,7 @@ def generate_interactive_html(data):
         """Build the same signed round-number transactions shown in Railway."""
         return build_round_transactions(transactions)
     
-    # Then use it:
+    # Extract data
     _fallback_consol = data.get('consolidated') if isinstance(data.get('consolidated'), dict) else {}
     _fallback_summary = data.get('summary') if isinstance(data.get('summary'), dict) else {}
     _fallback_config = data.get('classification_config') if isinstance(data.get('classification_config'), dict) else {}
@@ -212,8 +212,7 @@ def generate_interactive_html(data):
     has_parsing = bool(parsing)
     has_monthly_bd = any(p.get('monthly_breakdown') for p in (top_parties.get('top_payers') or top_parties.get('top_creditors') or []) + (top_parties.get('top_payees') or top_parties.get('top_debtors') or []))
 
-    # v6.2.1: Data quality detection. Prefer parsing_metadata checks because
-    # this is the same source rendered in Balance Reconciliation Detail.
+    # v6.2.1: Data quality detection
     parsing_checks = parsing.get('account_month_checks', []) if isinstance(parsing, dict) else []
     recon_lookup = {}
     for chk in parsing_checks:
@@ -367,11 +366,7 @@ def generate_interactive_html(data):
         rel = rp.get('relationship', '') if isinstance(rp, dict) else ''
         rp_html += f'<span class="rp-tag">{name} <small>({rel})</small></span>'
 
-    # ── Monthly analysis table rows (per-account with month subtotals) ──
-    # Detect if data has per-account rows (v6.1.0) or consolidated (v6.0.0)
-    has_account_col = any(m.get('account_number') for m in monthly)
-
-    # Group by month for subtotals and chart aggregation
+    # ── Monthly analysis table rows ──
     from collections import OrderedDict
     monthly_by_month = OrderedDict()
     for m in monthly:
@@ -380,7 +375,6 @@ def generate_interactive_html(data):
             monthly_by_month[mo] = []
         monthly_by_month[mo].append(m)
 
-    # Build distinct accounts list for coloring
     acct_list = []
     seen_acct = set()
     for m in monthly:
@@ -394,11 +388,9 @@ def generate_interactive_html(data):
         acct_colors[a] = palette[i % len(palette)]
 
     monthly_rows = ""
-    # Aggregated data for charts (per-month consolidated)
-    chart_agg = OrderedDict()  # month -> {net_credits, net_debits, eod_lowest, eod_highest, eod_average}
+    chart_agg = OrderedDict()
 
     for mo, rows in monthly_by_month.items():
-        # Aggregate for chart
         agg = {}
         sum_fields = ['gross_credits','gross_debits','net_credits','net_debits',
                        'own_party_cr','own_party_dr','related_party_cr','related_party_dr',
@@ -420,17 +412,17 @@ def generate_interactive_html(data):
         agg['eod_lowest'] = min(r.get('eod_lowest', 0) or 0 for r in rows)
         agg['eod_highest'] = max(r.get('eod_highest', 0) or 0 for r in rows)
         agg['eod_average'] = sum(r.get('eod_average', 0) or 0 for r in rows) / len(rows) if rows else 0
-        # For multi-account months, sum opening/closing across accounts; for single account, take directly
         agg['opening_balance'] = sum(r.get('opening_balance', 0) or 0 for r in rows)
         agg['closing_balance'] = sum(r.get('closing_balance', 0) or 0 for r in rows)
         chart_agg[mo] = agg
 
+        has_account_col = any(m.get('account_number') for m in monthly)
+
         if has_account_col and len(rows) > 1:
-            # Multiple accounts — show per-account rows then subtotal
             for m in rows:
                 an = m.get('account_number', '')
                 bn = m.get('bank_name', '')
-                short_bank = bn.split(' ')[0] if bn else ''  # e.g. "OCBC" or "CIMB"
+                short_bank = bn.split(' ')[0] if bn else ''
                 acct_label = f"{short_bank} {an}" if an else mo
                 dot_color = acct_colors.get(an, 'var(--text-muted)')
                 monthly_rows += f'''<tr style="font-size:0.78rem;">
@@ -470,9 +462,7 @@ def generate_interactive_html(data):
             {'<td class="mono r v630-count">' + str(m.get('own_party_cr_count',0)) + '</td><td class="mono r v630-count">' + str(m.get('own_party_dr_count',0)) + '</td><td class="mono r v630-count">' + str(m.get('related_party_cr_count',0)) + '</td><td class="mono r v630-count">' + str(m.get('related_party_dr_count',0)) + '</td><td class="mono r v630-count">' + str(m.get('loan_repayment_count',0)) + '</td><td class="mono r v630-amt">' + f"{m.get('inward_return_cr',0):,.2f}" + '</td><td class="mono r v630-uncl">' + str(m.get('unclassified_cr_count',0)) + '</td><td class="mono r v630-uncl">' + f"{m.get('unclassified_cr_amount',0):,.2f}" + '</td><td class="mono r v630-uncl">' + str(m.get('unclassified_dr_count',0)) + '</td><td class="mono r v630-uncl">' + f"{m.get('unclassified_dr_amount',0):,.2f}" + '</td>' if is_v630 else ''}
         </tr>'''
 
-            # Month subtotal row
             a = agg
-            # v6.2.1: aggregate reconciliation for multi-account month
             month_recon_cell = ''
             if has_recon:
                 any_fail = any(_recon_status_for_month_row(r) == 'FAIL' for r in rows)
@@ -519,7 +509,6 @@ def generate_interactive_html(data):
             {'<td class="mono r v630-count">' + str(int(a.get('own_party_cr_count',0))) + '</td><td class="mono r v630-count">' + str(int(a.get('own_party_dr_count',0))) + '</td><td class="mono r v630-count">' + str(int(a.get('related_party_cr_count',0))) + '</td><td class="mono r v630-count">' + str(int(a.get('related_party_dr_count',0))) + '</td><td class="mono r v630-count">' + str(int(a.get('loan_repayment_count',0))) + '</td><td class="mono r v630-amt">' + f"{a.get('inward_return_cr',0):,.2f}" + '</td><td class="mono r v630-uncl">' + str(int(a.get('unclassified_cr_count',0))) + '</td><td class="mono r v630-uncl">' + f"{a.get('unclassified_cr_amount',0):,.2f}" + '</td><td class="mono r v630-uncl">' + str(int(a.get('unclassified_dr_count',0))) + '</td><td class="mono r v630-uncl">' + f"{a.get('unclassified_dr_amount',0):,.2f}" + '</td>' if is_v630 else ''}
         </tr>'''
         else:
-            # Single account or v6.0.0 consolidated — single row per month
             m = rows[0] if rows else {}
             recon_status = _recon_status_for_month_row(m)
             row_class = ' class="row-fail"' if recon_status == 'FAIL' else ''
@@ -611,8 +600,40 @@ def generate_interactive_html(data):
         {'<td class="mono r v630-count">-</td><td class="mono r v630-count">-</td><td class="mono r v630-count">-</td><td class="mono r v630-count">-</td><td class="mono r v630-count">-</td><td class="mono r v630-amt">' + f"{consol.get('total_inward_return_cr',0):,.2f}" + '</td><td class="mono r v630-uncl">-</td><td class="mono r v630-uncl">' + f"{consol.get('total_unclassified_cr',0):,.2f}" + '</td><td class="mono r v630-uncl">-</td><td class="mono r v630-uncl">' + f"{consol.get('total_unclassified_dr',0):,.2f}" + '</td>' if is_v630 else ''}
     </tr>'''
 
-    # ── Top payers/payees ──
-    # Normalize: schema may emit `top_payers`/`top_payees` or `top_creditors`/`top_debtors`
+    # ── Top parties with ghost-verb suppression ──
+    _GHOST_STOPWORDS = {
+        'TRANSFER', 'PAYMENT', 'IBG', 'IB2G', 'IBFT', 'IBK', 'CR', 'DR', 'CREDIT', 'DEBIT',
+        'TO', 'FR', 'FROM', 'A/C', 'C/A', 'ACCOUNT', 'ACCT', 'INTER', 'BANK', 'BANKING', 'INTO',
+        'ONLINE', 'DUITNOW', 'DUIT', 'NOW', 'FPX', 'RENTAS', 'REMITTANCE', 'ELECTRONIC',
+        'AUTOPAY', 'INSTANT', 'FAST', 'OUTWARD', 'INWARD', 'OUTW', 'INW',
+        'OUT', 'IN', 'ADVICE', 'TRF', 'BLKTRF', 'NBPS', 'TR', 'PYMT', 'PAY',
+        'THE', 'AND', 'OF', 'FOR', 'WITH',
+        'SA', 'CA', 'CCARD', 'CARD',
+        'CHQ', 'CHEQUE', 'CASH', 'DEPOSIT', 'WITHDRAWAL', 'HSE', 'HOUSE',
+        'CLRG', 'CDM', '2D', 'LOCAL', 'GIR', 'GIRO',
+        'HLB', 'MBB', 'RHB', 'ABB', 'PBB', 'BIMB', 'AMB', 'AMBANK', 'PBE',
+        'CIMB', 'OCBC', 'UOB', 'BSN',
+        'PMT', 'SLRY',
+    }
+    _CHEQUE_NOISE = {
+        'HSE CHQ DEPOSIT', 'CDM CASH DEPOSIT', '2D LOCAL CHQ', 'CASH CHQ DR',
+        'HOUSE CHQ DR', 'CLRG CHQ DR', 'HSE CHQ', 'CHEQUE DEPOSIT', 'CHQ DEPOSIT',
+    }
+
+    def _is_ghost_verb(name):
+        if not name:
+            return True
+        normalised = re.sub(r'[.,]', '', name.upper())
+        normalised = re.sub(r'\b(SDN|BHD|& CO|\(M\)|PTY|LTD)\b', '', normalised)
+        normalised = re.sub(r'\s+', ' ', normalised).strip()
+        if not normalised:
+            return True
+        if normalised in _CHEQUE_NOISE:
+            return True
+        tokens = [t for t in re.split(r'[\s/\-]+', normalised) if t]
+        real_tokens = [t for t in tokens if len(t) >= 3 and t not in _GHOST_STOPWORDS and re.search(r'[A-Z]', t)]
+        return len(real_tokens) == 0
+
     def _normalize_party(p, is_payer):
         if not isinstance(p, dict):
             return {}
@@ -630,76 +651,19 @@ def generate_interactive_html(data):
             'monthly_breakdown': p.get('monthly_breakdown'),
         }
 
-    # v6.3.3.2: ghost-verb suppression (cross-bank). Defensive filter — excludes counterparty
-    # entries that are ONLY a payment-rail prefix with no entity name attached. Parser dropouts
-    # like bare 'TRANSFER FR A/C', 'TR TO C/A', 'IBG CREDIT', 'Instant Transfer' should not rank
-    # as top parties. See CLASSIFICATION_RULES_v3_3.json CN6 for the full spec.
-    _GHOST_STOPWORDS = {
-        # Generic transfer verbs / rails
-        'TRANSFER', 'PAYMENT', 'IBG', 'IB2G', 'IBFT', 'IBK', 'CR', 'DR', 'CREDIT', 'DEBIT',
-        'TO', 'FR', 'FROM', 'A/C', 'C/A', 'ACCOUNT', 'ACCT', 'INTER', 'BANK', 'BANKING', 'INTO',
-        'ONLINE', 'DUITNOW', 'DUIT', 'NOW', 'FPX', 'RENTAS', 'REMITTANCE', 'ELECTRONIC',
-        'AUTOPAY', 'INSTANT', 'FAST', 'OUTWARD', 'INWARD', 'OUTW', 'INW',
-        'OUT', 'IN', 'ADVICE', 'TRF', 'BLKTRF', 'NBPS', 'TR', 'PYMT', 'PAY',
-        # English connectives
-        'THE', 'AND', 'OF', 'FOR', 'WITH',
-        # Account-side / card abbreviations
-        'SA', 'CA', 'CCARD', 'CARD',
-        # Cheque / cash
-        'CHQ', 'CHEQUE', 'CASH', 'DEPOSIT', 'WITHDRAWAL', 'HSE', 'HOUSE',
-        'CLRG', 'CDM', '2D', 'LOCAL', 'GIR', 'GIRO',
-        # Bank name abbreviations (Malaysia) — when parser outputs just "<BANK_ABBR> IBG" with
-        # no entity after. Only include abbreviations that are unlikely to appear inside real
-        # company names. Excluded words like HONG/LEONG/PUBLIC/ALLIANCE/RAKYAT/BERHAD — those
-        # can legitimately be part of a real entity name.
-        'HLB', 'MBB', 'RHB', 'ABB', 'PBB', 'BIMB', 'AMB', 'AMBANK', 'PBE',
-        'CIMB', 'OCBC', 'UOB', 'BSN',
-        # Misc salary/payment abbreviations
-        'PMT', 'SLRY',
-    }
-    _CHEQUE_NOISE = {
-        'HSE CHQ DEPOSIT', 'CDM CASH DEPOSIT', '2D LOCAL CHQ', 'CASH CHQ DR',
-        'HOUSE CHQ DR', 'CLRG CHQ DR', 'HSE CHQ', 'CHEQUE DEPOSIT', 'CHQ DEPOSIT',
-    }
-
-    def _is_ghost_verb(name):
-        """Return True if name is a parser-dropout (no real entity)."""
-        if not name:
-            return True
-        import re as _re
-        normalised = _re.sub(r'[.,]', '', name.upper())
-        # strip common company suffixes so "TRANSFER TO A/C" vs "TRANSFER TO A/C SDN BHD" both normalise
-        normalised = _re.sub(r'\b(SDN|BHD|& CO|\(M\)|PTY|LTD)\b', '', normalised)
-        normalised = _re.sub(r'\s+', ' ', normalised).strip()
-        if not normalised:
-            return True
-        if normalised in _CHEQUE_NOISE:
-            return True
-        # Tokenise on whitespace and slashes. A real entity has at least one alphabetic token
-        # of ≥3 letters that is NOT in the stopword set.
-        tokens = [t for t in _re.split(r'[\s/\-]+', normalised) if t]
-        real_tokens = [t for t in tokens if len(t) >= 3 and t not in _GHOST_STOPWORDS and _re.search(r'[A-Z]', t)]
-        return len(real_tokens) == 0
-
     _raw_payers = top_parties.get('top_payers') or top_parties.get('top_creditors') or []
     _raw_payees = top_parties.get('top_payees') or top_parties.get('top_debtors') or []
-    # Filter ghost verbs BEFORE slicing to 10, so suppressed entries don't crowd out real ones.
     _payers_all = [_normalize_party(p, True) for p in _raw_payers]
     _payees_all = [_normalize_party(p, False) for p in _raw_payees]
     _payers_suppressed = [p for p in _payers_all if _is_ghost_verb(p.get('party_name', ''))]
     _payees_suppressed = [p for p in _payees_all if _is_ghost_verb(p.get('party_name', ''))]
     _payers = [p for p in _payers_all if not _is_ghost_verb(p.get('party_name', ''))][:10]
     _payees = [p for p in _payees_all if not _is_ghost_verb(p.get('party_name', ''))][:10]
-    # Re-rank 1..N after filtering
     for i, p in enumerate(_payers, 1):
         p['rank'] = i
     for i, p in enumerate(_payees, 1):
         p['rank'] = i
 
-    # v6.3.3.2 safeguard: render suppressed buckets in a VISIBLE panel under the Top 10, so
-    # analyst never loses sight of what was hidden. If the suppressed bucket has a material
-    # amount (>=RM 100,000) OR high transaction count (>=50), flag it with a VERIFY warning so
-    # a possible real-entity false-positive gets human review.
     def _render_suppressed(entries, side_css):
         if not entries:
             return ''
@@ -720,18 +684,17 @@ def generate_interactive_html(data):
             <div style="font-size:0.78rem;color:var(--text-soft);margin-bottom:0.5rem">
                 <strong>Parser-dropped buckets</strong> — counterparties that were only a transfer verb with no entity name attached.
                 Amounts are still counted in gross/net totals; they are hidden from the Top 10 rank to avoid misleading the analyst.
-                <span style="background:var(--amber);color:white;padding:1px 6px;border-radius:3px;font-size:0.7rem">VERIFY</span> = high volume \u2014 possible real-entity false positive, please cross-check.
+                <span style="background:var(--amber);color:white;padding:1px 6px;border-radius:3px;font-size:0.7rem">VERIFY</span> = high volume — possible real-entity false positive, please cross-check.
             </div>
             <table style="width:100%;font-size:0.78rem"><thead><tr>
                 <th style="text-align:left">Bucket (parser artifact)</th>
                 <th class="r">Amount (RM)</th><th class="r">Txns</th>
-            </tr></thead><tbody>{rows}</tbody></table>
+            </tr></thead><tbody>{rows}</tbody>
         </div>'''
 
     payers_suppressed_html = _render_suppressed(_payers_suppressed, 'credit')
     payees_suppressed_html = _render_suppressed(_payees_suppressed, 'debit')
 
-    # v6.3.4: compact money formatter for inline bar labels (e.g. 162394 -> "162K", 1_245_000 -> "1.2M")
     def _fmt_compact(n):
         try:
             n = float(n or 0)
@@ -750,7 +713,6 @@ def generate_interactive_html(data):
     }
 
     def _fmt_month_label(month_str):
-        """Convert '2025-03' -> 'Mar', '2025-03-01' -> 'Mar'; fall back to raw if unparseable."""
         if not month_str:
             return ''
         parts = str(month_str).split('-')
@@ -759,9 +721,6 @@ def generate_interactive_html(data):
         return str(month_str)[-5:]
 
     def _render_monthly_bars(monthly_breakdown, color_var):
-        """v6.3.4: bars + inline month/amount labels below. Always renders when data is present.
-        Previously gated on a global has_monthly_bd flag — now per-party consistent across all banks.
-        """
         if not monthly_breakdown:
             return ''
         mb_vals = [mb.get('amount', 0) for mb in monthly_breakdown]
@@ -772,7 +731,6 @@ def generate_interactive_html(data):
             f'min-width:4px;height:{max(2, int(mb.get("amount",0)/max_mb*28))}px"></div>'
             for mb in monthly_breakdown
         )
-        # Inline label row: "Mar: 162K" per bar. Short form keeps labels readable at narrow widths.
         labels = ''.join(
             f'<span style="flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
             f'{_fmt_month_label(mb.get("month",""))}: {_fmt_compact(mb.get("amount",0))}'
@@ -806,9 +764,7 @@ def generate_interactive_html(data):
             <td class="mono r">{p.get('transaction_count',0)}</td>
         </tr>'''
 
-
-        # ── Large transactions (both credits and debits above threshold) ──
-    # Get threshold from consolidated or report_info
+    # ── Large transactions ──
     large_threshold = safe_float(
         consol.get('high_value_threshold')
         or consol.get('large_credit_threshold')
@@ -819,22 +775,16 @@ def generate_interactive_html(data):
     if large_threshold <= 0:
         large_threshold = 100000
     
-    # Get large transactions data - support multiple formats
     large_txns = data.get('large_transactions', [])
-    
-    # If large_transactions is empty, try to build it from transactions
     if (not large_txns or len(large_txns) == 0) and data.get('transactions'):
-        # Use the external build_large_transactions function
         try:
             large_txns = build_large_transactions(data.get('transactions', []), large_threshold)
         except Exception as e:
             print(f"[DEBUG] Error building large transactions: {e}")
             large_txns = []
     
-    # Also check for large_credits as fallback
     large_credits = data.get('large_credits', [])
     if (not large_txns or len(large_txns) == 0) and large_credits:
-        # Convert old format to new format
         large_txns = []
         for t in large_credits:
             if isinstance(t, dict):
@@ -846,7 +796,6 @@ def generate_interactive_html(data):
                     'type': 'CREDIT'
                 })
     
-    # Build the large transaction rows HTML as a proper table
     large_txn_rows = ""
     if large_txns and isinstance(large_txns, list) and len(large_txns) > 0:
         for t in large_txns:
@@ -862,7 +811,6 @@ def generate_interactive_html(data):
                 balance = 0
             date_str = str(t.get('date', ''))
             desc_str = str(t.get('description', ''))[:70]
-            # Ensure we're building proper table rows
             large_txn_rows += f'''
                 <tr>
                     <td>{date_str}</td>
@@ -871,13 +819,11 @@ def generate_interactive_html(data):
                     <td class="mono r">RM {float(balance):,.2f}</td>
                 </tr>'''
     else:
-        # Provide a meaningful message when no transactions are found
         large_txn_rows = f'''
                 <tr>
                     <td colspan="4" class="note">No transactions above RM {large_threshold:,.0f}</td>
                 </tr>'''
     
-    # Also ensure the round-number transactions section has proper table structure
     round_figure_credits = get_round_transactions_for_report(data)
     if not round_figure_credits and data.get('transactions'):
         round_figure_credits = build_round_figure_credits_internal(data.get('transactions', []))
@@ -909,7 +855,6 @@ def generate_interactive_html(data):
 
     # ── Related party transactions ──
     rp_summary = own_related.get('summary', {}) or {}
-    # Derive counts from transactions when summary fields are missing/zero
     _rp_txns_all = own_related.get('transactions', []) or []
     def _count_txn(party_type_prefix, txn_type):
         c = 0
@@ -941,7 +886,7 @@ def generate_interactive_html(data):
     rp_total = len(own_related.get('transactions', []))
     rp_note = f'<div class="note">Showing first 50 of {rp_total} transactions</div>' if rp_total > 50 else ''
 
-    # ── v6.3.3: Counterparty Ledger ──
+    # ── Counterparty Ledger ──
     counterparty_ledger_html = ''
     cp_ledger = data.get('counterparty_ledger')
     if cp_ledger:
@@ -961,9 +906,6 @@ def generate_interactive_html(data):
         purpose_strips = cleaning_stats.get('purpose_strips', 0)
         original_cp = cleaning_stats.get('original_counterparties', 0)
 
-        # v6.3.5: counterparty_ledger.extraction_stats — shape-polymorphic.
-        # Single-bank engine emits {pattern_matched, special_bucket, raw_fallback, total_transactions};
-        # multi-bank consolidated emits {merged_from_banks: [...]}.
         ext_stats = cp_ledger.get('extraction_stats') if isinstance(cp_ledger.get('extraction_stats'), dict) else {}
         merged_banks = ext_stats.get('merged_from_banks') if isinstance(ext_stats.get('merged_from_banks'), list) else None
         ext_pattern = ext_stats.get('pattern_matched')
@@ -1071,7 +1013,7 @@ def generate_interactive_html(data):
                 }}
             </script>'''
 
-    # ── v6.3.1: Statutory Compliance ──
+    # ── Statutory Compliance ──
     statutory_html = ''
     stat_comp = consol.get('statutory_compliance')
     if stat_comp:
@@ -1079,9 +1021,6 @@ def generate_interactive_html(data):
         overall_color = {'COMPLIANT': 'green', 'GAPS_DETECTED': 'amber', 'CRITICAL': 'red'}.get(overall, 'amber')
 
         def _cov_bar(label, paid, total, missing, paid_list=None, salary_list=None):
-            # v6.3.3.2 defensive fix: coverage must be bounded [0, 100] and use set intersection
-            # when paid_list and salary_list are available. Raw paid/total produces >100% when
-            # statutory pays in a non-payroll month (MYTUTOR LHDN 120% bug).
             if not total:
                 return f'<div class="summary-card"><div class="val">N/A</div><div class="lbl">{label}</div></div>'
             if paid_list is not None and salary_list is not None and salary_list:
@@ -1090,9 +1029,9 @@ def generate_interactive_html(data):
                 display_total = len(salary_list)
             else:
                 display_total = total
-                display_paid = min(paid, total)  # cap fraction defensively
+                display_paid = min(paid, total)
             pct = (display_paid / display_total * 100) if display_total else 0
-            pct = max(0.0, min(pct, 100.0))  # hard cap [0, 100]
+            pct = max(0.0, min(pct, 100.0))
             bar_color = 'green' if pct >= 99.5 else ('amber' if pct >= 50 else 'red')
             miss_str = f'<div style="font-size:0.7rem;color:var(--amber);margin-top:0.25rem">Missing: {", ".join(missing[:6])}{"..." if len(missing) > 6 else ""}</div>' if missing else ''
             return f'''<div class="summary-card">
@@ -1110,7 +1049,6 @@ def generate_interactive_html(data):
             except (TypeError, ValueError):
                 return 0
 
-        # v6.3.3.2: prefer lists where available so we can intersect (covered ∩ salary)
         salary_list = stat_comp.get('salary_months_list') or []
         salary_months = _as_int(stat_comp.get('salary_months_active', 0)) or len(salary_list)
         epf_list = stat_comp.get('epf_months_list') or []
@@ -1120,22 +1058,15 @@ def generate_interactive_html(data):
         socso_paid = _as_int(stat_comp.get('socso_months_paid', 0)) or len(socso_list)
         socso_missing = stat_comp.get('socso_months_missing', []) or []
         lhdn_det = stat_comp.get('lhdn_detected', False)
-        lhdn_list = stat_comp.get('lhdn_months_list') or []  # may not be in older JSON
+        lhdn_list = stat_comp.get('lhdn_months_list') or []
         lhdn_paid = _as_int(stat_comp.get('lhdn_months_paid', 0)) or len(lhdn_list)
         hrdf_det = stat_comp.get('hrdf_detected', False)
-        hrdf_list = stat_comp.get('hrdf_months_list') or []  # may not be in older JSON
+        hrdf_list = stat_comp.get('hrdf_months_list') or []
         hrdf_paid = _as_int(stat_comp.get('hrdf_months_paid', 0)) or len(hrdf_list)
 
         cov_cards = _cov_bar('EPF Coverage', epf_paid, salary_months, epf_missing, epf_list, salary_list)
         cov_cards += _cov_bar('SOCSO Coverage', socso_paid, salary_months, socso_missing, socso_list, salary_list)
 
-        # v6.3.3.2: LHDN and HRDF decoupled from salary-months coverage.
-        # Reason: LHDN bucket includes CP204 (corporate tax), SST, stamp duty,
-        # etc. in addition to PCB/MTD (salary withholding) — so a paid/salary
-        # ratio mixes unrelated payment types (this was the source of the
-        # 120% display on MYTUTOR). HRDF is genuinely exempt for small employers
-        # so a coverage % is also misleading.
-        # Show as informational count + total amount instead.
         total_lhdn = float(consol.get('total_statutory_tax', 0) or 0)
         total_hrdf = float(consol.get('total_statutory_hrdf', 0) or 0)
 
@@ -1191,7 +1122,6 @@ def generate_interactive_html(data):
         epf_ratio_rows_html = _ratio_rows(stat_comp.get('epf_per_month_ratios', []), True)
         socso_ratio_rows_html = _ratio_rows(stat_comp.get('socso_per_month_ratios', []), False)
 
-        # v6.3.5: employer-footprint checks (sub-threshold + channel-blind)
         sub_thr = stat_comp.get('subthreshold_employer') if isinstance(stat_comp.get('subthreshold_employer'), dict) else None
         ch_blind = stat_comp.get('channel_blind_employer') if isinstance(stat_comp.get('channel_blind_employer'), dict) else None
         footprint_html = ''
@@ -1265,7 +1195,6 @@ def generate_interactive_html(data):
             </div>'''
 
     # ── Loan transactions ──
-    # ── Loan transactions / Facilities ──
     def _facility_amount(t):
         try:
             return float(t.get("amount") or 0)
@@ -1275,8 +1204,6 @@ def generate_interactive_html(data):
     def _is_real_facility(t, expected_category):
         if not isinstance(t, dict):
             return False
-        # Only Track 2 booked facility categories count.
-        # Do NOT include loans["review"] / loan-shaped / unclassified rows.
         return t.get("category") == expected_category and _facility_amount(t) > 0
 
     loan_disbursements = [
@@ -1310,20 +1237,23 @@ def generate_interactive_html(data):
             <td>{escape(str(t.get('category','')))}</td>
         </tr>'''
 
-        # ── Flags ──
-        flag_rows = ""
-        detected_count = 0
-        for f in flags_data.get('indicators', []):
-            detected = f.get('detected', False)
-            if detected:
-                detected_count += 1
-            status_cls = 'flag-yes' if detected else 'flag-no'
-            flag_rows += f'''<tr class="{status_cls}">
-                <td class="mono">{f.get('id','')}</td>
-                <td>{f.get('name','')}</td>
-                <td class="mono" style="text-align:center"><span class="flag-dot {'detected' if detected else 'clear'}"></span> {'YES' if detected else 'NO'}</td>
-                <td>{f.get('remarks','')}</td>
-            </tr>'''
+    # ── Flags ──
+    # IMPORTANT: Process flags BEFORE building the HTML to define detected_count and total_flags
+    flag_rows = ""
+    detected_count = 0
+    for f in flags_data.get('indicators', []):
+        detected = f.get('detected', False)
+        if detected:
+            detected_count += 1
+        status_cls = 'flag-yes' if detected else 'flag-no'
+        flag_rows += f'''<tr class="{status_cls}">
+            <td class="mono">{f.get('id','')}</td>
+            <td>{f.get('name','')}</td>
+            <td class="mono" style="text-align:center"><span class="flag-dot {'detected' if detected else 'clear'}"></span> {'YES' if detected else 'NO'}</td>
+            <td>{f.get('remarks','')}</td>
+        </tr>'''
+
+    total_flags = len(flags_data.get('indicators', []))
 
     # ── Observations ──
     pos_obs = "".join([f'<li class="obs-item positive">{o}</li>' for o in obs.get('positive', [])])
@@ -1333,11 +1263,7 @@ def generate_interactive_html(data):
         for o in con_obs_items
     ])
 
-    # ── Chart data (JSON for Plotly) — use aggregated monthly if per-account ──
-    # v6.2.0: also build FX chart data
-    fx_chart_cr = []
-    fx_chart_dr = []
-
+    # ── Chart data ──
     if chart_agg:
         chart_months = json.dumps(list(chart_agg.keys()))
         chart_net_cr = json.dumps([round(a['net_credits'], 2) for a in chart_agg.values()])
@@ -1345,6 +1271,8 @@ def generate_interactive_html(data):
         chart_eod_avg = json.dumps([round(a['eod_average'], 2) for a in chart_agg.values()])
         chart_eod_low = json.dumps([round(a['eod_lowest'], 2) for a in chart_agg.values()])
         chart_eod_high = json.dumps([round(a['eod_highest'], 2) for a in chart_agg.values()])
+        fx_chart_cr = []
+        fx_chart_dr = []
         if is_v620:
             for mo, rows in monthly_by_month.items():
                 fx_chart_cr.append(sum(r.get('fx_credit_amount', 0) or 0 for r in rows))
@@ -1356,14 +1284,13 @@ def generate_interactive_html(data):
         chart_eod_avg = json.dumps([m.get('eod_average', 0) for m in monthly])
         chart_eod_low = json.dumps([m.get('eod_lowest', 0) for m in monthly])
         chart_eod_high = json.dumps([m.get('eod_highest', 0) for m in monthly])
-        if is_v620:
-            fx_chart_cr = [m.get('fx_credit_amount', 0) for m in monthly]
-            fx_chart_dr = [m.get('fx_debit_amount', 0) for m in monthly]
+        fx_chart_cr = [m.get('fx_credit_amount', 0) for m in monthly] if is_v620 else []
+        fx_chart_dr = [m.get('fx_debit_amount', 0) for m in monthly] if is_v620 else []
 
     fx_chart_cr_json = json.dumps(fx_chart_cr)
     fx_chart_dr_json = json.dumps(fx_chart_dr)
 
-    # v6.2.0: Build FX tab HTML
+    # ── FX Tab ──
     fx_tab_html = ''
     if is_v620:
         fx_currencies_all = consol.get('fx_currencies_all', [])
@@ -1413,7 +1340,7 @@ def generate_interactive_html(data):
                 <td>{', '.join(sorted(fx_cur)) if fx_cur else '-'}</td></tr>'''
         fx_tab_html += '</tbody></table></div></div></div></div>'
 
-    # v6.3.0: Build Unclassified Transactions tab HTML
+    # ── Unclassified Tab ──
     unclassified_tab_html = ''
     if is_v630:
         uncl_txns = data.get('unclassified_transactions', [])
@@ -1424,7 +1351,6 @@ def generate_interactive_html(data):
         cls_config = data.get('classification_config', {})
         uncl_threshold = cls_config.get('unclassified_listing_threshold', 10000)
 
-        # Monthly breakdown rows
         uncl_monthly_rows = ''
         for mo, rows in monthly_by_month.items():
             mo_uncl_cr_count = sum(r.get('unclassified_cr_count', 0) or 0 for r in rows)
@@ -1442,7 +1368,6 @@ def generate_interactive_html(data):
                 <td class="mono r">{pct_of_net:.1f}%</td>
             </tr>'''
 
-        # Individual transactions rows
         uncl_txn_rows = ''
         for t in uncl_txns:
             type_cls = 'credit' if t.get('type') == 'CREDIT' else 'debit'
@@ -1478,13 +1403,12 @@ def generate_interactive_html(data):
             {'<div class="section"><div class="section-head"><h2>Individual Unclassified Transactions (&ge; RM ' + f"{uncl_threshold:,.0f}" + ')</h2><span class="badge badge-current">' + str(len(uncl_txns)) + ' transactions</span></div><div class="section-body" style="padding:0"><div class="table-wrap" style="max-height:500px;overflow:auto"><table><thead><tr><th>Date</th><th>Description</th><th class="r">Amount</th><th>Type</th><th class="r">Balance</th></tr></thead><tbody>' + uncl_txn_rows + '</tbody></table></div></div></div>' if uncl_txns else ''}
         </div>'''
 
-    # v6.2.0/v6.2.1: Build Parsing QC tab HTML
+    # ── Parsing QC Tab ──
     parsing_tab_html = ''
     if has_parsing:
         success_rate = parsing.get('overall_success_rate', 0)
         success_rate_pct = success_rate * 100 if success_rate <= 1 else success_rate
         rate_color = 'green' if success_rate_pct >= 95 else 'amber' if success_rate_pct >= 80 else 'red'
-        # v6.2.1: Additional gap stats
         if 'total_extraction_gaps' in consol:
             p_total_gaps = int(consol.get('total_extraction_gaps') or 0)
         else:
@@ -1531,7 +1455,6 @@ def generate_interactive_html(data):
             </tr>'''
         parsing_tab_html += '''</tbody></table></div></div></div>'''
 
-        # v6.2.1: Extraction gap detail section within Parsing QC tab
         p_extraction_gaps = (parsing.get('extraction_gaps', []) or []) if is_incomplete else []
         if p_extraction_gaps:
             parsing_tab_html += '''<div class="section"><div class="section-head"><h2 style="color:var(--red)">Extraction Gap Details</h2></div><div class="section-body" style="padding:0"><div class="table-wrap"><table>
@@ -1547,7 +1470,6 @@ def generate_interactive_html(data):
                 </tr>'''
             parsing_tab_html += '</tbody></table></div></div></div>'
 
-        # Gap 4: Classification Config section
         cls_config = data.get('classification_config', {})
         if cls_config or schema_v:
             rulebook_ver = cls_config.get('rulebook_version', 'N/A')
@@ -1572,7 +1494,7 @@ def generate_interactive_html(data):
                 </div>
             </div>'''
 
-        # Gap 6: V1-V6 Formula Validation Checks
+        # Formula Validation Checks
         gross_cr = consol.get('gross_credits', 0) or 0
         own_cr = consol.get('total_own_party_cr', 0) or 0
         rp_cr = consol.get('total_related_party_cr', 0) or 0
@@ -1626,7 +1548,6 @@ def generate_interactive_html(data):
             else (f'{v4_ratio:.1f}%' if salary > 0 else 'No salary detected')
         )
 
-        # V6: Sum of monthly net_credits = consolidated net_credits
         monthly_net_cr_sum = sum(
             sum(r.get('net_credits', 0) or 0 for r in rows)
             for rows in monthly_by_month.values()
@@ -1669,6 +1590,7 @@ def generate_interactive_html(data):
 
         parsing_tab_html += '</div>'
 
+    # ── Fraud Detector Tab ──
     def _pdf_detail_to_text(value) -> str:
         if value in (None, "", [], {}):
             return ""
@@ -1691,7 +1613,6 @@ def generate_interactive_html(data):
         return any(pattern in message for pattern in benign_patterns)
 
     def _normalise_pdf_layer_rows(pdf_file: dict) -> list:
-        """Normalise Railway analyze_pdf_batch output and legacy HTML shapes."""
         layer_order = [
             ("metadata", "Layer 1: Metadata"),
             ("fonts", "Layer 2: Fonts"),
@@ -1783,10 +1704,6 @@ def generate_interactive_html(data):
             return rows
         return []
 
-    # v6.3.0: Build Fraud Detector tab HTML
-    # v6.3.4: ALWAYS build the tab — when pdf_integrity is missing from the analysis JSON,
-    # render a clear placeholder so analysts see the tab every time (consistency across
-    # customers / banks). Previously Muhafiz-style runs silently omitted the tab.
     fraud_tab_html = ''
     pdf_integrity = data.get('pdf_integrity')
     if not pdf_integrity:
@@ -1812,11 +1729,9 @@ def generate_interactive_html(data):
             </div>
         </div>'''
     elif pdf_integrity:
-        # pdf_integrity can be a dict of filename->results or a list
         if isinstance(pdf_integrity, dict):
             pdf_files = pdf_integrity.get('files', [])
             if not pdf_files and not isinstance(pdf_integrity.get(next(iter(pdf_integrity), ''), {}), list):
-                # It might be keyed by filename
                 pdf_files_dict = {k: v for k, v in pdf_integrity.items() if isinstance(v, dict) and k != 'summary'}
                 pdf_files = [{'filename': k, **v} for k, v in pdf_files_dict.items()]
             if not pdf_files:
@@ -1826,7 +1741,6 @@ def generate_interactive_html(data):
         else:
             pdf_files = []
 
-        # Determine overall risk
         all_severities = []
         total_checks = 0
         high_count = 0
@@ -1850,7 +1764,6 @@ def generate_interactive_html(data):
         overall_label = {'low': 'ALL CLEAR', 'medium': 'REVIEW NEEDED', 'high': 'HIGH RISK'}[overall_risk]
         overall_icon = {'low': '&#x1F6E1;', 'medium': '&#x26A0;&#xFE0F;', 'high': '&#x1F6A8;'}[overall_risk]
 
-        # Per-file sections
         file_sections = ''
         for pf in pdf_files:
             fname = pf.get('filename', pf.get('file', 'Unknown'))
@@ -1905,9 +1818,7 @@ def generate_interactive_html(data):
             {file_sections}
         </div>'''
 
-    # Count flags
-    total_flags = len(flags_data.get('indicators', []))
-
+    # ── Build HTML ──
     html = f'''<!DOCTYPE html>
 <html lang="en" data-theme="light">
 <head>
@@ -2244,11 +2155,10 @@ def generate_interactive_html(data):
             </div>
             <div class="note">Net Credits = Gross Credits - Own Party - Related Party - Reversals - Loan Disbursements - FD/Interest{' - Inward Return (C16)' if is_v630 else ''} | Net Debits = Gross Debits - Own Party (C02){' | <span style="display:inline-block;width:10px;height:10px;background:var(--purple-dim);border:1px solid var(--purple);border-radius:2px;vertical-align:middle;margin:0 2px"></span> Count columns <span style="display:inline-block;width:10px;height:10px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:2px;vertical-align:middle;margin:0 2px"></span> Unclassified columns (v6.3.0)' if is_v630 else ''}</div>
 '''
-    # v6.2.1: Build gap detail panels for failed months
+    # Gap panels
     gap_panels_html = ''
     extraction_gaps = (parsing.get('extraction_gaps', []) if parsing else []) if is_incomplete else []
     if extraction_gaps and has_recon:
-        # Group gaps by month
         from collections import defaultdict as _dd
         gaps_by_month = _dd(list)
         for g in extraction_gaps:
@@ -2423,21 +2333,7 @@ def generate_interactive_html(data):
             const t = html.getAttribute('data-theme')==='dark'?'light':'dark';
             html.setAttribute('data-theme',t);
             btn.textContent = t==='dark'?'Light':'Dark';
-            // Re-render charts for theme
             renderCharts();
-        }}
-        function reportCompanyName() {{
-            const heading = document.querySelector('.company-info h1');
-            if (!heading) return 'kredit_lab_report';
-            return (heading.childNodes[0] && heading.childNodes[0].textContent || 'kredit_lab_report').trim();
-        }}
-        function getTabTitle(tab) {{
-            const tabName = tab.id.replace(/^tab-/, '');
-            const navButtons = Array.from(document.querySelectorAll('.nav-btn'));
-            const navButton = navButtons.find(function(btn) {{
-                return (btn.getAttribute('onclick') || '').indexOf("'" + tabName + "'") !== -1;
-            }});
-            return navButton ? navButton.textContent.trim() : tabName.replace(/-/g, ' ');
         }}
         function renderCharts() {{
             if(typeof Plotly==='undefined'){{console.warn('Plotly not loaded — charts disabled');return;}}
@@ -2467,7 +2363,6 @@ def generate_interactive_html(data):
                 yaxis:{{gridcolor:gridColor,tickformat:','}}
             }}, {{responsive:true,displayModeBar:false}});
 
-            // v6.2.0: FX chart
             var fxEl = document.getElementById('chartFX');
             if (fxEl) {{
                 Plotly.newPlot('chartFX', [
