@@ -830,7 +830,7 @@ def generate_interactive_html(data):
                 <tr>
                     <td>{date_str}</td>
                     <td>{desc_str}</td>
-                    <td class="mono r {type_cls}">RM {float(amount):,.2f} ({txn_type})</td>
+                    <td class="mono r {type_cls}">RM {float(amount):,.2f}</td>
                     <td class="mono r">RM {float(balance):,.2f}</td>
                 </tr>'''
     else:
@@ -851,7 +851,7 @@ def generate_interactive_html(data):
                 continue
             amount = safe_float(t.get('amount', t.get('credit', 0)))
             amount_class = 'credit' if amount >= 0 else 'debit'
-            amount_text = f"{'+' if amount >= 0 else '-'}RM {abs(amount):,.2f}"
+            amount_text = f"RM {abs(amount):,.2f}"
             balance = safe_float(t.get('balance', 0))
             rf_cr_rows += f'''
                 <tr>
