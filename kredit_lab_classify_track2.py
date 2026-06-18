@@ -3196,6 +3196,7 @@ def compute_cheque_issues(
 #
 # C11 (DR) — own-loan repayments. v3.5's regex is preserved verbatim:
 # ``\bTERM LOAN\b|\bLOAN REPAY|\bFINANCING REPAY|\bMONTHLY INSTALMENT\b|
+# \bMONTHLY REPAYMENT\b|
 # \bIB2G\s+DR\s+CA\s+CR\s+LN\b|\bTRANSFER TO LOAN\b|\bDD CASA PYMT\b|
 # \bFINPAL ISSUER REPAYM`` — mixed-whitespace style is intentional.
 # Priority interactions for C11 (OTHER TRANSFER FEE → C24; related-party
@@ -3236,6 +3237,7 @@ LOAN_REPAYMENT_RE = re.compile(
     r"|\bLOAN REPAY"
     r"|\bFINANCING REPAY"
     r"|\bMONTHLY INSTALMENT\b"
+    r"|\bMONTHLY REPAYMENT\b"
     r"|\bIB2G\s+DR\s+CA\s+CR\s+LN\b"
     r"|\bTRANSFER TO LOAN\b"
     r"|\bDD CASA PYMT\b"
@@ -6111,8 +6113,10 @@ def dispatch_transaction(
     #     bucket map, Track 2 short-circuits C11 here when BANK_FEES_RE
     #     also matches the description.
     #   * Director's personal loan (related-party + Instalment) → C04,
-    #     not C11 (v3.5 line 831). Naturally satisfied — the C03/C04
-    #     rung above runs first and returns.
+    #     not C11 (v3.5 line 831). Naturally satisfied — confirmed /
+    #     auto-confirmed C03/C04 runs above this and returns first. Rows
+    #     carrying strong facility keywords but no confirmed RP relationship
+    #     are kept visible as C11 loan repayments.
     #   * Account-number-only sub-rule (v3.5 ``account_number_only_rule_
     #     v3_5_3``, e.g. ``TRANSFER TO LOAN 12345678L``) — fires as
     #     standalone C11 here because the C01/C02 company-root rung
@@ -6123,7 +6127,6 @@ def dispatch_transaction(
         side == "DR"
         and LOAN_REPAYMENT_RE.search(description)
         and not BANK_FEES_RE.search(description)
-        and not (counterparty_name and has_natural_person_marker(counterparty_name))
     ):
         return _result("C11", "Loan repayment keyword")
 
