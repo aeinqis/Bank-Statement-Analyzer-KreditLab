@@ -176,6 +176,7 @@ def generate_interactive_html(data):
     fallback_large_threshold = (
         _fallback_consol.get('high_value_threshold')
         or _fallback_summary.get('high_value_threshold')
+        or _fallback_config.get('large_transaction_threshold')
         or _fallback_config.get('large_credit_threshold')
         or 100000
     )
@@ -769,6 +770,7 @@ def generate_interactive_html(data):
         consol.get('high_value_threshold')
         or consol.get('large_credit_threshold')
         or _fallback_summary.get('high_value_threshold')
+        or _fallback_config.get('large_transaction_threshold')
         or _fallback_config.get('large_credit_threshold')
         or 100000
     )
@@ -912,6 +914,7 @@ def generate_interactive_html(data):
         ext_bucket = ext_stats.get('special_bucket')
         ext_raw = ext_stats.get('raw_fallback')
         ext_total = ext_stats.get('total_transactions')
+        has_ext_stats = bool(ext_stats)
 
         status_color = {'CLEANED': 'green', 'VALIDATION_FAILED': 'amber', 'SKIPPED': 'amber'}.get(cleaning_status, 'text-muted')
         status_badge = f'<span class="badge" style="background:var(--{status_color}-dim);color:var(--{status_color})">{cleaning_status or "N/A"}</span>' if cleaning_status else ''
@@ -980,9 +983,9 @@ def generate_interactive_html(data):
                         {('<div class="summary-card"><div class="val">' + f'{merges:,}' + '</div><div class="lbl">Merges Performed</div></div>') if merges else ''}
                         {('<div class="summary-card"><div class="val">' + f'{purpose_strips:,}' + '</div><div class="lbl">Purpose Strips</div></div>') if purpose_strips else ''}
                         {('<div class="summary-card"><div class="val" style="font-size:1.05rem">' + ', '.join(merged_banks) + '</div><div class="lbl">Merged from banks</div></div>') if merged_banks else ''}
-                        {('<div class="summary-card"><div class="val">' + f'{int(ext_pattern):,}' + '</div><div class="lbl">Pattern matched</div></div>') if isinstance(ext_pattern, (int, float)) and ext_pattern else ''}
-                        {('<div class="summary-card"><div class="val">' + f'{int(ext_bucket):,}' + '</div><div class="lbl">Special bucket</div></div>') if isinstance(ext_bucket, (int, float)) and ext_bucket else ''}
-                        {('<div class="summary-card"><div class="val">' + f'{int(ext_raw):,}' + '</div><div class="lbl">Raw fallback</div></div>') if isinstance(ext_raw, (int, float)) and ext_raw else ''}
+                        {('<div class="summary-card"><div class="val">' + f'{int(ext_pattern or 0):,}' + '</div><div class="lbl">Pattern matched</div></div>') if has_ext_stats else ''}
+                        {('<div class="summary-card"><div class="val">' + f'{int(ext_bucket or 0):,}' + '</div><div class="lbl">Special bucket</div></div>') if has_ext_stats else ''}
+                        {('<div class="summary-card"><div class="val">' + f'{int(ext_raw or 0):,}' + '</div><div class="lbl">Raw fallback</div></div>') if has_ext_stats else ''}
                     </div>
                     <div style="margin:0.5rem 0">
                         <input type="text" id="cp-search" placeholder="Filter counterparties..." onkeyup="filterCp()" style="width:100%;padding:0.5rem;border:1px solid var(--border);border-radius:4px;font-size:0.9rem">
@@ -1474,7 +1477,15 @@ def generate_interactive_html(data):
         if cls_config or schema_v:
             rulebook_ver = cls_config.get('rulebook_version', 'N/A')
             exec_mode = cls_config.get('execution_mode', 'N/A')
-            large_cr_threshold = cls_config.get('large_credit_threshold', 100000)
+            large_txn_threshold = safe_float(
+                cls_config.get('large_transaction_threshold')
+                or cls_config.get('large_credit_threshold')
+                or consol.get('high_value_threshold')
+                or consol.get('large_transaction_threshold')
+                or consol.get('large_credit_threshold')
+                or _fallback_summary.get('high_value_threshold')
+                or 100000
+            )
             uncl_listing_threshold = cls_config.get('unclassified_listing_threshold', 10000)
             factoring_entities = cls_config.get('known_factoring_entities', [])
             factoring_str = ', '.join(factoring_entities) if factoring_entities else 'None configured'
@@ -1487,7 +1498,7 @@ def generate_interactive_html(data):
                         <div class="config-item"><span class="config-label">Schema Version</span><span class="config-val">{schema_v or 'N/A'}</span></div>
                         <div class="config-item"><span class="config-label">Rulebook Version</span><span class="config-val">{rulebook_ver}</span></div>
                         <div class="config-item"><span class="config-label">Execution Mode</span><span class="config-val">{exec_mode}</span></div>
-                        <div class="config-item"><span class="config-label">Large Credit Threshold</span><span class="config-val">RM {large_cr_threshold:,.0f}</span></div>
+                        <div class="config-item"><span class="config-label">Large Transaction Threshold</span><span class="config-val">RM {large_txn_threshold:,.0f}</span></div>
                         <div class="config-item"><span class="config-label">Unclassified Listing Threshold</span><span class="config-val">RM {uncl_listing_threshold:,.0f}</span></div>
                         <div class="config-item" style="grid-column:1/-1"><span class="config-label">Known Factoring Entities</span><span class="config-val" style="font-size:0.8rem">{factoring_str}</span></div>
                     </div>
@@ -2552,6 +2563,10 @@ def adapt_to_v6(src):
         'flags': {'indicators': []},
         'observations': {'positive': [], 'concerns': []},
         'parsing_metadata': {},
+        'classification_config': {
+            'large_transaction_threshold': high_value_threshold,
+            'large_credit_threshold': high_value_threshold,
+        },
         'counterparty_ledger': cp_ledger,
         'pdf_integrity': pdf_integrity,
     }
@@ -3138,7 +3153,9 @@ def build_report_data_from_analysis(
         adapted_data.get('own_related_transactions', {'transactions': [], 'summary': {}}),
     )
     adapted_data['unclassified_transactions'] = transaction_analysis.get('unclassified_transactions', [])
-    adapted_data['classification_config'] = transaction_analysis.get('classification_config', {})
+    adapted_data['classification_config'] = dict(transaction_analysis.get('classification_config', {}) or {})
+    adapted_data['classification_config']['large_transaction_threshold'] = threshold
+    adapted_data['classification_config']['large_credit_threshold'] = threshold
     adapted_data['parsing_metadata'] = transaction_analysis.get(
         'parsing_metadata',
         adapted_data.get('parsing_metadata', {}),
@@ -3148,6 +3165,7 @@ def build_report_data_from_analysis(
     # IMPORTANT: Add threshold to consolidated for display
     if 'consolidated' in adapted_data:
         adapted_data['consolidated']['high_value_threshold'] = threshold
+        adapted_data['consolidated']['large_transaction_threshold'] = threshold
         # Also store as large_credit_threshold for consistency
         adapted_data['consolidated']['large_credit_threshold'] = threshold
 
@@ -3202,8 +3220,10 @@ def normalize_report_data_for_export(data: dict) -> dict:
     normalized.setdefault("parsing_metadata", {})
     threshold = safe_float(
         normalized.get("consolidated", {}).get("high_value_threshold")
+        or normalized.get("consolidated", {}).get("large_transaction_threshold")
         or normalized.get("consolidated", {}).get("large_credit_threshold")
         or normalized.get("summary", {}).get("high_value_threshold")
+        or normalized.get("classification_config", {}).get("large_transaction_threshold")
         or normalized.get("classification_config", {}).get("large_credit_threshold")
     )
     if threshold <= 0:
@@ -3212,6 +3232,13 @@ def normalize_report_data_for_export(data: dict) -> dict:
         normalized["large_transactions"] = build_large_transactions(normalized.get("transactions", []), threshold)
     else:
         normalized.setdefault("large_transactions", [])
+    normalized.setdefault("classification_config", {})
+    normalized["classification_config"]["large_transaction_threshold"] = threshold
+    normalized["classification_config"]["large_credit_threshold"] = threshold
+    normalized.setdefault("consolidated", {})
+    normalized["consolidated"]["high_value_threshold"] = threshold
+    normalized["consolidated"]["large_transaction_threshold"] = threshold
+    normalized["consolidated"]["large_credit_threshold"] = threshold
     round_transactions = get_round_transactions_for_report(normalized)
     normalized["round_transactions"] = round_transactions
     normalized["round_figure_credits"] = round_transactions
@@ -3884,12 +3911,75 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
     """
     from collections import defaultdict
 
+    counterparty_fields = (
+        "party_name", "counterparty", "counterparty_name",
+        "party", "merchant", "recipient", "beneficiary",
+    )
+    invalid_names = {"", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
+    special_buckets = {
+        "UNIDENTIFIED",
+        "UNCATEGORIZED",
+        "CHEQUE",
+        "UNIDENTIFIED (CHEQUE)",
+        "CASH DEPOSIT",
+        "CASH WITHDRAWAL",
+        "BANK FEES",
+        "BULK SALARY",
+        "FD/INTEREST",
+        "LOAN REPAYMENT",
+        "LOAN DISBURSEMENT",
+        "KWSP",
+        "SOCSO",
+        "LHDN",
+        "HRDF",
+        "REVERSAL",
+        "RETURNED CHEQUE",
+        "INWARD RETURN",
+        "JANM",
+        "APAYLATER",
+        "AUTOPAY CR",
+        "AUTOPAY DR",
+    }
+
+    def _clean_name(value) -> str:
+        if value is None:
+            return ""
+        return re.sub(r"\s+", " ", str(value).strip()).upper()
+
+    def _is_special_bucket(name: str) -> bool:
+        upper = _clean_name(name)
+        if upper in special_buckets:
+            return True
+        return bool(
+            re.match(r"^UNIDENTIFIED(?:\s.*)?$", upper)
+            or re.match(r"^UNNAMED\s+.+?\s+TRANSFER\s*\((?:CR|DR)\)\s*$", upper)
+            or re.match(r"^UNNAMED\s+INTERNAL\s+PAYROLL\s*\((?:CR|DR)\)\s*$", upper)
+            or re.match(r"^CARD\s+POS\s*\([A-Z]+\)\s*$", upper)
+        )
+
+    def _method_for_name(name: str, matched_parser_pattern: bool) -> str:
+        if _is_special_bucket(name):
+            return "special_bucket"
+        if matched_parser_pattern:
+            return "pattern_matched"
+        return "raw_fallback"
+
+    extraction_stats = {
+        "pattern_matched": 0,
+        "special_bucket": 0,
+        "raw_fallback": 0,
+        "total_transactions": 0,
+    }
+
     buckets: dict = defaultdict(lambda: {
         "total_credits": 0.0,
         "total_debits": 0.0,
         "credit_count": 0,
         "debit_count": 0,
         "transactions": [],
+        "pattern_matched": 0,
+        "special_bucket": 0,
+        "raw_fallback": 0,
     })
 
     for tx in transactions:
@@ -3897,44 +3987,53 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
         desc = tx.get("description", "")
         bank = str(tx.get("bank", "") or "").upper()
         name = ""
-        for col in ("party_name", "counterparty", "counterparty_name",
-                    "party", "merchant", "recipient", "beneficiary"):
-            v = tx.get(col)
-            if v and str(v).strip() and str(v).upper() not in (
-                "", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"
-            ):
-                name = str(v).strip().upper()
+        matched_parser_pattern = False
+        for col in counterparty_fields:
+            v = _clean_name(tx.get(col))
+            if v and v not in invalid_names:
+                name = v
+                matched_parser_pattern = True
                 break
         if not name and "CIMB" in bank:
             try:
                 extracted = extract_cimb_party_name(desc)
                 if extracted and str(extracted).strip():
-                    name = str(extracted).strip().upper()
+                    name = _clean_name(extracted)
+                    matched_parser_pattern = True
             except Exception:
                 pass
         if not name:
             name = "UNKNOWN"
 
+        extraction_method = _method_for_name(name, matched_parser_pattern)
         bucket = buckets[name]
         credit = float(tx.get("credit") or 0)
         debit = float(tx.get("debit") or 0)
         if credit > 0:
             bucket["total_credits"] += credit
             bucket["credit_count"] += 1
+            bucket[extraction_method] += 1
+            extraction_stats[extraction_method] += 1
+            extraction_stats["total_transactions"] += 1
             bucket["transactions"].append({
                 "date": tx.get("date", ""),
                 "description": desc,
                 "amount": round(credit, 2),
                 "type": "CREDIT",
+                "extraction_method": extraction_method,
             })
         if debit > 0:
             bucket["total_debits"] += debit
             bucket["debit_count"] += 1
+            bucket[extraction_method] += 1
+            extraction_stats[extraction_method] += 1
+            extraction_stats["total_transactions"] += 1
             bucket["transactions"].append({
                 "date": tx.get("date", ""),
                 "description": desc,
                 "amount": round(debit, 2),
                 "type": "DEBIT",
+                "extraction_method": extraction_method,
             })
 
     counterparties = []
@@ -3951,13 +4050,20 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
             "total_credits": cr,
             "total_debits": dr,
             "net_position": round(cr - dr, 2),
+            "pattern_matched": b["pattern_matched"],
+            "special_bucket": b["special_bucket"],
+            "raw_fallback": b["raw_fallback"],
             "transactions": b["transactions"],
         })
 
     counterparties.sort(
         key=lambda c: abs(c["total_credits"] - c["total_debits"]), reverse=True
     )
-    return {"counterparties": counterparties, "total_counterparties": len(counterparties)}
+    return {
+        "counterparties": counterparties,
+        "total_counterparties": len(counterparties),
+        "extraction_stats": extraction_stats,
+    }
 
 
 def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
@@ -4006,6 +4112,18 @@ def generate_html_report_from_data(transactions: List[dict], monthly_summary: Li
                 factoring_entities=factoring_entities or None,
                 account_meta=account_meta or None,
             )
+
+            # Track 2 owns classifier defaults, but the report's large
+            # transaction threshold is chosen by the user in the app.
+            data.setdefault('classification_config', {})
+            data['classification_config']['large_transaction_threshold'] = threshold
+            data['classification_config']['large_credit_threshold'] = threshold
+            data.setdefault('consolidated', {})
+            data['consolidated']['high_value_threshold'] = threshold
+            data['consolidated']['large_transaction_threshold'] = threshold
+            data['consolidated']['large_credit_threshold'] = threshold
+            data.setdefault('summary', {})
+            data['summary']['high_value_threshold'] = threshold
             
             # DO NOT override large_transactions - Track 2 already computed them correctly
             # Track 2's compute_large_credits uses the same threshold but has loan context
