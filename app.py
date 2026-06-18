@@ -17,6 +17,7 @@ from core_utils import (
     safe_float,
 )
 from transaction_analysis import parse_top_parties_and_high_value
+from party_utils import apply_party_aliasing, build_transactions_by_party
 
 from maybank import parse_transactions_maybank
 from public_bank import parse_transactions_pbb
@@ -3127,7 +3128,7 @@ def build_report_data_from_analysis(
             'date_range': '',
             'high_value_threshold': threshold,
         },
-        'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}),
+        'counterparty_ledger': transaction_analysis.get('counterparty_ledger', {}) or build_track2_counterparty_ledger(transactions),
         'pdf_integrity': pdf_integrity,
     }
 
@@ -3911,11 +3912,6 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
     """
     from collections import defaultdict
 
-    counterparty_fields = (
-        "party_name", "counterparty", "counterparty_name",
-        "party", "merchant", "recipient", "beneficiary",
-    )
-    invalid_names = {"", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
     special_buckets = {
         "UNIDENTIFIED",
         "UNCATEGORIZED",
@@ -3971,6 +3967,16 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
         "total_transactions": 0,
     }
 
+    tx_df = pd.DataFrame(transactions or [])
+    if tx_df.empty:
+        return {
+            "counterparties": [],
+            "total_counterparties": 0,
+            "extraction_stats": extraction_stats,
+        }
+
+    tx_df = prepare_counterparty_dataframe(tx_df)
+
     buckets: dict = defaultdict(lambda: {
         "total_credits": 0.0,
         "total_debits": 0.0,
@@ -3982,26 +3988,10 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
         "raw_fallback": 0,
     })
 
-    for tx in transactions:
-        # Resolve counterparty name using the existing helper
+    for tx in tx_df.to_dict("records"):
         desc = tx.get("description", "")
-        bank = str(tx.get("bank", "") or "").upper()
-        name = ""
-        matched_parser_pattern = False
-        for col in counterparty_fields:
-            v = _clean_name(tx.get(col))
-            if v and v not in invalid_names:
-                name = v
-                matched_parser_pattern = True
-                break
-        if not name and "CIMB" in bank:
-            try:
-                extracted = extract_cimb_party_name(desc)
-                if extracted and str(extracted).strip():
-                    name = _clean_name(extracted)
-                    matched_parser_pattern = True
-            except Exception:
-                pass
+        name = _clean_name(tx.get("counterparty") or tx.get("party_name"))
+        matched_parser_pattern = bool(tx.get("_counterparty_pattern_matched"))
         if not name:
             name = "UNKNOWN"
 
@@ -4020,6 +4010,7 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
                 "description": desc,
                 "amount": round(credit, 2),
                 "type": "CREDIT",
+                "balance": safe_float(tx.get("balance", 0)),
                 "extraction_method": extraction_method,
             })
         if debit > 0:
@@ -4033,6 +4024,7 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
                 "description": desc,
                 "amount": round(debit, 2),
                 "type": "DEBIT",
+                "balance": safe_float(tx.get("balance", 0)),
                 "extraction_method": extraction_method,
             })
 
@@ -5363,6 +5355,18 @@ def is_benign_integrity_finding(finding: dict) -> bool:
 # Counterparty Ledger Functions
 # -----------------------------
 UNKNOWN_COUNTERPARTY_VALUES = {"", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
+COUNTERPARTY_NAME_FIELDS = (
+    "party_name",
+    "counterparty",
+    "counterparty_name",
+    "party",
+    "merchant",
+    "merchant_name",
+    "recipient",
+    "beneficiary",
+    "payer",
+    "payee",
+)
 
 
 def normalize_counterparty_value(value) -> str:
@@ -5379,27 +5383,16 @@ def normalize_counterparty_value(value) -> str:
     return text
 
 
-def resolve_transaction_counterparty(row: pd.Series) -> str:
+def _resolve_transaction_counterparty_details(row: pd.Series) -> Tuple[str, bool]:
     """
-    Prefer counterparty values extracted by bank parsers. Parser-specific
-    helpers may be used, but the UI does not extract counterparties itself.
+    Prefer counterparty values extracted by bank parsers and keep whether a
+    parser/extractor supplied the name.
     """
-    for column in (
-        "party_name",
-        "counterparty",
-        "counterparty_name",
-        "party",
-        "merchant",
-        "merchant_name",
-        "recipient",
-        "beneficiary",
-        "payer",
-        "payee",
-    ):
+    for column in COUNTERPARTY_NAME_FIELDS:
         if column in row:
             counterparty = normalize_counterparty_value(row.get(column))
             if counterparty:
-                return counterparty
+                return counterparty, True
 
     description = row.get("description", "")
     try:
@@ -5411,9 +5404,53 @@ def resolve_transaction_counterparty(row: pd.Series) -> str:
     if "CIMB" in bank:
         counterparty = normalize_counterparty_value(extract_cimb_party_name(description))
         if counterparty:
-            return counterparty
+            return counterparty, True
 
-    return "UNKNOWN"
+    return "UNKNOWN", False
+
+
+def resolve_transaction_counterparty(row: pd.Series) -> str:
+    """
+    Prefer counterparty values extracted by bank parsers. Parser-specific
+    helpers may be used, but the UI does not extract counterparties itself.
+    """
+    counterparty, _matched = _resolve_transaction_counterparty_details(row)
+    return counterparty
+
+
+def prepare_counterparty_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add the counterparty columns used by the CP ledger.
+
+    The raw parser-extracted name is passed into party_utils, which canonicalizes
+    and aliases related spelling variants for cleaner ledger display.
+    """
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    prepared = df.copy()
+    resolved_names = []
+    matched_flags = []
+    for _idx, row in prepared.iterrows():
+        counterparty, matched = _resolve_transaction_counterparty_details(row)
+        resolved_names.append(counterparty)
+        matched_flags.append(bool(matched))
+
+    raw_series = pd.Series(resolved_names, index=prepared.index, dtype="object")
+    try:
+        grouped_series = apply_party_aliasing(raw_series)
+    except Exception:
+        grouped_series = raw_series
+
+    grouped_series = grouped_series.apply(
+        lambda value: normalize_counterparty_value(value) or "UNKNOWN"
+    )
+
+    prepared["_raw_counterparty"] = raw_series
+    prepared["_counterparty_pattern_matched"] = matched_flags
+    prepared["party_name"] = grouped_series
+    prepared["counterparty"] = grouped_series
+    return prepared
 
 
 def build_counterparty_ledger_from_transactions(df: pd.DataFrame) -> pd.DataFrame:
@@ -5423,30 +5460,38 @@ def build_counterparty_ledger_from_transactions(df: pd.DataFrame) -> pd.DataFram
     if df.empty:
         return pd.DataFrame()
     
-    df = df.copy()
-    df['counterparty'] = df.apply(resolve_transaction_counterparty, axis=1)
+    df = prepare_counterparty_dataframe(df)
+    party_tables = build_transactions_by_party(df)
     
     # Group by counterparty
     summary_data = []
-    for counterparty, group in df.groupby('counterparty'):
-        credit_transactions = group[group['credit'] > 0]
-        debit_transactions = group[group['debit'] > 0]
-        
-        total_credits = credit_transactions['credit'].sum() if not credit_transactions.empty else 0
-        total_debits = debit_transactions['debit'].sum() if not debit_transactions.empty else 0
+    for party in party_tables:
+        table = party.get("table")
+        if isinstance(table, pd.DataFrame) and "amount" in table.columns:
+            signed_amounts = table["amount"].apply(safe_float)
+            credit_count = int((signed_amounts > 0).sum())
+            debit_count = int((signed_amounts < 0).sum())
+        else:
+            credit_count = 0
+            debit_count = 0
+
+        total_credits = round(float(party.get("total_credit", 0) or 0), 2)
+        total_debits = round(float(party.get("total_debit", 0) or 0), 2)
         net_position = total_credits - total_debits
-        
+
         summary_data.append({
-            'counterparty_name': counterparty,
-            'transaction_count': len(group),
-            'credit_count': len(credit_transactions),
-            'debit_count': len(debit_transactions),
-            'total_credits': round(total_credits, 2),
-            'total_debits': round(total_debits, 2),
+            'counterparty_name': party.get("party", "UNKNOWN"),
+            'transaction_count': int(party.get("count", credit_count + debit_count) or 0),
+            'credit_count': credit_count,
+            'debit_count': debit_count,
+            'total_credits': total_credits,
+            'total_debits': total_debits,
             'net_position': round(net_position, 2)
         })
     
     summary_df = pd.DataFrame(summary_data)
+    if summary_df.empty:
+        return summary_df
     
     summary_df['_sort_counterparty'] = summary_df['counterparty_name'].astype(str).str.casefold()
     summary_df = summary_df.sort_values('_sort_counterparty', ascending=True)
@@ -5538,8 +5583,7 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     )
     
     # Show transactions for selected counterparty
-    df_copy = df.copy()
-    df_copy['counterparty'] = df_copy.apply(resolve_transaction_counterparty, axis=1)
+    df_copy = prepare_counterparty_dataframe(df)
     counterparty_tx = df_copy[df_copy['counterparty'] == selected_counterparty].copy()
 
     if not counterparty_tx.empty:
