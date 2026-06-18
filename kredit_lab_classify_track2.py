@@ -6119,13 +6119,13 @@ def dispatch_transaction(
     #     above CANNOT match an account-number-only description (the
     #     root is alphabetic). Track 2 emits a single primary so the
     #     v3.5 "C11 standalone, NOT C02+C11" wording is naturally met.
-        if (
+    if (
         side == "DR"
         and LOAN_REPAYMENT_RE.search(description)
         and not BANK_FEES_RE.search(description)
         and not (counterparty_name and has_natural_person_marker(counterparty_name))
     ):
-            return _result("C11", "Loan repayment keyword")
+        return _result("C11", "Loan repayment keyword")
 
     # C11 — finance-institution counterparty (DR side, name-based). A debit
     # paid to a counterparty whose NAME is a "<brand> CREDIT/CAPITAL/LEASING/
