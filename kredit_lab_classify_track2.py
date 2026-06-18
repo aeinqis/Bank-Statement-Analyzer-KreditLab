@@ -5941,6 +5941,11 @@ def dispatch_transaction(
             "mode": mode if primary else None,
         }
 
+    is_loan_memo = bool(
+        LOAN_DISBURSEMENT_RE.search(description)
+        or LOAN_REPAYMENT_RE.search(description)
+    )
+
     # C25 — balance / opening / closing row. Wins outright per v3.5 order.
     if _is_balance_row(row):
         return _result("C25", "Statement / opening / closing balance row")
@@ -5956,6 +5961,7 @@ def dispatch_transaction(
         side
         and counterparty_name
         and OWN_PARTY_MARKER_RE.search(counterparty_name)
+        and not is_loan_memo
     ):
         if side == "CR":
             return _result(
@@ -5980,28 +5986,13 @@ def dispatch_transaction(
         desc_upper = description.upper()
         company_roots = [_company_root(c) for c in company_names if c]
         if _own_party_match(cp_upper, desc_upper, company_roots):
-            # Memo-echo guard: a third-party LOAN disbursement / repayment
-            # routed through a financier or trustee commonly echoes the
-            # borrower's own name in the memo (e.g. "FUNDING SOCIETES ZAIM
-            # EXPRESS SDN BHD" paid by MALAYSIAN TRUSTEES). When the company
-            # root appears ONLY in the description (not in the extracted
-            # counterparty) AND the row carries an explicit loan keyword, the
-            # row is a facility movement, not an own-account transfer — let it
-            # fall through to the C10/C11 rung. A genuine own-account transfer
-            # never carries LOAN DISB / FUNDING SOCIET / TERM LOAN / HP LOAN.
-            #
-            # Gated on a REAL extracted third-party counterparty: the company
-            # settling its OWN loan ("TR IBG <OWN CO> Term loan", no separate
-            # counterparty) stays C02 per the v3.5 dual-tag rule — only a row
-            # naming a distinct non-own counterparty (the trustee / financier)
-            # diverts to the facility rung.
-            cp_owns = _own_party_match(cp_upper, "", company_roots)
-            cp_present = bool(cp_upper.strip())
-            is_loan_memo = (
-                LOAN_DISBURSEMENT_RE.search(description)
-                or LOAN_REPAYMENT_RE.search(description)
-            )
-            if not (cp_present and not cp_owns and is_loan_memo):
+            # Facility-memo guard: loan disbursement / repayment memos often
+            # echo the borrower's own company name ("TR IBG <OWN CO> Term
+            # loan", Funding Societies trustee payouts, HP loan servicing).
+            # Those rows must remain visible in Facilities, so explicit loan
+            # keywords fall through to C10/C11 instead of being swallowed as
+            # own-party C01/C02.
+            if not is_loan_memo:
                 label = counterparty_name or description
                 if side == "CR":
                     return _result(
