@@ -875,19 +875,81 @@ def generate_interactive_html(data):
         'related_party_cr': int(rp_summary.get('related_party_cr_count') or 0) or _count_txn('RELATED', 'CREDIT'),
         'related_party_dr': int(rp_summary.get('related_party_dr_count') or 0) or _count_txn('RELATED', 'DEBIT'),
     }
-    rp_txn_rows = ""
-    for t in own_related.get('transactions', [])[:50]:
-        type_cls = 'credit' if t.get('type') == 'CREDIT' else 'debit'
-        rp_txn_rows += f'''<tr>
-            <td>{t.get('date','')}</td>
-            <td>{t.get('description','')[:55]}</td>
-            <td class="mono r {type_cls}">RM {t.get('amount',0):,.2f}</td>
-            <td><span class="badge badge-{t.get('type','').lower()}">{t.get('type','')}</span></td>
-            <td>{t.get('party_type','')}</td>
-            <td>{t.get('party_name','')}</td>
-        </tr>'''
-    rp_total = len(own_related.get('transactions', []))
-    rp_note = f'<div class="note">Showing first 50 of {rp_total} transactions</div>' if rp_total > 50 else ''
+    rp_groups = {}
+    for t in own_related.get('transactions', []) or []:
+        if not isinstance(t, dict):
+            continue
+        party_name = str(t.get('party_name') or 'Unknown Party').strip() or 'Unknown Party'
+        party_type = str(t.get('party_type') or '').strip()
+        party_type_upper = party_type.upper()
+        badge_type = 'OP' if party_type_upper.startswith('OWN') else 'RP'
+        key = (party_name.casefold(), badge_type, party_name)
+        group = rp_groups.setdefault(
+            key,
+            {
+                'party_name': party_name,
+                'party_type': party_type or ('Own Party' if badge_type == 'OP' else 'Related Party'),
+                'badge_type': badge_type,
+                'transactions': [],
+                'credits': 0.0,
+                'debits': 0.0,
+                'credit_count': 0,
+                'debit_count': 0,
+            },
+        )
+        amount = safe_float(t.get('amount', 0))
+        txn_type = str(t.get('type') or '').upper()
+        if txn_type == 'CREDIT':
+            group['credits'] += amount
+            group['credit_count'] += 1
+        elif txn_type == 'DEBIT':
+            group['debits'] += amount
+            group['debit_count'] += 1
+        group['transactions'].append(t)
+
+    rp_party_rows = ""
+    for idx, group in enumerate(sorted(rp_groups.values(), key=lambda g: (g['party_name'].casefold(), g['badge_type']))):
+        badge_cls = 'op-badge' if group['badge_type'] == 'OP' else 'rp-badge'
+        detail_rows = ""
+        for t in group['transactions']:
+            txn_type = str(t.get('type') or '').upper()
+            type_cls = 'credit' if txn_type == 'CREDIT' else 'debit'
+            amount = safe_float(t.get('amount', 0))
+            balance = safe_float(t.get('balance', 0))
+            detail_rows += f'''<tr>
+                <td>{escape(str(t.get('date','')))}</td>
+                <td>{escape(str(t.get('description',''))[:80])}</td>
+                <td class="mono r {type_cls}">RM {amount:,.2f}</td>
+                <td><span class="badge badge-{escape(txn_type.lower())}">{escape(txn_type)}</span></td>
+                <td class="mono r">RM {balance:,.2f}</td>
+            </tr>'''
+
+        txn_count = len(group['transactions'])
+        rp_party_rows += f'''
+        <tr class="rp-party-row" onclick="toggleRp('rp-detail-{idx}')" style="cursor:pointer">
+            <td><span id="rp-caret-{idx}">▶</span> {escape(group['party_name'])} <span class="{badge_cls}">{group['badge_type']}</span></td>
+            <td class="mono r credit">{group['credits']:,.2f} <span style="color:var(--text-muted);font-size:0.75rem">({group['credit_count']})</span></td>
+            <td class="mono r debit">{group['debits']:,.2f} <span style="color:var(--text-muted);font-size:0.75rem">({group['debit_count']})</span></td>
+            <td>{escape(group['party_type'])}</td>
+            <td class="mono r">{txn_count}</td>
+        </tr>
+        <tr id="rp-detail-{idx}" style="display:none"><td colspan="5" style="background:var(--bg);padding:0">
+            <div class="table-wrap"><table style="margin:0">
+                <thead><tr><th>Date</th><th>Description</th><th class="r">Amount</th><th>Type</th><th class="r">Balance</th></tr></thead>
+                <tbody>{detail_rows or '<tr><td colspan="5" class="note">No transactions</td></tr>'}</tbody>
+            </table></div>
+        </td></tr>'''
+
+    rp_expander_script = '''
+                    <script>
+                        function toggleRp(id) {
+                            var row = document.getElementById(id);
+                            if (!row) return;
+                            var caret = document.getElementById(id.replace('detail','caret'));
+                            if (row.style.display === 'none') { row.style.display = ''; if (caret) caret.textContent = '▼'; }
+                            else { row.style.display = 'none'; if (caret) caret.textContent = '▶'; }
+                        }
+                    </script>'''
 
     # ── Counterparty Ledger ──
     counterparty_ledger_html = ''
@@ -927,8 +989,7 @@ def generate_interactive_html(data):
         counterparties = cp_ledger.get('counterparties', []) or []
         counterparties_sorted = sorted(
             counterparties,
-            key=lambda c: (c.get('total_credits', 0) or 0) + (c.get('total_debits', 0) or 0),
-            reverse=True,
+            key=lambda c: str(c.get('counterparty_name', '') or '').casefold(),
         )
 
         cp_rows_html = ''
@@ -1947,6 +2008,7 @@ def generate_interactive_html(data):
         .rp-tag {{ display:inline-block; padding:0.25rem 0.6rem; background:var(--amber-dim); color:var(--amber); border-radius:6px; font-size:0.78rem; margin:0.2rem; }}
         .rp-tag small {{ opacity:0.7; }}
         .rp-badge {{ display:inline-block; padding:0.1rem 0.35rem; background:var(--amber-dim); color:var(--amber); border-radius:4px; font-size:0.65rem; font-weight:700; margin-left:0.35rem; vertical-align:middle; }}
+        .op-badge {{ display:inline-block; padding:0.1rem 0.35rem; background:var(--blue-dim); color:var(--blue); border-radius:4px; font-size:0.65rem; font-weight:700; margin-left:0.35rem; vertical-align:middle; }}
 
         /* Flags */
         .flag-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:0.35rem; vertical-align:middle; }}
@@ -2259,10 +2321,10 @@ def generate_interactive_html(data):
                         <div class="summary-card"><div class="val debit">{rp_counts['related_party_dr']:,}</div><div class="lbl">Related Party Dr txns</div></div>
                     </div>
                     <div class="table-wrap" style="max-height:500px;overflow:auto"><table>
-                        <thead><tr><th>Date</th><th>Description</th><th class="r">Amount (RM)</th><th>Type</th><th>Party Type</th><th>Party Name</th></tr></thead>
-                        <tbody>{rp_txn_rows}</tbody>
+                        <thead><tr><th>Party</th><th class="r">Credits (RM)</th><th class="r">Debits (RM)</th><th>Party Type</th><th class="r">Txns</th></tr></thead>
+                        <tbody>{rp_party_rows or '<tr><td colspan="5" class="note">No own or related party transactions</td></tr>'}</tbody>
                     </table></div>
-                    {rp_note}
+                    {rp_expander_script}
                 </div>
             </div>
         </div>
