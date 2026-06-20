@@ -17,7 +17,12 @@ from core_utils import (
     safe_float,
 )
 from transaction_analysis import parse_top_parties_and_high_value
-from party_utils import apply_party_aliasing, build_transactions_by_party, deduplicate_counterparty_names
+from party_utils import (
+    apply_party_aliasing,
+    build_transactions_by_party,
+    clean_counterparty_name,
+    deduplicate_counterparty_names,
+)
 
 from maybank import parse_transactions_maybank
 from public_bank import parse_transactions_pbb
@@ -1036,7 +1041,54 @@ def generate_interactive_html(data):
         if cleaning_status == 'VALIDATION_FAILED':
             val_fail_warning = '<div style="background:var(--amber-dim);border:1px solid var(--amber);color:var(--amber);margin:0.75rem 0;padding:0.75rem;border-radius:8px;display:flex;gap:0.5rem;align-items:center"><div>⚠️</div><div><div style="font-weight:600">Counterparty ledger cleaning failed validation</div><div style="font-size:0.85rem">Showing original parser output.</div></div></div>'
 
-        counterparties = cp_ledger.get('counterparties', []) or []
+        raw_counterparties = cp_ledger.get('counterparties', []) or []
+        raw_cp_names = [cp.get('counterparty_name', '') for cp in raw_counterparties if isinstance(cp, dict)]
+        deduped_cp_names = deduplicate_counterparty_names(raw_cp_names) if raw_cp_names else []
+        merged_counterparties = {}
+        for cp, clean_name in zip(raw_counterparties, deduped_cp_names):
+            if not isinstance(cp, dict):
+                continue
+            clean_name = clean_name or clean_counterparty_name(cp.get('counterparty_name', '')) or 'UNKNOWN'
+            key = clean_name.upper()
+            merged = merged_counterparties.setdefault(
+                key,
+                {
+                    'counterparty_name': clean_name,
+                    'total_credits': 0.0,
+                    'total_debits': 0.0,
+                    'net_position': 0.0,
+                    'transaction_count': 0,
+                    'credit_count': 0,
+                    'debit_count': 0,
+                    'transactions': [],
+                    'raw_names': set(),
+                },
+            )
+            merged['raw_names'].add(str(cp.get('counterparty_name', '') or '').strip())
+            merged['total_credits'] += safe_float(cp.get('total_credits', 0))
+            merged['total_debits'] += safe_float(cp.get('total_debits', 0))
+            merged['transaction_count'] += int(safe_float(cp.get('transaction_count', 0)))
+            merged['credit_count'] += int(safe_float(cp.get('credit_count', 0)))
+            merged['debit_count'] += int(safe_float(cp.get('debit_count', 0)))
+            for txn in cp.get('transactions', []) or []:
+                if isinstance(txn, dict):
+                    txn = dict(txn)
+                    txn['counterparty_name_clean'] = clean_name
+                    merged['transactions'].append(txn)
+
+        counterparties = []
+        for cp in merged_counterparties.values():
+            cp['total_credits'] = round(cp['total_credits'], 2)
+            cp['total_debits'] = round(cp['total_debits'], 2)
+            cp['net_position'] = round(cp['total_credits'] - cp['total_debits'], 2)
+            cp['raw_names'] = sorted(name for name in cp['raw_names'] if name)
+            if not cp['transaction_count']:
+                cp['transaction_count'] = len(cp.get('transactions', []) or [])
+            counterparties.append(cp)
+        if raw_counterparties and len(counterparties) != len(raw_counterparties):
+            original_cp = original_cp or len(raw_counterparties)
+            merges = merges or (len(raw_counterparties) - len(counterparties))
+        total_cp = len(counterparties)
         counterparties_sorted = sorted(
             counterparties,
             key=lambda c: str(c.get('counterparty_name', '') or '').casefold(),
@@ -2078,7 +2130,11 @@ def generate_interactive_html(data):
 
         /* Two column layout */
         .two-col {{ display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }}
+        .top-parties-grid {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; }}
+        .top-parties-grid > .section {{ min-width:0; }}
+        .top-parties-grid table {{ min-width:0; }}
         @media (max-width:900px) {{ .two-col {{ grid-template-columns:1fr; }} }}
+        @media (min-width:640px) {{ .top-parties-grid {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr) !important; }} }}
 
         /* Charts */
         .chart-box {{ background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1rem; }}
@@ -2314,7 +2370,7 @@ def generate_interactive_html(data):
 
         <!-- TOP PARTIES TAB -->
         <div id="tab-parties" class="tab">
-            <div class="two-col">
+            <div class="two-col top-parties-grid">
                 <div class="section">
                     <div class="section-head"><h2 style="color:var(--green)">Top 10 Payers (Income)</h2></div>
                     <div class="section-body" style="padding:0">
@@ -2429,7 +2485,7 @@ def generate_interactive_html(data):
             <div class="section">
                 <div class="section-head"><h2>Round Figure Transactions &mdash; Detail</h2><span class="badge badge-current">{len(round_figure_credits)} transactions</span></div>
                 <div class="section-body" style="padding:0">
-                    <div class="note" style="padding:0.5rem 1.25rem">Credit or debit transactions with round-number amounts, matching the Railway round-number flag list.</div>
+                    <div class="note" style="padding:0.5rem 1.25rem">Credit or debit transactions with round-number amounts (multiple of RM 10,000), matching the round-number flag list.</div>
                     <div class="table-wrap" style="max-height:400px;overflow:auto"><table>
                         <thead><tr><th>Date</th><th>Description</th><th class="r">Amount (RM)</th><th class="r">Balance</th></tr></thead>
                         <tbody>{rf_cr_rows}</tbody>

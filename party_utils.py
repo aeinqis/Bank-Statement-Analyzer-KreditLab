@@ -57,6 +57,13 @@ COUNTERPARTY_DATE_RE = re.compile(
 )
 COUNTERPARTY_REF_TOKEN_RE = re.compile(r"^(?:INV|REF|NO|ACC|ACCOUNT)?\d{2,}[A-Z0-9]*$")
 COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
+COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS = {
+    "CASH", "CLAIM", "CLEANER", "EAST", "COAST", "TRAVEL", "HOUSING",
+    "LOAN", "LAPTOP", "MMU", "FEES", "FEE", "OFFICE", "ELECTRICITY",
+    "REFUND", "CAR", "SERVICE", "THAILAND", "TRIP", "PIKM", "THE",
+    "PARK", "RESIDENT", "UNIFORM", "RENT", "RENTAL", "HOUSE", "MEDICAL",
+    "ALLOWANCE", "HOSTEL", "TRANSPORT", "PETROL", "TOLL", "PARKING",
+}
 PERSON_TRANSACTION_DETAIL_SUFFIX_RE = re.compile(
     r"\s+(?:HOUSE\s+RENTAL|GENERAL\s+LABOUR|PETTY\s+CASH|EC\s+EXCEL|"
     r"CLAIM|MILEAGE|LOAN|ROADTAX|INSURANCE|RENTAL|TENDER|FAREWELL|"
@@ -140,6 +147,18 @@ def _collapse_adjacent_duplicate_tokens(tokens: List[str]) -> List[str]:
     return collapsed
 
 
+def _strip_person_memo_suffix_tokens(tokens: List[str]) -> List[str]:
+    if len(tokens) <= 3:
+        return tokens
+    if any(token in COUNTERPARTY_COMPANY_SUFFIX_TOKENS for token in tokens):
+        return tokens
+    for keep_count in range(3, len(tokens)):
+        suffix = tokens[keep_count:]
+        if suffix and all(token in COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS for token in suffix):
+            return tokens[:keep_count]
+    return tokens
+
+
 def clean_counterparty_name(raw_name: Any) -> str:
     """Return a reusable display/matching name for noisy counterparty strings.
 
@@ -175,6 +194,7 @@ def clean_counterparty_name(raw_name: Any) -> str:
     while len(tokens) > 2 and len(tokens[-1]) == 1 and tokens[-1].isalpha():
         tokens.pop()
 
+    tokens = _strip_person_memo_suffix_tokens(tokens)
     tokens = _collapse_adjacent_duplicate_tokens(tokens)
     cleaned = normalize_text(" ".join(tokens)).strip()
     return cleaned or "UNKNOWN"

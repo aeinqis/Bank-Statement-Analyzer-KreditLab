@@ -3263,6 +3263,7 @@ LOAN_REPAYMENT_RE = re.compile(
     # (it runs above this), so only the company's own-facility HP reaches C11.
     r"|\bHIRE\s*PURCHASE\b"
     r"|\bHP\s+LOAN\b"
+    r"|\bHOUSING\s+LOAN\b"
     # P2P / marketplace-lender repayments (DR side) — same lender names as the
     # C10 disbursement regex; the side decides disbursement (CR→C10) vs
     # repayment (DR→C11). Funding Societies routes repayments via its trustee
@@ -6008,6 +6009,30 @@ def dispatch_transaction(
     # via OWN_ACCOUNT_BLOCK_RE and commission_policy via COMMISSION_BLOCK_RE).
     if is_salary_payment(row):
         return _result("C05", "Salary keyword + commission/own-account guard")
+
+    # Strong facility keywords must remain visible as facilities even when the
+    # counterparty is also own/related. A director/owner can receive or repay a
+    # loan on behalf of the company; the row should still land in Facilities
+    # instead of being swallowed by C03/C04.
+    if side == "CR":
+        if LOAN_DISBURSEMENT_RE.search(description):
+            return _result("C10", "Loan disbursement / factoring keyword")
+        if factoring_entities:
+            factoring_upper = [f.upper() for f in factoring_entities if f]
+            cp_upper = (counterparty_name or "").upper()
+            desc_upper = description.upper()
+            if factoring_upper and any(f in cp_upper or f in desc_upper for f in factoring_upper):
+                return _result(
+                    "C10",
+                    "Factoring disbursement (analyst-confirmed entity)",
+                )
+
+    if (
+        side == "DR"
+        and LOAN_REPAYMENT_RE.search(description)
+        and not BANK_FEES_RE.search(description)
+    ):
+        return _result("C11", "Loan repayment keyword")
 
     # C03 / C04 — related-party. Fires when ``related_parties`` supplies a
     # name (analyst-confirmed or auto-confirmed HIGH from the RP3 scanner)

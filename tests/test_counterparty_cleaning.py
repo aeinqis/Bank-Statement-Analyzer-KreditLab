@@ -32,6 +32,17 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(cleaned[0], cleaned[1])
         self.assertEqual(cleaned[0], "FATHIN SYAIRAH NAJLA")
 
+    def test_merges_person_payment_memo_suffixes(self):
+        cleaned = deduplicate_counterparty_names(
+            [
+                "DAYANG SITI RAUDZAH",
+                "DAYANG SITI RAUDZAH CASH",
+                "DAYANG SITI RAUDZAH HOUSING LOAN",
+                "DAYANG SITI RAUDZAH OFFICE ELECTRICITY",
+            ]
+        )
+        self.assertEqual(cleaned, ["DAYANG SITI RAUDZAH"] * 4)
+
     def test_cimb_rows_keep_raw_and_clean_counterparty_fields(self):
         rows = [
             {"description": "TR IBG DAVID ANAK RICHARD STAFF", "party_name": "DAVID ANAK RICHARD STAFF"},
