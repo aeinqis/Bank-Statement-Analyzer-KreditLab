@@ -125,6 +125,38 @@ def toggle_sidebar():
 
 def render_sidebar_navigation():
     """Render the collapsible sidebar navigation for Streamlit app"""
+    results = st.session_state.get("results", [])
+    company_name = st.session_state.get("company_name_override", "")
+    if not company_name and results:
+        for t in results:
+            if t.get("company_name"):
+                company_name = t["company_name"]
+                break
+    if not company_name:
+        company_name = "Kredit Lab"
+
+    nav_items = [
+        {"id": "overview", "icon": "\U0001F3E0", "label": "Overview"},
+        {"id": "extracted", "icon": "\U0001F4C4", "label": "Extracted Transactions"},
+        {"id": "patterns", "icon": "\U0001F4CA", "label": "Pattern Analysis"},
+        {"id": "counterparty", "icon": "\U0001F465", "label": "Counterparty Ledger"},
+        {"id": "monthly", "icon": "\U0001F4C5", "label": "Monthly Summary"},
+        {"id": "download", "icon": "\u2B07", "label": "Download Options"},
+        {"id": "integrity", "icon": "\U0001F6E1", "label": "Document Integrity"},
+    ]
+
+    st.sidebar.markdown(f"### {company_name}")
+    st.sidebar.caption("Statement Intelligence")
+    st.sidebar.markdown("#### Navigation")
+
+    has_results = bool(results)
+    for item in nav_items:
+        if not has_results and item["id"] not in ["overview", "download"]:
+            continue
+        st.sidebar.markdown(f'[{item["icon"]} {item["label"]}](#{item["id"]}-section)')
+
+    st.sidebar.caption("v2.0.0")
+    return False
     
     # Sidebar CSS - this creates a custom sidebar that overlays the Streamlit UI
     st.markdown("""
@@ -562,7 +594,7 @@ def get_main_content_class():
 st.set_page_config(
     page_title="Bank Statement Parser", 
     layout="wide",
-    initial_sidebar_state="collapsed"  # Hide default Streamlit sidebar
+    initial_sidebar_state="expanded"
 )
 
 # Initialize sidebar navigation
@@ -2710,11 +2742,12 @@ def generate_interactive_html(data):
 
         /* Two column layout */
         .two-col {{ display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }}
-        .top-parties-grid {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; }}
-        .top-parties-grid > .section {{ min-width:0; }}
-        .top-parties-grid table {{ min-width:0; }}
+        .top-parties-grid {{ display:grid !important; grid-template-columns:minmax(320px,1fr) minmax(320px,1fr) !important; gap:1.5rem; align-items:start; overflow-x:auto; }}
+        .top-parties-grid > .section {{ min-width:320px; }}
+        .top-parties-grid .table-wrap {{ overflow-x:auto; }}
+        .top-parties-grid table {{ min-width:0; width:100%; }}
         @media (max-width:900px) {{ .two-col {{ grid-template-columns:1fr; }} }}
-        @media (min-width:640px) {{ .top-parties-grid {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr) !important; }} }}
+        @media (max-width:760px) {{ .top-parties-grid {{ grid-template-columns:minmax(300px,1fr) minmax(300px,1fr) !important; }} }}
 
         /* Charts */
         .chart-box {{ background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1rem; }}
