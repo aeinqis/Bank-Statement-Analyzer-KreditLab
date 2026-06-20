@@ -17,7 +17,7 @@ from core_utils import (
     safe_float,
 )
 from transaction_analysis import parse_top_parties_and_high_value
-from party_utils import apply_party_aliasing, build_transactions_by_party
+from party_utils import apply_party_aliasing, build_transactions_by_party, deduplicate_counterparty_names
 
 from maybank import parse_transactions_maybank
 from public_bank import parse_transactions_pbb
@@ -268,6 +268,19 @@ def generate_interactive_html(data):
     total_months = r.get('total_months', 0)
     related_parties = r.get('related_parties', [])
 
+    # ── Date format: convert from YYYY-MM-DD to YYYY-MM ──
+    def _format_to_year_month(date_str):
+        """Convert '2026-06-20' to '2026-06'"""
+        if not date_str:
+            return ''
+        parts = str(date_str).split('-')
+        if len(parts) >= 2:
+            return f"{parts[0]}-{parts[1]}"
+        return date_str
+
+    period_start_display = _format_to_year_month(period_start)
+    period_end_display = _format_to_year_month(period_end)
+
     # Build data quality banner HTML
     dq_banner_html = ''
     if has_recon:
@@ -367,6 +380,43 @@ def generate_interactive_html(data):
         name = rp.get('name', rp) if isinstance(rp, dict) else str(rp)
         rel = rp.get('relationship', '') if isinstance(rp, dict) else ''
         rp_html += f'<span class="rp-tag">{name} <small>({rel})</small></span>'
+
+    # ── Related-party candidates (advisory only; analyst confirms) ──
+    # MEDIUM/LOW RP3 near-misses that did NOT auto-confirm and exclude nothing.
+    # Surfaced so the analyst sees them instead of hunting the full ledger.
+    rp_candidates = r.get('related_party_candidates', []) or []
+    rp_candidates_html = ""
+    if rp_candidates:
+        _cand_rows = ""
+        for c in rp_candidates:
+            conf = str(c.get('confidence', '') or '').upper()
+            dr = c.get('total_dr', 0) or 0
+            cr = c.get('total_cr', 0) or 0
+            _cand_rows += (
+                '<tr>'
+                f'<td>{c.get("name", "")}</td>'
+                f'<td><span class="rpc-badge rpc-{conf.lower()}">{conf}</span></td>'
+                f'<td style="text-align:right">RM {dr:,.2f}</td>'
+                f'<td style="text-align:right">RM {cr:,.2f}</td>'
+                f'<td style="font-size:0.8rem;color:var(--text-soft)">{c.get("evidence", "")}</td>'
+                '</tr>'
+            )
+        _total = r.get('related_party_candidates_total', len(rp_candidates)) or len(rp_candidates)
+        _shown = len(rp_candidates)
+        _cap_note = (
+            f' Showing the {_shown} largest by debit value of {_total} flagged individuals.'
+            if _total > _shown else ''
+        )
+        rp_candidates_html = (
+            '<div class="rpc-note">These individuals show some related-party signals but did '
+            '<b>not</b> meet the auto-confirm threshold, so they are <b>not</b> excluded from any '
+            'figure. Review each and confirm in the analysis step if genuinely related.'
+            f'{_cap_note}</div>'
+            '<div class="table-wrap"><table>'
+            '<thead><tr><th>Party</th><th>Confidence</th><th>Debits</th><th>Credits</th>'
+            '<th>Why flagged</th></tr></thead>'
+            f'<tbody>{_cand_rows}</tbody></table></div>'
+        )
 
     # ── Monthly analysis table rows ──
     from collections import OrderedDict
@@ -2007,6 +2057,10 @@ def generate_interactive_html(data):
 
         .rp-tag {{ display:inline-block; padding:0.25rem 0.6rem; background:var(--amber-dim); color:var(--amber); border-radius:6px; font-size:0.78rem; margin:0.2rem; }}
         .rp-tag small {{ opacity:0.7; }}
+        .rpc-note {{ font-size:0.82rem; color:var(--text-soft); margin-bottom:0.6rem; }}
+        .rpc-badge {{ display:inline-block; padding:1px 7px; border-radius:5px; font-size:0.72rem; font-weight:600; }}
+        .rpc-badge.rpc-medium {{ background:var(--amber-dim); color:var(--amber); }}
+        .rpc-badge.rpc-low {{ background:rgba(148,163,184,0.18); color:var(--text-soft); }}
         .rp-badge {{ display:inline-block; padding:0.1rem 0.35rem; background:var(--amber-dim); color:var(--amber); border-radius:4px; font-size:0.65rem; font-weight:700; margin-left:0.35rem; vertical-align:middle; }}
         .op-badge {{ display:inline-block; padding:0.1rem 0.35rem; background:var(--blue-dim); color:var(--blue); border-radius:4px; font-size:0.65rem; font-weight:700; margin-left:0.35rem; vertical-align:middle; }}
 
@@ -2106,7 +2160,7 @@ def generate_interactive_html(data):
                 <div class="company-info">
                     <div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.35rem">Kredit Lab &mdash; Statement Intelligence</div>
                     <h1>{company} <span class="schema-badge">Kredit Lab v{r.get('schema_version', '6')}</span></h1>
-                    <div class="period">{period_start} to {period_end} &middot; {total_months} months &middot; {sum(a.get('transaction_count',0) for a in accounts):,} transactions</div>
+                    <div class="period">{period_start_display} to {period_end_display} &middot; {total_months} months &middot; {sum(a.get('transaction_count',0) for a in accounts):,} transactions</div>
                 </div>
                 <div class="header-kpi">
                     <div class="kpi"><div class="val credit">RM {consol.get('net_credits',0):,.0f}</div><div class="lbl">Net Credits</div></div>
@@ -2139,6 +2193,7 @@ def generate_interactive_html(data):
             <div class="account-grid">{acc_cards}</div>
 
             {'<div class="section"><div class="section-head"><h2>Known Related Parties</h2></div><div class="section-body">' + rp_html + '</div></div>' if rp_html else ''}
+            {'<div class="section"><div class="section-head"><h2>Possible Related Parties — Analyst to Confirm</h2></div><div class="section-body">' + rp_candidates_html + '</div></div>' if rp_candidates_html else ''}
 
             <div class="two-col">
                 <div class="chart-box"><div class="chart-title">Net Credits vs Debits (Monthly)</div><div id="chartCrDr" style="height:300px"></div></div>
@@ -2389,7 +2444,7 @@ def generate_interactive_html(data):
         {fraud_tab_html}
 
         <div class="footer">
-            <p>Kredit Lab &mdash; Statement Intelligence Report | Generated {r.get('generated_at','')} | {period_start} &ndash; {period_end}</p>
+            <p>Kredit Lab &mdash; Statement Intelligence Report | Generated {r.get('generated_at','')} | {period_start_display} &ndash; {period_end_display}</p>
         </div>
     </div>
 
@@ -5418,9 +5473,11 @@ def is_benign_integrity_finding(finding: dict) -> bool:
 # -----------------------------
 UNKNOWN_COUNTERPARTY_VALUES = {"", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
 COUNTERPARTY_NAME_FIELDS = (
-    "party_name",
-    "counterparty",
+    "counterparty_name_clean",
     "counterparty_name",
+    "counterparty",
+    "party_name",
+    "counterparty_name_raw",
     "party",
     "merchant",
     "merchant_name",
@@ -5500,18 +5557,23 @@ def prepare_counterparty_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     raw_series = pd.Series(resolved_names, index=prepared.index, dtype="object")
     try:
-        grouped_series = apply_party_aliasing(raw_series)
+        clean_names = deduplicate_counterparty_names(raw_series.fillna("").astype(str).tolist())
+        grouped_series = pd.Series(clean_names, index=prepared.index, dtype="object")
     except Exception:
-        grouped_series = raw_series
+        try:
+            grouped_series = apply_party_aliasing(raw_series)
+        except Exception:
+            grouped_series = raw_series
 
-    grouped_series = grouped_series.apply(
-        lambda value: normalize_counterparty_value(value) or "UNKNOWN"
-    )
+    grouped_series = grouped_series.apply(lambda value: normalize_counterparty_value(value) or "UNKNOWN")
 
     prepared["_raw_counterparty"] = raw_series
     prepared["_counterparty_pattern_matched"] = matched_flags
+    prepared["counterparty_name_raw"] = raw_series
+    prepared["counterparty_name_clean"] = grouped_series
     prepared["party_name"] = grouped_series
     prepared["counterparty"] = grouped_series
+    prepared["counterparty_name"] = grouped_series
     return prepared
 
 

@@ -16,6 +16,8 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
+from party_utils import clean_counterparty_name, deduplicate_counterparty_names
+
 
 # -----------------------------
 # Regex
@@ -138,6 +140,7 @@ CIMB_TRANSFER_LEADING_CONTEXT_RE = re.compile(
     re.I,
 )
 CIMB_COMPANY_HINT_TOKENS = {"SDN", "BHD", "BERHAD", "PLT", "LLP", "PL", "ENTERPRISE", "TRADING"}
+CIMB_TRANSFER_FEE_RE = re.compile(r"\bOTHER\s+TRANSFER\s+FEE\b", re.I)
 
 
 # -----------------------------
@@ -421,6 +424,40 @@ def extract_cimb_party_name(description: str) -> str:
     return normalize_cimb_party_name(candidates[-1])
 
 
+def is_cimb_transfer_fee(description: str) -> bool:
+    return bool(CIMB_TRANSFER_FEE_RE.search(clean_text(description).upper()))
+
+
+def annotate_cimb_counterparties(rows):
+    """Attach raw + clean counterparty fields and fuzzy-dedupe within a statement."""
+    raw_names = []
+    for row in rows:
+        desc = row.get("description", "")
+        if is_cimb_transfer_fee(desc):
+            raw = "TRANSFER FEE"
+            row["category"] = "TRANSFER FEE"
+        else:
+            raw = (
+                row.get("counterparty_name_raw")
+                or row.get("counterparty_name")
+                or row.get("party_name")
+                or extract_cimb_party_name(desc)
+                or "UNKNOWN"
+            )
+        raw = clean_text(raw).upper() or "UNKNOWN"
+        row["counterparty_name_raw"] = raw
+        raw_names.append(raw)
+
+    clean_names = deduplicate_counterparty_names(raw_names)
+    for row, clean_name in zip(rows, clean_names):
+        clean_name = clean_name or "UNKNOWN"
+        row["counterparty_name_clean"] = clean_name
+        row["counterparty_name"] = clean_name
+        row["party_name"] = clean_name
+
+    return rows
+
+
 def group_cimb_by_party(transactions):
     grouped = defaultdict(lambda: {
         "party_name": "",
@@ -430,8 +467,11 @@ def group_cimb_by_party(transactions):
         "transactions": [],
     })
 
+    if any("counterparty_name_clean" not in tx for tx in transactions):
+        annotate_cimb_counterparties(transactions)
+
     for tx in transactions:
-        party = tx.get("party_name") or extract_cimb_party_name(tx.get("description", ""))
+        party = tx.get("counterparty_name_clean") or tx.get("party_name") or extract_cimb_party_name(tx.get("description", ""))
         tx["party_name"] = party
 
         g = grouped[party]
@@ -763,6 +803,7 @@ def _parse_transactions_cimb_text(pdf, source_filename, detected_year, bank_name
         })
 
     txs = _dedupe_cimb(txs)
+    txs = annotate_cimb_counterparties(txs)
     for t in txs:
         t.pop("__idx", None)
     return txs
@@ -924,6 +965,7 @@ def parse_transactions_cimb(pdf, source_filename=""):
 
     # Final dedupe after adding synthetic rows
     rows = _dedupe_cimb(rows)
+    rows = annotate_cimb_counterparties(rows)
 
     # Remove internal field
     for r in rows:

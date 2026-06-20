@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Any, Callable, Dict, List, Tuple
 
 from core_utils import (
@@ -28,6 +29,34 @@ TRANSACTION_DETAIL_LEADING_TOKENS = {
     "CLAIM", "EC", "FAREWELL", "GENERAL", "HOUSE", "INSURANCE", "LOAN",
     "MILEAGE", "PERUNTUKAN", "PETTY", "RENTAL", "ROADTAX", "TENDER",
 }
+COUNTERPARTY_DESCRIPTOR_TOKENS = {
+    "STAFF", "SALARY", "OVERTIME", "ADVANCE", "DONATION", "INVOICE",
+    "INVOICES", "PAYMENT", "BALANCE", "TOKEN", "AWARD", "TOPUP", "REF",
+    "INV", "POLICY", "NO", "ACC", "ACCOUNT", "TRANSFER", "MONTHLY",
+    "INCENTIVE",
+}
+COUNTERPARTY_MONTH_TOKENS = {
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+}
+COUNTERPARTY_CHANNEL_TOKENS = {
+    "MBB", "HLBB", "RHB", "BSN", "PBB", "ABMB", "AMFB", "QTN", "POB",
+    "CA", "X", "SST",
+}
+COUNTERPARTY_PERSON_CONNECTOR_TOKENS = {"BIN", "BINTI", "ANAK", "EN"}
+COUNTERPARTY_COMPANY_SUFFIX_TOKENS = {"SDN", "BHD", "BERHAD"}
+COUNTERPARTY_NOISE_TOKENS = (
+    COUNTERPARTY_DESCRIPTOR_TOKENS
+    | COUNTERPARTY_MONTH_TOKENS
+    | COUNTERPARTY_CHANNEL_TOKENS
+    | COUNTERPARTY_PERSON_CONNECTOR_TOKENS
+    | COUNTERPARTY_COMPANY_SUFFIX_TOKENS
+)
+COUNTERPARTY_DATE_RE = re.compile(
+    r"\b(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b"
+)
+COUNTERPARTY_REF_TOKEN_RE = re.compile(r"^(?:INV|REF|NO|ACC|ACCOUNT)?\d{2,}[A-Z0-9]*$")
+COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
 PERSON_TRANSACTION_DETAIL_SUFFIX_RE = re.compile(
     r"\s+(?:HOUSE\s+RENTAL|GENERAL\s+LABOUR|PETTY\s+CASH|EC\s+EXCEL|"
     r"CLAIM|MILEAGE|LOAN|ROADTAX|INSURANCE|RENTAL|TENDER|FAREWELL|"
@@ -85,6 +114,157 @@ def _strip_person_transaction_detail_suffix(name: Any) -> str:
         return stripped
 
     return cleaned
+
+
+def _counterparty_token_is_noise(token: str) -> bool:
+    token_core = token.strip("()")
+    if not token_core:
+        return True
+    if token_core in COUNTERPARTY_NOISE_TOKENS:
+        return True
+    if COUNTERPARTY_REF_TOKEN_RE.match(token_core):
+        return True
+    if any(char.isdigit() for char in token_core) and len(token_core) > 2:
+        return True
+    return False
+
+
+def _collapse_adjacent_duplicate_tokens(tokens: List[str]) -> List[str]:
+    collapsed: List[str] = []
+    for token in tokens:
+        if collapsed and collapsed[-1] == token:
+            continue
+        collapsed.append(token)
+    if collapsed and len(set(collapsed)) == 1:
+        return [collapsed[0]]
+    return collapsed
+
+
+def clean_counterparty_name(raw_name: Any) -> str:
+    """Return a reusable display/matching name for noisy counterparty strings.
+
+    The cleaner strips transaction descriptors, month prefixes, channel
+    suffixes, Malay personal-name connectors, company suffixes, and reference
+    fragments while preserving meaningful company punctuation such as ``&``
+    and parentheses.
+    """
+    raw = normalize_text(raw_name).upper()
+    if not raw or raw in {"UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}:
+        return "UNKNOWN"
+    if raw in {"TRANSFER FEE", "OTHER TRANSFER FEE"}:
+        return "TRANSFER FEE"
+
+    raw = COUNTERPARTY_DATE_RE.sub(" ", raw)
+    raw = raw.replace(".", " ")
+    raw = COUNTERPARTY_ALLOWED_PUNCT_RE.sub(" ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if not raw:
+        return "UNKNOWN"
+
+    tokens: List[str] = []
+    for token in raw.split():
+        token = token.strip()
+        token_core = token.strip("()")
+        if _counterparty_token_is_noise(token):
+            continue
+        if len(token_core) == 1 and token_core.isalpha():
+            tokens.append(token_core)
+            continue
+        tokens.append(token_core or token)
+
+    while len(tokens) > 2 and len(tokens[-1]) == 1 and tokens[-1].isalpha():
+        tokens.pop()
+
+    tokens = _collapse_adjacent_duplicate_tokens(tokens)
+    cleaned = normalize_text(" ".join(tokens)).strip()
+    return cleaned or "UNKNOWN"
+
+
+def _last_token_prefix_match(a_tokens: List[str], b_tokens: List[str]) -> bool:
+    if len(a_tokens) < 2 or len(b_tokens) < 2:
+        return False
+    if a_tokens[:-1] != b_tokens[:-1]:
+        return False
+    shorter, longer = sorted((a_tokens[-1], b_tokens[-1]), key=len)
+    return len(shorter) >= 3 and longer.startswith(shorter) and len(longer) - len(shorter) <= 3
+
+
+def _counterparty_names_similar(left: str, right: str, threshold: float = 0.92) -> bool:
+    if left == right:
+        return True
+    left_tokens = left.split()
+    right_tokens = right.split()
+    if not left_tokens or not right_tokens:
+        return False
+    if _last_token_prefix_match(left_tokens, right_tokens):
+        return True
+    if len(left_tokens) == 1 or len(right_tokens) == 1:
+        return SequenceMatcher(None, left, right).ratio() >= 0.96
+    if left_tokens[0] != right_tokens[0]:
+        return False
+
+    shared = set(left_tokens) & set(right_tokens)
+    overlap = len(shared) / max(len(set(left_tokens)), len(set(right_tokens)))
+    if overlap < 0.67 and tuple(left_tokens[:2]) != tuple(right_tokens[:2]):
+        return False
+    return SequenceMatcher(None, left, right).ratio() >= threshold
+
+
+def _choose_counterparty_canonical(names: List[str], counts: Dict[str, int]) -> str:
+    return sorted(
+        set(names),
+        key=lambda value: (
+            -counts.get(value, 0),
+            -len(value),
+            -len(value.split()),
+            value,
+        ),
+    )[0]
+
+
+def build_clean_counterparty_alias_map(
+    raw_names: List[Any],
+    *,
+    threshold: float = 0.92,
+) -> Dict[str, str]:
+    """Map cleaned counterparty names to a fuzzy-deduplicated canonical name."""
+    cleaned_names = [
+        clean_counterparty_name(name)
+        for name in raw_names
+        if clean_counterparty_name(name) != "UNKNOWN"
+    ]
+    unique_names = sorted(set(cleaned_names), key=lambda value: (len(value.split()), len(value), value))
+    counts = {name: cleaned_names.count(name) for name in unique_names}
+    alias_map: Dict[str, str] = {name: name for name in unique_names}
+
+    groups: List[List[str]] = []
+    for name in unique_names:
+        placed = False
+        for group in groups:
+            if any(_counterparty_names_similar(name, existing, threshold) for existing in group):
+                group.append(name)
+                placed = True
+                break
+        if not placed:
+            groups.append([name])
+
+    for group in groups:
+        canonical = _choose_counterparty_canonical(group, counts)
+        for name in group:
+            alias_map[name] = canonical
+
+    return alias_map
+
+
+def deduplicate_counterparty_names(
+    raw_names: List[Any],
+    *,
+    threshold: float = 0.92,
+) -> List[str]:
+    """Clean and fuzzy-deduplicate a sequence of counterparty names."""
+    cleaned = [clean_counterparty_name(name) for name in raw_names]
+    alias_map = build_clean_counterparty_alias_map(raw_names, threshold=threshold)
+    return [alias_map.get(name, name) for name in cleaned]
 
 
 def canonicalize_party_name(name: Any) -> str:
