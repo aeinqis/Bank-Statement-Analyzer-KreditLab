@@ -104,6 +104,582 @@ except ImportError as e:
     print(f"[WARNING] Track 2 import failed: {e}")
     _TRACK2_AVAILABLE = False
 
+# ============================================================
+# SIDEBAR NAVIGATION FOR STREAMLIT APP
+# ============================================================
+
+def init_sidebar_navigation():
+    """Initialize sidebar navigation state"""
+    if "sidebar_collapsed" not in st.session_state:
+        st.session_state.sidebar_collapsed = False
+    
+    if "active_section" not in st.session_state:
+        st.session_state.active_section = "overview"
+
+
+def toggle_sidebar():
+    """Toggle sidebar collapsed state"""
+    st.session_state.sidebar_collapsed = not st.session_state.sidebar_collapsed
+
+
+def render_sidebar_navigation():
+    """Render the collapsible sidebar navigation for Streamlit app"""
+    
+    # Sidebar CSS - this creates a custom sidebar that overlays the Streamlit UI
+    st.markdown("""
+    <style>
+        /* Hide the default Streamlit sidebar */
+        section[data-testid="stSidebar"] {
+            display: none !important;
+        }
+        
+        /* Custom sidebar toggle button */
+        .custom-sidebar-toggle {
+            position: fixed;
+            top: 70px;
+            left: 0;
+            z-index: 999;
+            background: #0b0f19;
+            border: 1px solid #1e2a42;
+            border-left: none;
+            border-radius: 0 8px 8px 0;
+            color: #e2e8f0;
+            cursor: pointer;
+            padding: 10px 6px;
+            font-size: 18px;
+            transition: all 0.3s ease;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+            width: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .custom-sidebar-toggle:hover {
+            background: #1a2235;
+            width: 32px;
+            border-color: #3b82f6;
+        }
+        
+        /* Main sidebar container */
+        .custom-sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 100vh;
+            width: 240px;
+            background: #0b0f19;
+            border-right: 1px solid #1e2a42;
+            padding: 60px 0 20px 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            z-index: 998;
+            transition: transform 0.3s ease, width 0.3s ease;
+            box-shadow: 2px 0 15px rgba(0,0,0,0.5);
+        }
+        
+        .custom-sidebar.collapsed {
+            transform: translateX(-210px);
+            width: 240px;
+        }
+        
+        .custom-sidebar.collapsed .nav-label {
+            opacity: 0;
+            max-width: 0;
+            overflow: hidden;
+            transition: opacity 0.2s ease, max-width 0.2s ease;
+        }
+        
+        .custom-sidebar.collapsed .nav-item {
+            padding: 10px 12px;
+            justify-content: center;
+        }
+        
+        .custom-sidebar.collapsed .nav-icon {
+            margin-right: 0;
+        }
+        
+        .custom-sidebar.collapsed .sidebar-company {
+            padding: 8px 12px;
+        }
+        
+        .custom-sidebar.collapsed .sidebar-company strong {
+            font-size: 10px;
+            text-align: center;
+        }
+        
+        .custom-sidebar.collapsed .sidebar-company span {
+            display: none;
+        }
+        
+        .custom-sidebar.collapsed .sidebar-version {
+            display: none;
+        }
+        
+        /* Scrollbar styling */
+        .custom-sidebar::-webkit-scrollbar {
+            width: 4px;
+        }
+        
+        .custom-sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .custom-sidebar::-webkit-scrollbar-thumb {
+            background: #1e2a42;
+            border-radius: 2px;
+        }
+        
+        .custom-sidebar::-webkit-scrollbar-thumb:hover {
+            background: #334155;
+        }
+        
+        /* Navigation items */
+        .nav-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 16px;
+            color: #94a3b8;
+            text-decoration: none;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            transition: all 0.2s ease;
+            font-size: 13px;
+            font-weight: 500;
+            gap: 0;
+            white-space: nowrap;
+            border-radius: 0;
+        }
+        
+        .nav-item:hover {
+            background: #1a2235;
+            color: #e2e8f0;
+            border-left-color: #3b82f6;
+        }
+        
+        .nav-item.active {
+            background: #1a2235;
+            color: #60a5fa;
+            border-left-color: #3b82f6;
+        }
+        
+        .nav-item .nav-icon {
+            font-size: 18px;
+            min-width: 28px;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+        
+        .nav-item .nav-label {
+            transition: opacity 0.2s ease, max-width 0.2s ease;
+            opacity: 1;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .nav-section-title {
+            padding: 16px 16px 8px 16px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #475569;
+        }
+        
+        /* Company name in sidebar */
+        .sidebar-company {
+            padding: 12px 16px 8px 16px;
+            border-bottom: 1px solid #1e2a42;
+            margin-bottom: 4px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            transition: all 0.3s ease;
+        }
+        
+        .sidebar-company strong {
+            color: #e2e8f0;
+            font-size: 14px;
+            display: block;
+            margin-bottom: 2px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .sidebar-company span {
+            color: #64748b;
+            font-size: 10px;
+            transition: opacity 0.3s ease;
+        }
+        
+        .sidebar-version {
+            position: absolute;
+            bottom: 12px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 10px;
+            color: #475569;
+            padding: 8px;
+            border-top: 1px solid #1e2a42;
+        }
+        
+        /* Collapse button inside sidebar */
+        .sidebar-collapse-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: transparent;
+            border: 1px solid #1e2a42;
+            border-radius: 4px;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 4px 8px;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            z-index: 1;
+        }
+        
+        .sidebar-collapse-btn:hover {
+            background: #1a2235;
+            color: #e2e8f0;
+            border-color: #3b82f6;
+        }
+        
+        /* Bottom spacer */
+        .sidebar-bottom-spacer {
+            height: 60px;
+        }
+        
+        /* Main content adjustment */
+        .main-content-wrapper {
+            margin-left: 240px;
+            transition: margin-left 0.3s ease;
+            padding: 0 20px 20px 20px;
+        }
+        
+        .main-content-wrapper.collapsed {
+            margin-left: 30px;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .custom-sidebar {
+                width: 200px;
+                transform: translateX(-100%);
+            }
+            
+            .custom-sidebar.mobile-open {
+                transform: translateX(0);
+            }
+            
+            .custom-sidebar.collapsed {
+                transform: translateX(-100%);
+            }
+            
+            .main-content-wrapper,
+            .main-content-wrapper.collapsed {
+                margin-left: 0;
+                padding: 0 10px;
+            }
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Get company name for sidebar
+    company_name = st.session_state.get("company_name_override", "")
+    if not company_name and st.session_state.results:
+        for t in st.session_state.results:
+            if t.get("company_name"):
+                company_name = t["company_name"]
+                break
+    
+    if not company_name:
+        company_name = "Kredit Lab"
+    
+    # Navigation items
+    nav_items = [
+        {"id": "overview", "icon": "🏠", "label": "Overview"},
+        {"id": "extracted", "icon": "📄", "label": "Extracted Transactions"},
+        {"id": "patterns", "icon": "📊", "label": "Pattern Analysis"},
+        {"id": "counterparty", "icon": "👥", "label": "Counterparty Ledger"},
+        {"id": "monthly", "icon": "📅", "label": "Monthly Summary"},
+        {"id": "download", "icon": "⬇️", "label": "Download Options"},
+        {"id": "integrity", "icon": "🛡️", "label": "Document Integrity"},
+    ]
+    
+    # Check if results exist for conditional items
+    has_results = bool(st.session_state.results)
+    
+    collapsed_class = "collapsed" if st.session_state.sidebar_collapsed else ""
+    active_section = st.session_state.active_section
+    
+    # Build sidebar HTML
+    nav_html = f'''
+    <button class="custom-sidebar-toggle" onclick="toggleCustomSidebar()" title="Toggle Sidebar">
+        {"" if st.session_state.sidebar_collapsed else "☰"}
+    </button>
+    
+    <div class="custom-sidebar {collapsed_class}" id="customSidebar">
+        <button class="sidebar-collapse-btn" onclick="toggleCustomSidebar()">
+            {"" if st.session_state.sidebar_collapsed else "◀"}
+        </button>
+        
+        <div class="sidebar-company">
+            <strong>{company_name}</strong>
+            <span>Statement Intelligence</span>
+        </div>
+        
+        <div class="nav-section-title">Navigation</div>
+    '''
+    
+    for item in nav_items:
+        # Skip if no results and item requires results
+        if not has_results and item["id"] not in ["overview", "download"]:
+            continue
+            
+        active_class = "active" if active_section == item["id"] else ""
+        nav_html += f'''
+        <div class="nav-item {active_class}" onclick="navigateToSection('{item["id"]}')">
+            <span class="nav-icon">{item["icon"]}</span>
+            <span class="nav-label">{item["label"]}</span>
+        </div>
+        '''
+    
+    nav_html += '''
+        <div class="sidebar-bottom-spacer"></div>
+        <div class="sidebar-version">v2.0.0</div>
+    </div>
+    </div>
+    '''
+    
+    # JavaScript for sidebar interaction
+    js = '''
+    <script>
+        function toggleCustomSidebar() {
+            const sidebar = document.getElementById('customSidebar');
+            if (sidebar) {
+                sidebar.classList.toggle('collapsed');
+                // Update the toggle button text
+                const toggleBtn = document.querySelector('.custom-sidebar-toggle');
+                if (toggleBtn) {
+                    toggleBtn.textContent = sidebar.classList.contains('collapsed') ? '☰' : '◀';
+                }
+                // Send update to Streamlit
+                const isCollapsed = sidebar.classList.contains('collapsed');
+                const event = new CustomEvent('streamlit:setComponentValue', {
+                    detail: { 
+                        key: 'sidebar_collapsed',
+                        value: isCollapsed 
+                    }
+                });
+                document.dispatchEvent(event);
+            }
+        }
+        
+        function navigateToSection(sectionId) {
+            // Update active state
+            document.querySelectorAll('.nav-item').forEach(el => {
+                el.classList.remove('active');
+            });
+            const clicked = document.querySelector(`.nav-item[onclick*="${sectionId}"]`);
+            if (clicked) {
+                clicked.classList.add('active');
+            }
+            
+            // Scroll to the section
+            const sectionMap = {
+                'overview': 'overview-section',
+                'extracted': 'extracted-section',
+                'patterns': 'patterns-section',
+                'counterparty': 'counterparty-section',
+                'monthly': 'monthly-section',
+                'download': 'download-section',
+                'integrity': 'integrity-section'
+            };
+            
+            const sectionId_map = sectionMap[sectionId];
+            if (sectionId_map) {
+                const element = document.getElementById(sectionId_map);
+                if (element) {
+                    const offset = 80;
+                    const elementPosition = element.getBoundingClientRect().top;
+                    const offsetPosition = elementPosition + window.pageYOffset - offset;
+                    window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
+                }
+            }
+            
+            // Send update to Streamlit
+            const event = new CustomEvent('streamlit:setComponentValue', {
+                detail: { 
+                    key: 'active_section',
+                    value: sectionId 
+                }
+            });
+            document.dispatchEvent(event);
+        }
+        
+        // Handle mobile
+        function handleMobileSidebar() {
+            const sidebar = document.getElementById('customSidebar');
+            if (window.innerWidth <= 768 && sidebar) {
+                if (!sidebar.classList.contains('collapsed')) {
+                    sidebar.classList.add('mobile-open');
+                }
+            } else if (sidebar) {
+                sidebar.classList.remove('mobile-open');
+            }
+        }
+        
+        window.addEventListener('resize', handleMobileSidebar);
+        document.addEventListener('DOMContentLoaded', handleMobileSidebar);
+    </script>
+    '''
+    
+    st.markdown(nav_html, unsafe_allow_html=True)
+    st.markdown(js, unsafe_allow_html=True)
+    
+    # Return the collapsed state
+    return st.session_state.sidebar_collapsed
+
+
+def get_main_content_class():
+    """Get the CSS class for main content based on sidebar state"""
+    if st.session_state.sidebar_collapsed:
+        return "main-content-wrapper collapsed"
+    return "main-content-wrapper"
+
+# ============================================================
+# END OF SIDEBAR NAVIGATION FUNCTIONS
+# ============================================================
+
+# ============================================================
+# STREAMLIT PAGE CONFIGURATION
+# ============================================================
+
+st.set_page_config(
+    page_title="Bank Statement Parser", 
+    layout="wide",
+    initial_sidebar_state="collapsed"  # Hide default Streamlit sidebar
+)
+
+# Initialize sidebar navigation
+init_sidebar_navigation()
+
+# Render the sidebar
+sidebar_collapsed = render_sidebar_navigation()
+
+# Get the main content class
+main_class = get_main_content_class()
+
+# Wrap your main content
+st.markdown(f"""
+<style>
+    .{main_class} {{
+        max-width: 1400px;
+        margin: 0 auto;
+    }}
+    
+    .section-anchor {{
+        scroll-margin-top: 80px;
+    }}
+</style>
+<div class="{main_class}">
+""", unsafe_allow_html=True)
+
+# ============================================================
+# SESSION STATE INIT
+# ============================================================
+
+if "status" not in st.session_state:
+    st.session_state.status = "idle"
+
+if "results" not in st.session_state:
+    st.session_state.results = []
+
+if "integrity_analysis_results" not in st.session_state:
+    st.session_state.integrity_analysis_results = {}
+
+if "affin_statement_totals" not in st.session_state:
+    st.session_state.affin_statement_totals = []
+
+if "affin_file_transactions" not in st.session_state:
+    st.session_state.affin_file_transactions = {}
+
+if "ambank_statement_totals" not in st.session_state:
+    st.session_state.ambank_statement_totals = []
+
+if "ambank_file_transactions" not in st.session_state:
+    st.session_state.ambank_file_transactions = {}
+
+if "cimb_statement_totals" not in st.session_state:
+    st.session_state.cimb_statement_totals = []
+
+if "cimb_file_transactions" not in st.session_state:
+    st.session_state.cimb_file_transactions = {}
+
+if "rhb_statement_totals" not in st.session_state:
+    st.session_state.rhb_statement_totals = []
+
+if "rhb_file_transactions" not in st.session_state:
+    st.session_state.rhb_file_transactions = {}
+
+if "bank_islam_file_month" not in st.session_state:
+    st.session_state.bank_islam_file_month = {}
+
+# password + company name tracking
+if "pdf_password" not in st.session_state:
+    st.session_state.pdf_password = ""
+
+if "company_name_override" not in st.session_state:
+    st.session_state.company_name_override = ""
+
+if "company_account_no_override" not in st.session_state:
+    st.session_state.company_account_no_override = ""
+
+if "high_value_threshold_input" not in st.session_state:
+    st.session_state.high_value_threshold_input = ""
+
+if "high_value_threshold_error" not in st.session_state:
+    st.session_state.high_value_threshold_error = ""
+
+if "bank_choice_error" not in st.session_state:
+    st.session_state.bank_choice_error = ""
+
+if "pdf_upload_error" not in st.session_state:
+    st.session_state.pdf_upload_error = ""
+
+if "validation_toast_message" not in st.session_state:
+    st.session_state.validation_toast_message = ""
+
+if "active_high_value_threshold" not in st.session_state:
+    st.session_state.active_high_value_threshold = None
+
+if "stop_requested" not in st.session_state:
+    st.session_state.stop_requested = False
+
+if "upload_widget_reset_id" not in st.session_state:
+    st.session_state.upload_widget_reset_id = 0
+
+if "file_company_name" not in st.session_state:
+    st.session_state.file_company_name = {}
+
+if "file_account_no" not in st.session_state:
+    st.session_state.file_account_no = {}
+
+# Track 2 — account-type determinations populated by parser hooks
+if "account_type_determinations" not in st.session_state:
+    st.session_state.account_type_determinations = []
+
+# Analyst-supplied related parties (populated by the analyst form when wired)
+if "related_parties_override" not in st.session_state:
+    st.session_state.related_parties_override = []
+
+# ============================================================
+# build_large_transactions FUNCTION
+# ============================================================
+
 def build_large_transactions(transactions: List[dict], threshold: float) -> List[dict]:
     """Build list of large transactions (both credits and debits) above threshold."""
     large_txns = []
@@ -3279,6 +3855,16 @@ def apply_standard_monthly_summary_to_report(data: dict, monthly_summary: List[d
 
     return _sync_data_quality_status(data)
 
+# ============================================================
+# CONTINUE WITH YOUR EXISTING APP CODE
+# ============================================================
+
+st.markdown('<div id="overview-section" class="section-anchor"></div>', unsafe_allow_html=True)
+st.markdown(
+    '<h1>📄 Bank Statement Parser (Multi-File Support)</h1>',
+    unsafe_allow_html=True,
+)
+st.write("Upload one or more bank statement PDFs to extract transactions.")
 
 def build_report_data_from_analysis(
     transactions: List[dict],
@@ -4572,7 +5158,7 @@ def convert_json_to_html_basic_unused(json_file) -> str:
 # ============================================================
 
 
-st.set_page_config(page_title="Bank Statement Parser", layout="wide")
+st.markdown('<div id="overview-section" class="section-anchor"></div>', unsafe_allow_html=True)
 st.markdown(
     '<h1>📄 Bank Statement Parser (Multi-File Support)</h1>',
     unsafe_allow_html=True,
@@ -7449,3 +8035,5 @@ else:
         and not st.session_state.pdf_upload_error
     ):
         st.warning("⚠️ No transactions found — click **Start Processing**.")
+        
+st.markdown("</div>", unsafe_allow_html=True)
