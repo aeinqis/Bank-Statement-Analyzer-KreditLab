@@ -2,6 +2,7 @@
 
 import json
 import re
+import textwrap
 from datetime import datetime
 from html import escape
 from io import BytesIO
@@ -452,7 +453,6 @@ def render_sidebar_navigation():
         <div class="sidebar-bottom-spacer"></div>
         <div class="sidebar-version">v2.0.0</div>
     </div>
-    </div>
     '''
     
     # JavaScript for sidebar interaction
@@ -538,8 +538,8 @@ def render_sidebar_navigation():
     </script>
     '''
     
-    st.markdown(nav_html, unsafe_allow_html=True)
-    st.markdown(js, unsafe_allow_html=True)
+    st.markdown(textwrap.dedent(nav_html), unsafe_allow_html=True)
+    st.markdown(textwrap.dedent(js), unsafe_allow_html=True)
     
     # Return the collapsed state
     return st.session_state.sidebar_collapsed
@@ -575,9 +575,9 @@ sidebar_collapsed = render_sidebar_navigation()
 main_class = get_main_content_class()
 
 # Wrap your main content
-st.markdown(f"""
+st.markdown(textwrap.dedent(f"""
 <style>
-    .{main_class} {{
+    .main-content-wrapper {{
         max-width: 1400px;
         margin: 0 auto;
     }}
@@ -587,7 +587,7 @@ st.markdown(f"""
     }}
 </style>
 <div class="{main_class}">
-""", unsafe_allow_html=True)
+"""), unsafe_allow_html=True)
 
 # ============================================================
 # SESSION STATE INIT
@@ -676,6 +676,9 @@ if "account_type_determinations" not in st.session_state:
 # Analyst-supplied related parties (populated by the analyst form when wired)
 if "related_parties_override" not in st.session_state:
     st.session_state.related_parties_override = []
+
+if "counterparty_name_overrides" not in st.session_state:
+    st.session_state.counterparty_name_overrides = {}
 
 # ============================================================
 # build_large_transactions FUNCTION
@@ -3856,17 +3859,6 @@ def apply_standard_monthly_summary_to_report(data: dict, monthly_summary: List[d
 
     return _sync_data_quality_status(data)
 
-# ============================================================
-# CONTINUE WITH YOUR EXISTING APP CODE
-# ============================================================
-
-st.markdown('<div id="overview-section" class="section-anchor"></div>', unsafe_allow_html=True)
-st.markdown(
-    '<h1>📄 Bank Statement Parser (Multi-File Support)</h1>',
-    unsafe_allow_html=True,
-)
-st.write("Upload one or more bank statement PDFs to extract transactions.")
-
 def build_report_data_from_analysis(
     transactions: List[dict],
     monthly_summary: List[dict],
@@ -5879,6 +5871,9 @@ if "account_type_determinations" not in st.session_state:
 if "related_parties_override" not in st.session_state:
     st.session_state.related_parties_override = []
 
+if "counterparty_name_overrides" not in st.session_state:
+    st.session_state.counterparty_name_overrides = {}
+
 
 # -----------------------------
 # Fraud/Integrity Constants and Functions
@@ -6171,6 +6166,146 @@ def _resolve_transaction_counterparty_details(row: pd.Series) -> Tuple[str, bool
     return "UNKNOWN", False
 
 
+def _counterparty_override_candidates(raw_name: str, clean_name: str = "") -> List[str]:
+    candidates = [
+        normalize_counterparty_value(raw_name),
+        normalize_counterparty_value(clean_name),
+    ]
+    try:
+        candidates.append(normalize_counterparty_value(clean_counterparty_name(raw_name)))
+    except Exception:
+        pass
+    seen = set()
+    return [name for name in candidates if name and not (name in seen or seen.add(name))]
+
+
+def _apply_counterparty_overrides(raw_name: str, clean_name: str) -> str:
+    overrides = st.session_state.get("counterparty_name_overrides", {}) or {}
+    if not overrides:
+        return clean_name
+
+    for candidate in _counterparty_override_candidates(raw_name, clean_name):
+        override = normalize_counterparty_value(overrides.get(candidate))
+        if override:
+            return override
+    return clean_name
+
+
+def _extract_counterparty_mapping_from_json(payload) -> Tuple[Dict[str, str], int]:
+    """
+    Accept a downloaded CP list, a mapping object, or common AI-cleaned JSON
+    variants and convert them to normalized raw/current -> clean mappings.
+    """
+    mapping: Dict[str, str] = {}
+    entry_count = 0
+
+    def add_mapping(source, target):
+        nonlocal entry_count
+        clean_target = normalize_counterparty_value(target)
+        if not clean_target:
+            return
+        for candidate in _counterparty_override_candidates(str(source or ""), clean_target):
+            mapping[candidate] = clean_target
+        entry_count += 1
+
+    def add_entry(entry):
+        if not isinstance(entry, dict):
+            add_mapping(entry, entry)
+            return
+
+        target = (
+            entry.get("counterparty_name_clean")
+            or entry.get("clean_counterparty_name")
+            or entry.get("clean_name")
+            or entry.get("counterparty_name")
+            or entry.get("name")
+            or entry.get("party_name")
+        )
+        aliases = entry.get("aliases") or entry.get("raw_names") or entry.get("variants") or []
+        if isinstance(aliases, str):
+            aliases = [aliases]
+
+        sources = list(aliases) if isinstance(aliases, list) else []
+        for key in ("counterparty_name_raw", "raw_name", "original_name", "from", "source"):
+            if entry.get(key):
+                sources.append(entry.get(key))
+        if not sources and target:
+            sources = [target]
+
+        for source in sources:
+            add_mapping(source, target)
+
+    if isinstance(payload, dict):
+        counterparties = payload.get("counterparties") or payload.get("counterparty_list") or []
+        if isinstance(counterparties, list):
+            for entry in counterparties:
+                add_entry(entry)
+
+        raw_mapping = payload.get("mapping") or payload.get("counterparty_mapping")
+        if isinstance(raw_mapping, dict):
+            for source, target in raw_mapping.items():
+                add_mapping(source, target)
+        elif isinstance(raw_mapping, list):
+            for item in raw_mapping:
+                if isinstance(item, dict):
+                    add_mapping(
+                        item.get("from") or item.get("raw") or item.get("source") or item.get("counterparty_name_raw"),
+                        item.get("to") or item.get("clean") or item.get("target") or item.get("counterparty_name_clean"),
+                    )
+    elif isinstance(payload, list):
+        for entry in payload:
+            add_entry(entry)
+
+    return mapping, entry_count
+
+
+def _build_counterparty_json_payload(prepared_df: pd.DataFrame, summary_df: pd.DataFrame) -> dict:
+    counterparties = []
+    for row in summary_df.to_dict(orient="records"):
+        name = normalize_counterparty_value(row.get("counterparty_name")) or "UNKNOWN"
+        aliases = []
+        if not prepared_df.empty and "_raw_counterparty" in prepared_df.columns:
+            alias_series = prepared_df.loc[
+                prepared_df["counterparty_name"].astype(str).str.upper() == name,
+                "_raw_counterparty",
+            ]
+            aliases = sorted(
+                {
+                    normalize_counterparty_value(alias)
+                    for alias in alias_series.tolist()
+                    if normalize_counterparty_value(alias)
+                }
+            )
+
+        counterparties.append(
+            {
+                "counterparty_name_clean": name,
+                "aliases": aliases or [name],
+                "transaction_count": int(row.get("transaction_count", 0) or 0),
+                "credit_count": int(row.get("credit_count", 0) or 0),
+                "debit_count": int(row.get("debit_count", 0) or 0),
+                "total_credits": round(float(row.get("total_credits", 0) or 0), 2),
+                "total_debits": round(float(row.get("total_debits", 0) or 0), 2),
+                "net_position": round(float(row.get("net_position", 0) or 0), 2),
+            }
+        )
+
+    mapping = {}
+    for cp in counterparties:
+        clean_name = cp["counterparty_name_clean"]
+        for alias in cp["aliases"]:
+            mapping[alias] = clean_name
+
+    return {
+        "schema": "kredit_lab_counterparty_mapping",
+        "version": 1,
+        "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "instructions": "Edit counterparty_name_clean to regroup aliases, keep aliases for matching, then upload this JSON back into the Counterparty Ledger.",
+        "counterparties": counterparties,
+        "mapping": mapping,
+    }
+
+
 def resolve_transaction_counterparty(row: pd.Series) -> str:
     """
     Prefer counterparty values extracted by bank parsers. Parser-specific
@@ -6209,6 +6344,14 @@ def prepare_counterparty_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             grouped_series = raw_series
 
     grouped_series = grouped_series.apply(lambda value: normalize_counterparty_value(value) or "UNKNOWN")
+    grouped_series = pd.Series(
+        [
+            _apply_counterparty_overrides(raw_name, clean_name)
+            for raw_name, clean_name in zip(raw_series.tolist(), grouped_series.tolist())
+        ],
+        index=prepared.index,
+        dtype="object",
+    ).apply(lambda value: normalize_counterparty_value(value) or "UNKNOWN")
 
     prepared["_raw_counterparty"] = raw_series
     prepared["_counterparty_pattern_matched"] = matched_flags
@@ -6227,8 +6370,10 @@ def build_counterparty_ledger_from_transactions(df: pd.DataFrame) -> pd.DataFram
     if df.empty:
         return pd.DataFrame()
     
-    df = prepare_counterparty_dataframe(df)
-    party_tables = build_transactions_by_party(df)
+    working_df = df.copy()
+    if "counterparty_name" not in working_df.columns or "_raw_counterparty" not in working_df.columns:
+        working_df = prepare_counterparty_dataframe(working_df)
+    party_tables = build_transactions_by_party(working_df)
     
     # Group by counterparty
     summary_data = []
@@ -6275,14 +6420,56 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
         st.info("No counterparty data available.")
         return
     
+    st.markdown("## Counterparty Ledger")
+
+    download_col, upload_col = st.columns(2)
+    with upload_col:
+        uploaded_cp_json = st.file_uploader(
+            "Upload cleaned counterparty JSON",
+            type=["json"],
+            key="counterparty_mapping_upload",
+            help="Upload the downloaded CP JSON after editing counterparty_name_clean values or provide a mapping of raw/current names to clean names.",
+        )
+
+    if uploaded_cp_json is not None:
+        try:
+            payload = json.load(uploaded_cp_json)
+            overrides, entry_count = _extract_counterparty_mapping_from_json(payload)
+            if overrides:
+                st.session_state.counterparty_name_overrides = overrides
+                st.success(
+                    f"Applied cleaned counterparty mapping for {entry_count} entries "
+                    f"({len(overrides)} aliases)."
+                )
+            else:
+                st.warning("The uploaded JSON did not contain usable counterparty mappings.")
+        except Exception as exc:
+            st.error(f"Could not read counterparty JSON: {exc}")
+
+    if st.session_state.get("counterparty_name_overrides"):
+        if st.button("Clear uploaded counterparty mapping", use_container_width=True):
+            st.session_state.counterparty_name_overrides = {}
+            st.rerun()
+
+    prepared_df = prepare_counterparty_dataframe(df)
+
     # Build counterparty summary
-    counterparty_summary = build_counterparty_ledger_from_transactions(df)
+    counterparty_summary = build_counterparty_ledger_from_transactions(prepared_df)
     
     if counterparty_summary.empty:
         st.info("No counterparty data available.")
         return
-    
-    st.markdown("## 💼 Counterparty Ledger")
+
+    with download_col:
+        cp_payload = _build_counterparty_json_payload(prepared_df, counterparty_summary)
+        st.download_button(
+            "Download Counterparty List (JSON)",
+            json.dumps(cp_payload, indent=4),
+            "counterparty_list.json",
+            "application/json",
+            use_container_width=True,
+        )
+        st.caption("Edit counterparty_name_clean or mapping values, then upload the JSON back here to regroup the ledger and matching transactions.")
     
     def build_top_counterparty_table(amount_column: str, count_column: str) -> pd.DataFrame:
         top_df = counterparty_summary[
@@ -6350,7 +6537,7 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     )
     
     # Show transactions for selected counterparty
-    df_copy = prepare_counterparty_dataframe(df)
+    df_copy = prepared_df
     counterparty_tx = df_copy[df_copy['counterparty'] == selected_counterparty].copy()
 
     if not counterparty_tx.empty:
@@ -7020,6 +7207,7 @@ def clear_processing_outputs() -> None:
     st.session_state.file_account_no = {}
     st.session_state.account_type_determinations = []
     st.session_state.related_parties_override = []
+    st.session_state.counterparty_name_overrides = {}
 
 
 def parse_high_value_threshold() -> Tuple[Optional[float], Optional[str]]:
