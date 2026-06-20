@@ -6861,7 +6861,6 @@ with input_col3:
         "High Value Threshold (RM)",
         key="high_value_threshold_input",
         placeholder="e.g. 10,000",
-        help="Required. Credits equal to or above this amount are flagged as high value.",
         on_change=clear_high_value_threshold_error,
     )
 
@@ -7437,7 +7436,6 @@ if st.session_state.results:
                     f"{safe_name}_statement_report.html",
                     "text/html; charset=utf-8",
                     use_container_width=True,
-                    help="Download an interactive HTML report with charts and analysis"
                 )
             except Exception as e:
                 st.error(f"Failed to generate HTML report: {e}")

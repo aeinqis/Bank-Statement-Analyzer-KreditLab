@@ -3263,7 +3263,6 @@ LOAN_REPAYMENT_RE = re.compile(
     # (it runs above this), so only the company's own-facility HP reaches C11.
     r"|\bHIRE\s*PURCHASE\b"
     r"|\bHP\s+LOAN\b"
-    r"|\bHOUSING\s+LOAN\b"
     # P2P / marketplace-lender repayments (DR side) — same lender names as the
     # C10 disbursement regex; the side decides disbursement (CR→C10) vs
     # repayment (DR→C11). Funding Societies routes repayments via its trustee
