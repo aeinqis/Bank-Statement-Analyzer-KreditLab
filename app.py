@@ -389,8 +389,9 @@ def render_sidebar_navigation():
     
     # Get company name for sidebar
     company_name = st.session_state.get("company_name_override", "")
-    if not company_name and st.session_state.results:
-        for t in st.session_state.results:
+    results = st.session_state.get("results", [])
+    if not company_name and results:
+        for t in results:
             if t.get("company_name"):
                 company_name = t["company_name"]
                 break
@@ -410,7 +411,7 @@ def render_sidebar_navigation():
     ]
     
     # Check if results exist for conditional items
-    has_results = bool(st.session_state.results)
+    has_results = bool(results)
     
     collapsed_class = "collapsed" if st.session_state.sidebar_collapsed else ""
     active_section = st.session_state.active_section
