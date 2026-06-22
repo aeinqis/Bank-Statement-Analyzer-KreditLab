@@ -5122,6 +5122,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         credit_cols={4},
         debit_cols={4}
     )
+    auto_width(ws_round)
 
     # Observations
     ws5f = wb.create_sheet("Observations")
