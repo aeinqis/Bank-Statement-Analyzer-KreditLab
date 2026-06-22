@@ -4680,6 +4680,533 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     return output
 
 
+def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transaction_analysis: dict = None) -> BytesIO:
+    """Generate Excel workbook using the original generate_excel structure."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return BytesIO()
+
+    report_data = normalize_report_data_for_export(data)
+    own_related = report_data.get("own_related_transactions", {}) or {}
+    if isinstance(own_related, list):
+        own_related = {"transactions": own_related, "summary": {}}
+    elif not isinstance(own_related, dict):
+        own_related = {"transactions": [], "summary": {}}
+
+    loans = report_data.get("loan_transactions", {}) or {}
+    if isinstance(loans, list):
+        loans = {"transactions": loans, "disbursements": [], "repayments": []}
+    flags = report_data.get("flags", {}) or {}
+    cp_ledger = report_data.get("counterparty_ledger", {}) or {}
+    if (not cp_ledger or not cp_ledger.get("counterparties")) and report_data.get("transactions"):
+        cp_ledger = build_track2_counterparty_ledger(report_data.get("transactions", []))
+    parsing = report_data.get("parsing_metadata", {}) or {}
+    pdf_integrity = report_data.get("pdf_integrity", {}) or {}
+    consolidated = report_data.get("consolidated", {}) or {}
+    monthly_analysis = report_data.get("monthly_analysis", []) or []
+    report_info = report_data.get("report_info", {}) or {}
+    accounts = report_data.get("accounts", []) or []
+    top_parties = report_data.get("top_parties", {}) or {}
+    statutory_compliance = consolidated.get("statutory_compliance", {}) or {}
+    observations = normalize_observations(report_data.get("observations", {}) or {})
+
+    wb = openpyxl.Workbook()
+
+    header_font = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill(start_color="1B4F72", end_color="1B4F72", fill_type="solid")
+    header_fill_green = PatternFill(start_color="196F3D", end_color="196F3D", fill_type="solid")
+    header_fill_red = PatternFill(start_color="922B21", end_color="922B21", fill_type="solid")
+    header_fill_orange = PatternFill(start_color="B9770E", end_color="B9770E", fill_type="solid")
+    alt_row_fill = PatternFill(start_color="F2F3F4", end_color="F2F3F4", fill_type="solid")
+    fail_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    credit_font = Font(name="Calibri", color="196F3D")
+    debit_font = Font(name="Calibri", color="922B21")
+    bold_font = Font(name="Calibri", bold=True, size=11)
+    title_font = Font(name="Calibri", bold=True, size=14, color="1B4F72")
+    thin_border = Border(
+        left=Side(style="thin", color="D5D8DC"),
+        right=Side(style="thin", color="D5D8DC"),
+        top=Side(style="thin", color="D5D8DC"),
+        bottom=Side(style="thin", color="D5D8DC"),
+    )
+    num_fmt = "#,##0.00"
+
+    def clean_xl(value):
+        value = _excel_safe_value(value)
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, default=str)
+        return value
+
+    def is_num(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    def style_header_row(ws, row, max_col, fill=None):
+        for col in range(1, max_col + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.font = header_font
+            cell.fill = fill or header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+
+    def style_data_cell(ws, row, col, number=False, credit=False, debit=False):
+        cell = ws.cell(row=row, column=col)
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal="right" if number else "left", vertical="top", wrap_text=True)
+        if number:
+            cell.number_format = num_fmt
+        if credit:
+            cell.font = credit_font
+        if debit:
+            cell.font = debit_font
+        if row % 2 == 0:
+            cell.fill = alt_row_fill
+
+    def write_headers(ws, row, headers, fill=None):
+        for col, header in enumerate(headers, 1):
+            ws.cell(row=row, column=col, value=header)
+        style_header_row(ws, row, len(headers), fill)
+
+    def auto_width(ws, min_width=10, max_width=40):
+        for col_cells in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col_cells[0].column)
+            for cell in col_cells:
+                val = "" if cell.value is None else str(cell.value)
+                max_len = max(max_len, len(val))
+            ws.column_dimensions[col_letter].width = max(min_width, min(max_len + 3, max_width))
+
+    def write_values(ws, row, values, number_cols=None, credit_cols=None, debit_cols=None):
+        number_cols = set(number_cols or [])
+        credit_cols = set(credit_cols or [])
+        debit_cols = set(debit_cols or [])
+        for col, value in enumerate(values, 1):
+            ws.cell(row=row, column=col, value=clean_xl(value))
+            style_data_cell(
+                ws,
+                row,
+                col,
+                number=col in number_cols or is_num(value),
+                credit=col in credit_cols,
+                debit=col in debit_cols,
+            )
+
+    def safe_amount(txn):
+        return safe_float(txn.get("amount", txn.get("credit", 0) or txn.get("debit", 0)))
+
+    schema_version = str(report_info.get("schema_version", ""))
+    is_v620 = schema_version in ("6.2.0", "6.2.1", "6.2.2", "6.3.0", "6.3.1", "6.3.2", "6.3.3", "6.3.4", "6.3.5") or consolidated.get("total_fx_credits") is not None
+    has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(parsing.get("account_month_checks"))
+
+    # Summary
+    ws = wb.active
+    ws.title = "Summary"
+    ws.cell(row=1, column=1, value="KREDIT LAB - STATEMENT INTELLIGENCE REPORT").font = title_font
+    ws.cell(row=2, column=1, value=report_info.get("company_name", "")).font = bold_font
+    ws.cell(row=3, column=1, value=f"Period: {report_info.get('period_start', '')} to {report_info.get('period_end', '')}")
+    ws.cell(row=4, column=1, value=f"Generated: {report_info.get('generated_at', '')}")
+
+    row = 6
+    ws.cell(row=row, column=1, value="ACCOUNT DETAILS").font = bold_font
+    row += 1
+    headers = ["Bank", "Account No", "Holder", "Type", "Opening Balance", "Closing Balance", "Total Credits", "Total Debits", "Transactions"]
+    write_headers(ws, row, headers)
+    for account in accounts:
+        row += 1
+        values = [
+            account.get("bank_name"), account.get("account_number"), account.get("account_holder"),
+            account.get("account_type"), account.get("opening_balance"), account.get("closing_balance"),
+            account.get("total_credits"), account.get("total_debits"), account.get("transaction_count"),
+        ]
+        write_values(ws, row, values, number_cols={5, 6, 7, 8}, credit_cols={7}, debit_cols={8})
+
+    row += 2
+    ws.cell(row=row, column=1, value="CONSOLIDATED FIGURES").font = bold_font
+    row += 1
+    consolidated_items = [
+        ("Gross Credits", consolidated.get("gross_credits")),
+        ("Gross Debits", consolidated.get("gross_debits")),
+        ("Net Credits", consolidated.get("net_credits")),
+        ("Net Debits", consolidated.get("net_debits")),
+        ("Annualized Net Credits", consolidated.get("annualized_net_credits")),
+        ("Annualized Net Debits", consolidated.get("annualized_net_debits")),
+        ("", ""),
+        ("Own Party Credits", consolidated.get("total_own_party_cr")),
+        ("Own Party Debits", consolidated.get("total_own_party_dr")),
+        ("Related Party Credits", consolidated.get("total_related_party_cr")),
+        ("Related Party Debits", consolidated.get("total_related_party_dr")),
+        ("", ""),
+        ("Loan Disbursements", consolidated.get("total_loan_disbursement_cr")),
+        ("Loan Repayments", consolidated.get("total_loan_repayment_dr")),
+        ("FD/Interest Credits", consolidated.get("total_fd_interest_cr")),
+        ("", ""),
+        ("Cash Deposits", consolidated.get("total_cash_deposits")),
+        ("Cash Withdrawals", consolidated.get("total_cash_withdrawals")),
+        ("Cheque Deposits", consolidated.get("total_cheque_deposits")),
+        ("Cheque Issues", consolidated.get("total_cheque_issues")),
+        ("", ""),
+        ("Total Salary Paid", consolidated.get("total_salary_paid")),
+        ("Total EPF", consolidated.get("total_statutory_epf")),
+        ("Total SOCSO", consolidated.get("total_statutory_socso")),
+        ("Total Tax", consolidated.get("total_statutory_tax")),
+        ("Total HRDF", consolidated.get("total_statutory_hrdf")),
+        ("", ""),
+        ("EOD Lowest", consolidated.get("eod_lowest")),
+        ("EOD Highest", consolidated.get("eod_highest")),
+        ("EOD Average", consolidated.get("eod_average")),
+    ]
+    if is_v620:
+        consolidated_items.extend([
+            ("", ""),
+            ("FX/Remittance Credits", consolidated.get("total_fx_credits")),
+            ("FX/Remittance Debits", consolidated.get("total_fx_debits")),
+            ("FX Credit % of Gross", consolidated.get("fx_credit_pct")),
+            ("FX Debit % of Gross", consolidated.get("fx_debit_pct")),
+            ("FX Currencies Detected", ", ".join(consolidated.get("fx_currencies_all", []) or [])),
+        ])
+    for label, value in consolidated_items:
+        if label:
+            write_values(ws, row, [label, value], number_cols={2} if is_num(value) else set(), credit_cols={2} if "Credit" in label else set(), debit_cols={2} if "Debit" in label or "Repayment" in label else set())
+        row += 1
+
+    row += 1
+    ws.cell(row=row, column=1, value="POSITIVE OBSERVATIONS").font = Font(name="Calibri", bold=True, color="196F3D")
+    row += 1
+    for item in observations.get("positive", []):
+        ws.cell(row=row, column=1, value=f"+ {item}")
+        row += 1
+    row += 1
+    ws.cell(row=row, column=1, value="CONCERNS").font = Font(name="Calibri", bold=True, color="922B21")
+    row += 1
+    for item in observations.get("concerns", []):
+        ws.cell(row=row, column=1, value=f"- {item}")
+        row += 1
+    auto_width(ws)
+
+    # Cash Flow
+    ws2 = wb.create_sheet("Cash Flow")
+    cash_headers = [
+        "Month", "Bank", "Account No", "Gross Credits", "Gross Debits", "Net Credits", "Net Debits",
+        "Credit Count", "Debit Count", "Own Party Cr", "Own Party Dr", "Related Party Cr", "Related Party Dr",
+        "Reversal Cr", "Loan Disbursement Cr", "FD Interest Cr", "Round Figure Cr", "High Value Cr",
+        "Cash Dep Count", "Cash Dep Amt", "Cash Wdl Count", "Cash Wdl Amt", "Chq Dep Count", "Chq Dep Amt",
+        "Chq Issue Count", "Chq Issue Amt", "Loan Repayment Dr", "Salary Paid", "EPF", "SOCSO", "Tax", "HRDF",
+        "Ret Chq In Count", "Ret Chq In Amt", "Ret Chq Out Count", "Ret Chq Out Amt",
+        "EOD Lowest", "EOD Highest", "EOD Average", "Opening Balance", "Closing Balance",
+    ]
+    if is_v620:
+        cash_headers += ["FX Cr Count", "FX Cr Amount", "FX Dr Count", "FX Dr Amount", "FX Currencies"]
+    if has_recon:
+        cash_headers += ["Recon Status", "Recon Delta", "Gaps", "Missing Debits", "Missing Credits", "Data Quality Note"]
+    write_headers(ws2, 1, cash_headers)
+    cash_num_cols = set(range(4, 42)) - {8, 9, 19, 21, 23, 25, 33, 35}
+    if is_v620:
+        cash_num_cols.update({43, 45})
+    for idx, item in enumerate(monthly_analysis, 2):
+        values = [
+            item.get("month"), item.get("bank_name", ""), item.get("account_number", ""),
+            item.get("gross_credits"), item.get("gross_debits"), item.get("net_credits"), item.get("net_debits"),
+            item.get("credit_count"), item.get("debit_count"), item.get("own_party_cr"), item.get("own_party_dr"),
+            item.get("related_party_cr"), item.get("related_party_dr"), item.get("reversal_cr"),
+            item.get("loan_disbursement_cr"), item.get("fd_interest_cr"), item.get("round_figure_cr"),
+            item.get("high_value_cr"), item.get("cash_deposits_count"), item.get("cash_deposits_amount"),
+            item.get("cash_withdrawals_count"), item.get("cash_withdrawals_amount"), item.get("cheque_deposits_count"),
+            item.get("cheque_deposits_amount"), item.get("cheque_issues_count"), item.get("cheque_issues_amount"),
+            item.get("loan_repayment_dr"), item.get("salary_paid"), item.get("statutory_epf"), item.get("statutory_socso"),
+            item.get("statutory_tax"), item.get("statutory_hrdf"), item.get("returned_cheques_inward_count"),
+            item.get("returned_cheques_inward_amount"), item.get("returned_cheques_outward_count"),
+            item.get("returned_cheques_outward_amount"), item.get("eod_lowest"), item.get("eod_highest"),
+            item.get("eod_average"), item.get("opening_balance"), item.get("closing_balance"),
+        ]
+        if is_v620:
+            values += [
+                item.get("fx_credit_count", 0), item.get("fx_credit_amount", 0),
+                item.get("fx_debit_count", 0), item.get("fx_debit_amount", 0),
+                ", ".join(item.get("fx_currencies", []) or []),
+            ]
+        if has_recon:
+            values += [
+                item.get("reconciliation_status", ""), item.get("reconciliation_delta", 0),
+                item.get("extraction_gaps", 0), item.get("missing_debit_amount", 0),
+                item.get("missing_credit_amount", 0), item.get("data_quality_note", "") or "",
+            ]
+        write_values(ws2, idx, values, number_cols=cash_num_cols)
+        if item.get("reconciliation_status") == "FAIL":
+            for col in range(1, len(values) + 1):
+                ws2.cell(row=idx, column=col).fill = fail_fill
+    auto_width(ws2, min_width=12)
+
+    # Top Parties
+    ws3 = wb.create_sheet("Top Parties")
+    payers = top_parties.get("top_payers") or top_parties.get("top_creditors") or []
+    payees = top_parties.get("top_payees") or top_parties.get("top_debtors") or []
+    monthly_bd = sorted({mb.get("month", "") for p in list(payers) + list(payees) for mb in (p.get("monthly_breakdown") or []) if mb.get("month")})
+    party_headers = ["Rank", "Party Name", "Total Amount", "Transactions", "Related Party"] + monthly_bd
+    ws3.cell(row=1, column=1, value="TOP PAYERS (Income Sources)").font = bold_font
+    write_headers(ws3, 2, party_headers, header_fill_green)
+    for row_idx, party in enumerate(payers, 3):
+        lookup = {mb.get("month"): mb.get("amount") for mb in (party.get("monthly_breakdown") or [])}
+        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
+        values.extend(lookup.get(month, 0) for month in monthly_bd)
+        write_values(ws3, row_idx, values, number_cols={3, *range(6, 6 + len(monthly_bd))}, credit_cols={3, *range(6, 6 + len(monthly_bd))})
+    row = len(payers) + 5
+    ws3.cell(row=row, column=1, value="TOP PAYEES (Payment Destinations)").font = bold_font
+    row += 1
+    write_headers(ws3, row, party_headers, header_fill_red)
+    for row_idx, party in enumerate(payees, row + 1):
+        lookup = {mb.get("month"): mb.get("amount") for mb in (party.get("monthly_breakdown") or [])}
+        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
+        values.extend(lookup.get(month, 0) for month in monthly_bd)
+        write_values(ws3, row_idx, values, number_cols={3, *range(6, 6 + len(monthly_bd))}, debit_cols={3, *range(6, 6 + len(monthly_bd))})
+    auto_width(ws3)
+
+    # Preserved: Large Transactions
+    ws_large = wb.create_sheet("Large Transactions")
+    ws_large.cell(row=1, column=1, value=f"Large Transactions (>= RM {consolidated.get('high_value_threshold', 100000):,.0f})").font = title_font
+    large_headers = ["Date", "Description", "Amount", "Type", "Category", "Balance"]
+    write_headers(ws_large, 3, large_headers, header_fill_green)
+    large_rows = report_data.get("large_transactions", []) or report_data.get("large_credits", []) or []
+    for row_idx, txn in enumerate(large_rows, 4):
+        amount = safe_amount(txn)
+        txn_type = (txn.get("type") or ("CREDIT" if safe_float(txn.get("credit", 0)) > 0 else "DEBIT")).upper()
+        values = [txn.get("date", ""), (txn.get("description", "") or "")[:80], amount, txn_type, txn.get("category", ""), txn.get("balance")]
+        write_values(ws_large, row_idx, values, number_cols={3, 6}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type == "DEBIT" else set())
+    auto_width(ws_large)
+
+    # Large Credits
+    ws4 = wb.create_sheet("Large Credits")
+    large_credit_headers = ["Date", "Description", "Amount", "Category", "Balance"]
+    write_headers(ws4, 1, large_credit_headers, header_fill_green)
+    for row_idx, txn in enumerate(report_data.get("large_credits", []) or [], 2):
+        values = [txn.get("date"), (txn.get("description", "") or "")[:80], txn.get("amount"), txn.get("category", ""), txn.get("balance")]
+        write_values(ws4, row_idx, values, number_cols={3, 5}, credit_cols={3})
+    auto_width(ws4)
+
+    # Counterparty
+    ws5 = wb.create_sheet("Counterparty")
+    ws5.cell(row=1, column=1, value="COUNTERPARTY TRANSACTIONS").font = title_font
+    ws5.cell(row=3, column=1, value="Summary").font = bold_font
+    row = 4
+    summary = own_related.get("summary", {}) or {}
+    for label, amount_key, pct_key, is_credit_side in [
+        ("Own Party Credits", "own_party_cr", "own_party_cr_pct", True),
+        ("Own Party Debits", "own_party_dr", "own_party_dr_pct", False),
+        ("Related Party Credits", "related_party_cr", "related_party_cr_pct", True),
+        ("Related Party Debits", "related_party_dr", "related_party_dr_pct", False),
+    ]:
+        write_values(ws5, row, [label, summary.get(amount_key), f"{safe_float(summary.get(pct_key, 0)):.1f}%" if summary.get(pct_key) is not None else ""], number_cols={2}, credit_cols={2} if is_credit_side else set(), debit_cols={2} if not is_credit_side else set())
+        row += 1
+    row += 1
+    counterparty_headers = ["Date", "Description", "Amount", "Type", "Party Type", "Party Name"]
+    write_headers(ws5, row, counterparty_headers, header_fill_orange)
+    for txn in own_related.get("transactions", []) or []:
+        row += 1
+        txn_type = (txn.get("type") or "").upper()
+        values = [txn.get("date"), (txn.get("description", "") or "")[:60], txn.get("amount"), txn.get("type"), txn.get("party_type"), txn.get("party_name", "")]
+        write_values(ws5, row, values, number_cols={3}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type != "CREDIT" else set())
+    auto_width(ws5)
+
+    # CP Ledger
+    ws5b = wb.create_sheet("CP Ledger")
+    ws5b.cell(row=1, column=1, value="COUNTERPARTY LEDGER").font = title_font
+    ledger_headers = ["Counterparty", "Total Credits", "Total Debits", "Net Position", "Cr Count", "Dr Count", "Txn Count"]
+    row = 3
+    write_headers(ws5b, row, ledger_headers)
+    cp_sorted = sorted(cp_ledger.get("counterparties", []) or [], key=lambda cp: safe_float(cp.get("total_credits", 0)) + safe_float(cp.get("total_debits", 0)), reverse=True)
+    for cp in cp_sorted:
+        row += 1
+        values = [cp.get("counterparty_name", ""), cp.get("total_credits", 0), cp.get("total_debits", 0), cp.get("net_position", 0), cp.get("credit_count", 0), cp.get("debit_count", 0), cp.get("transaction_count", 0)]
+        write_values(ws5b, row, values, number_cols={2, 3, 4}, credit_cols={2}, debit_cols={3})
+    row += 2
+    ws5b.cell(row=row, column=1, value="TRANSACTION DETAIL BY COUNTERPARTY").font = title_font
+    for cp in cp_sorted:
+        row += 1
+        ws5b.cell(row=row, column=1, value=cp.get("counterparty_name", "")).font = Font(name="Calibri", bold=True, color="1B4F72", size=11)
+        row += 1
+        detail_headers = ["Date", "Description", "Amount", "Type", "Account"]
+        write_headers(ws5b, row, detail_headers, header_fill_orange)
+        for txn in cp.get("transactions", []) or []:
+            row += 1
+            txn_type = (txn.get("type") or "").upper()
+            values = [txn.get("date", ""), (txn.get("description", "") or "")[:70], txn.get("amount", 0), txn.get("type", ""), txn.get("account_number", "")]
+            write_values(ws5b, row, values, number_cols={3}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type != "CREDIT" else set())
+    auto_width(ws5b)
+
+    # Related Parties
+    ws5c = wb.create_sheet("Related Parties")
+    ws5c.cell(row=1, column=1, value="KNOWN RELATED PARTIES").font = title_font
+    rp_headers = ["Name", "Relationship", "Total Credits", "Total Debits", "Transactions"]
+    write_headers(ws5c, 3, rp_headers, header_fill_orange)
+    cp_by_name = {str(cp.get("counterparty_name", "")).strip().upper(): cp for cp in cp_sorted if cp.get("counterparty_name")}
+    for row_idx, rp in enumerate(report_info.get("related_parties", []) or [], 4):
+        name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
+        relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
+        match = cp_by_name.get(name.strip().upper(), {})
+        values = [name, relationship, match.get("total_credits"), match.get("total_debits"), match.get("transaction_count")]
+        write_values(ws5c, row_idx, values, number_cols={3, 4}, credit_cols={3}, debit_cols={4})
+    auto_width(ws5c)
+
+    # Unclassified
+    ws5d = wb.create_sheet("Unclassified")
+    ws5d.cell(row=1, column=1, value="UNCLASSIFIED TRANSACTIONS").font = title_font
+    unclassified_headers = ["Date", "Description", "Amount", "Type", "Balance"]
+    write_headers(ws5d, 3, unclassified_headers, header_fill_orange)
+    for row_idx, txn in enumerate(report_data.get("unclassified_transactions", []) or [], 4):
+        txn_type = (txn.get("type") or "").upper()
+        values = [txn.get("date", ""), (txn.get("description", "") or "")[:80], txn.get("amount"), txn_type, txn.get("balance")]
+        write_values(ws5d, row_idx, values, number_cols={3, 5}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type != "CREDIT" else set())
+    auto_width(ws5d)
+
+    # Preserved: Round Figure Transactions
+    round_rows = get_round_transactions_for_report(report_data)
+    ws_round = wb.create_sheet("Round Figure Transactions")
+    ws_round.cell(row=1, column=1, value="ROUND FIGURE TRANSACTIONS").font = title_font
+    round_headers = ["Date", "Description", "Amount", "Type", "Balance"]
+    write_headers(ws_round, 3, round_headers, header_fill_green)
+    for row_idx, txn in enumerate(round_rows, 4):
+        amount = safe_float(txn.get("amount", 0))
+        txn_type = (txn.get("type") or ("CREDIT" if amount >= 0 else "DEBIT")).upper()
+        values = [txn.get("date", ""), (txn.get("description", "") or "")[:80], amount, txn_type, txn.get("balance")]
+        write_values(ws_round, row_idx, values, number_cols={3, 5}, credit_cols={3} if amount >= 0 else set(), debit_cols={3} if amount < 0 else set())
+    auto_width(ws_round)
+
+    # Round Figure Cr
+    ws5e = wb.create_sheet("Round Figure Cr")
+    ws5e.cell(row=1, column=1, value="ROUND FIGURE CREDITS (AML)").font = title_font
+    rf_headers = ["Date", "Description", "Amount", "Balance"]
+    write_headers(ws5e, 3, rf_headers, header_fill_green)
+    rf_row = 4
+    for txn in round_rows:
+        amount = safe_float(txn.get("amount", 0))
+        if amount < 0:
+            continue
+        values = [txn.get("date", ""), (txn.get("description", "") or "")[:80], amount, txn.get("balance")]
+        write_values(ws5e, rf_row, values, number_cols={3, 4}, credit_cols={3})
+        rf_row += 1
+    auto_width(ws5e)
+
+    # Observations
+    ws5f = wb.create_sheet("Observations")
+    ws5f.cell(row=1, column=1, value="OBSERVATIONS").font = title_font
+    row = 3
+    for title, items, fill in (("POSITIVE OBSERVATIONS", observations.get("positive", []), header_fill_green), ("CONCERNS", observations.get("concerns", []), header_fill_red)):
+        ws5f.cell(row=row, column=1, value=title)
+        style_header_row(ws5f, row, 1, fill)
+        for item in items:
+            row += 1
+            ws5f.cell(row=row, column=1, value=str(item))
+            style_data_cell(ws5f, row, 1)
+        row += 2
+    ws5f.column_dimensions["A"].width = 100
+
+    # Facilities
+    ws6 = wb.create_sheet("Facilities")
+    facility_headers = ["Date", "Description", "Amount", "Category", "Balance"]
+    row = 1
+    ws6.cell(row=row, column=1, value="LOAN DISBURSEMENTS (Credits)").font = bold_font
+    row += 1
+    write_headers(ws6, row, facility_headers, header_fill_green)
+    for txn in loans.get("disbursements", []) or []:
+        row += 1
+        values = [txn.get("date"), (txn.get("description", "") or "")[:70], txn.get("amount"), txn.get("category", ""), txn.get("balance")]
+        write_values(ws6, row, values, number_cols={3, 5}, credit_cols={3})
+    row += 2
+    ws6.cell(row=row, column=1, value="LOAN REPAYMENTS (Debits)").font = bold_font
+    row += 1
+    write_headers(ws6, row, facility_headers, header_fill_red)
+    for txn in loans.get("repayments", []) or []:
+        row += 1
+        values = [txn.get("date"), (txn.get("description", "") or "")[:70], txn.get("amount"), txn.get("category", ""), txn.get("balance")]
+        write_values(ws6, row, values, number_cols={3, 5}, debit_cols={3})
+    auto_width(ws6)
+
+    # Risk Signals
+    ws7 = wb.create_sheet("Risk Signals")
+    risk_headers = ["#", "Signal", "Detected", "Remarks"]
+    write_headers(ws7, 1, risk_headers)
+    risk_df = build_risk_signals_dataframe_for_excel(flags, consolidated, statutory_compliance, monthly_analysis, report_data)
+    for row_idx, item in enumerate(risk_df.to_dict(orient="records"), 2):
+        values = [item.get("#"), item.get("Signal"), item.get("Detected"), item.get("Remarks")]
+        write_values(ws7, row_idx, values)
+        if item.get("Detected") == "YES":
+            ws7.cell(row=row_idx, column=3).font = Font(name="Calibri", color="922B21", bold=True)
+    auto_width(ws7)
+
+    # Parsing QC
+    ws8 = wb.create_sheet("Parsing QC")
+    ws8.cell(row=1, column=1, value="PARSING QUALITY METRICS").font = title_font
+    ws8.cell(row=3, column=1, value="Overall Success Rate")
+    ws8.cell(row=3, column=2, value=f"{safe_float(parsing.get('overall_success_rate', 0)):.1f}%")
+    ws8.cell(row=4, column=1, value="Transactions Extracted")
+    ws8.cell(row=4, column=2, value=parsing.get("total_transactions_extracted", 0))
+    ws8.cell(row=5, column=1, value="Balance Checks Passed")
+    ws8.cell(row=5, column=2, value=f"{parsing.get('total_balance_checks_passed', 0)} / {parsing.get('total_balance_checks', 0)}")
+    for row_idx in range(3, 6):
+        ws8.cell(row=row_idx, column=1).font = bold_font
+        ws8.cell(row=row_idx, column=1).border = thin_border
+        ws8.cell(row=row_idx, column=2).border = thin_border
+    row = 7
+    qc_headers = ["Month", "Account", "Bank", "Opening Bal", "Closing Bal", "Gross Cr", "Gross Dr", "Expected Close", "Recon Delta", "Passed", "Txns Extracted", "Notes"]
+    write_headers(ws8, row, qc_headers)
+    for check in parsing.get("account_month_checks", []) or []:
+        row += 1
+        values = [
+            check.get("month"), check.get("account_number"), check.get("bank_name"),
+            check.get("opening_balance"), check.get("closing_balance"), check.get("gross_credits"), check.get("gross_debits"),
+            check.get("expected_closing"), check.get("reconciliation_delta"), "PASS" if check.get("passed") else "FAIL",
+            check.get("transactions_extracted"), check.get("notes", ""),
+        ]
+        write_values(ws8, row, values, number_cols={4, 5, 6, 7, 8, 9, 11})
+        ws8.cell(row=row, column=10).font = Font(name="Calibri", color="196F3D" if check.get("passed") else "922B21", bold=True)
+    if parsing.get("extraction_gaps"):
+        row += 2
+        ws8.cell(row=row, column=1, value="EXTRACTION GAPS DETAIL").font = title_font
+        row += 1
+        gap_headers = ["Month", "Date", "Page", "Source File", "Missing Type", "Missing Amount", "Balance Before Gap", "Balance After Gap", "Last Good Transaction", "Next Transaction"]
+        write_headers(ws8, row, gap_headers, header_fill_red)
+        for gap in parsing.get("extraction_gaps", []) or []:
+            row += 1
+            values = [
+                gap.get("month", ""), gap.get("date", ""), gap.get("page", ""), gap.get("source_file", ""),
+                gap.get("missing_type", ""), gap.get("missing_amount", 0), gap.get("balance_before_gap", 0),
+                gap.get("balance_after_gap", 0), (gap.get("prev_description", "") or "")[:60], (gap.get("next_description", "") or "")[:60],
+            ]
+            write_values(ws8, row, values, number_cols={6, 7, 8}, debit_cols={6})
+    auto_width(ws8)
+
+    # Preserved: Fraud Detector
+    ws9 = wb.create_sheet("Fraud Detector")
+    ws9.cell(row=1, column=1, value="Fraud Detector").font = title_font
+    fraud_headers = ["file_name", "overall_risk", "layer", "severity", "finding", "anomaly_count", "detail"]
+    write_headers(ws9, 3, fraud_headers)
+    fraud_rows = []
+    if isinstance(pdf_integrity, dict):
+        for file_name, result in pdf_integrity.items():
+            if isinstance(result, dict):
+                fraud_rows.extend(_normalise_pdf_integrity_layer_rows(file_name, result))
+    for row_idx, item in enumerate(fraud_rows, 4):
+        values = [item.get(key) for key in fraud_headers]
+        write_values(ws9, row_idx, values, number_cols={6})
+    auto_width(ws9)
+
+    if report_data.get("transactions"):
+        ws10 = wb.create_sheet("Transactions")
+        txns = report_data.get("transactions", []) or []
+        txn_headers = list(txns[0].keys()) if txns and isinstance(txns[0], dict) else []
+        write_headers(ws10, 1, txn_headers)
+        for row_idx, txn in enumerate(txns, 2):
+            values = [txn.get(key) for key in txn_headers]
+            write_values(ws10, row_idx, values)
+        auto_width(ws10)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
 def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
     """Convert raw transaction rows into the counterparty_ledger dict shape
     that build_track2_result (kredit_lab_classify_track2) expects.
