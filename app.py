@@ -5099,12 +5099,9 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Top Parties
     ws3 = wb.create_sheet("Top Parties")
-    party_view = prepare_top_parties_for_report(top_parties)
-    payers = party_view["payers"]
-    payees = party_view["payees"]
-    suppressed_payers = party_view["payers_suppressed"]
-    suppressed_payees = party_view["payees_suppressed"]
-    all_party_rows = list(payers) + list(payees) + list(suppressed_payers) + list(suppressed_payees)
+    payers = top_parties.get("top_payers") or top_parties.get("top_creditors") or []
+    payees = top_parties.get("top_payees") or top_parties.get("top_debtors") or []
+    all_party_rows = list(payers) + list(payees)
     monthly_bd = sorted({
         mb.get("month", "")
         for party in all_party_rows
@@ -5114,47 +5111,22 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     party_headers = ["Rank", "Party Name", "Total Amount", "Transactions", "Related Party"] + monthly_bd
     party_num_cols = {3, *range(6, 6 + len(monthly_bd))}
 
-    def write_party_section(row, title, parties, fill, credit_side=True):
-        ws3.cell(row=row, column=1, value=title).font = bold_font
-        row += 1
-        write_headers(ws3, row, party_headers, fill)
-        if not parties:
-            row += 1
-            ws3.cell(row=row, column=1, value="No data")
-            style_data_cell(ws3, row, 1)
-            return row + 2
-        for party in parties:
-            row += 1
-            lookup = {
-                mb.get("month"): safe_float(mb.get("amount"))
-                for mb in (party.get("monthly_breakdown") or [])
-                if isinstance(mb, dict)
-            }
-            values = [
-                party.get("rank"),
-                party.get("party_name") or party.get("name"),
-                party.get("total_amount"),
-                party.get("transaction_count"),
-                "Yes" if party.get("is_related_party") else "No",
-            ]
-            values.extend(lookup.get(month, 0) for month in monthly_bd)
-            write_values(
-                ws3,
-                row,
-                values,
-                number_cols=party_num_cols,
-                credit_cols=party_num_cols if credit_side else set(),
-                debit_cols=party_num_cols if not credit_side else set(),
-            )
-        return row + 2
-
-    row = 1
-    row = write_party_section(row, "TOP PAYERS (Income Sources)", payers, header_fill_green, True)
-    row = write_party_section(row, "TOP PAYEES (Payment Destinations)", payees, header_fill_red, False)
-    if suppressed_payers:
-        row = write_party_section(row, "PARSER-DROPPED PAYERS (Review Buckets)", suppressed_payers, header_fill_orange, True)
-    if suppressed_payees:
-        row = write_party_section(row, "PARSER-DROPPED PAYEES (Review Buckets)", suppressed_payees, header_fill_orange, False)
+    ws3.cell(row=1, column=1, value="TOP PAYERS (Income Sources)").font = bold_font
+    write_headers(ws3, 2, party_headers, header_fill_green)
+    for row_idx, party in enumerate(payers, 3):
+        lookup = {mb.get("month"): safe_float(mb.get("amount")) for mb in (party.get("monthly_breakdown") or []) if isinstance(mb, dict)}
+        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
+        values.extend(lookup.get(month, 0) for month in monthly_bd)
+        write_values(ws3, row_idx, values, number_cols=party_num_cols, credit_cols=party_num_cols)
+    row = len(payers) + 5
+    ws3.cell(row=row, column=1, value="TOP PAYEES (Payment Destinations)").font = bold_font
+    row += 1
+    write_headers(ws3, row, party_headers, header_fill_red)
+    for row_idx, party in enumerate(payees, row + 1):
+        lookup = {mb.get("month"): safe_float(mb.get("amount")) for mb in (party.get("monthly_breakdown") or []) if isinstance(mb, dict)}
+        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
+        values.extend(lookup.get(month, 0) for month in monthly_bd)
+        write_values(ws3, row_idx, values, number_cols=party_num_cols, debit_cols=party_num_cols)
     auto_width(ws3)
 
     # Large Transactions - Updated with proper formatting
@@ -5184,13 +5156,18 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         write_values(ws5, row, [label, summary.get(amount_key), f"{safe_float(summary.get(pct_key, 0)):.1f}%" if summary.get(pct_key) is not None else ""], number_cols={2}, credit_cols={2} if is_credit_side else set(), debit_cols={2} if not is_credit_side else set())
         row += 1
     row += 1
-    counterparty_headers = ["Date", "Description", "Amount", "Type", "Party Type", "Party Name"]
+    counterparty_headers = ["No.", "Date", "Description", "Amount", "Party Type", "Party Name"]
     write_headers(ws5, row, counterparty_headers, header_fill_orange)
-    for txn in own_related.get("transactions", []) or []:
+    for idx, txn in enumerate(own_related.get("transactions", []) or [], 1):
         row += 1
         txn_type = (txn.get("type") or "").upper()
-        values = [txn.get("date"), (txn.get("description", "") or "")[:60], txn.get("amount"), txn.get("type"), txn.get("party_type"), txn.get("party_name", "")]
-        write_values(ws5, row, values, number_cols={3}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type != "CREDIT" else set())
+        values = [idx, txn.get("date"), (txn.get("description", "") or "")[:60], txn.get("amount"), txn.get("party_type"), txn.get("party_name", "")]
+        write_values(ws5, row, values, number_cols={4},
+                     credit_cols={4} if txn_type == "CREDIT" else set(),
+                     debit_cols={4} if txn_type != "CREDIT" else set())
+        ws5.cell(row=row, column=1).number_format = "0"
+        for centre_col in (1, 2, 4, 5):
+            ws5.cell(row=row, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     auto_width(ws5)
 
     # CP Ledger
@@ -5236,12 +5213,18 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Unclassified
     ws5d = wb.create_sheet("Unclassified")
     ws5d.cell(row=1, column=1, value="UNCLASSIFIED TRANSACTIONS").font = title_font
-    unclassified_headers = ["Date", "Description", "Amount", "Type", "Balance"]
+    unclassified_headers = ["No.", "Date", "Description", "Amount", "Type", "Balance"]
     write_headers(ws5d, 3, unclassified_headers, header_fill_orange)
-    for row_idx, txn in enumerate(report_data.get("unclassified_transactions", []) or [], 4):
+    for idx, txn in enumerate(report_data.get("unclassified_transactions", []) or [], 1):
+        row_idx = idx + 3
         txn_type = (txn.get("type") or "").upper()
-        values = [txn.get("date", ""), (txn.get("description", "") or "")[:80], txn.get("amount"), txn_type, txn.get("balance")]
-        write_values(ws5d, row_idx, values, number_cols={3, 5}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type != "CREDIT" else set())
+        values = [idx, txn.get("date", ""), (txn.get("description", "") or "")[:80], txn.get("amount"), txn_type, txn.get("balance")]
+        write_values(ws5d, row_idx, values, number_cols={4, 6},
+                     credit_cols={4} if txn_type == "CREDIT" else set(),
+                     debit_cols={4} if txn_type != "CREDIT" else set())
+        ws5d.cell(row=row_idx, column=1).number_format = "0"
+        for centre_col in (1, 2, 4, 6):
+            ws5d.cell(row=row_idx, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     auto_width(ws5d)
 
     # Round Figure Transactions - Updated with proper formatting
@@ -5299,7 +5282,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                  number_cols={1, 2}, credit_cols={1}, debit_cols={2})
 
     # 4-column layout (same as HTML: Date, Description, Amount, Category — NO Balance)
-    facility_headers = ["Date", "Description", "Amount", "Category"]
+    facility_headers = ["No.", "Date", "Description", "Amount", "Category"]
     row = 6
     ws6.cell(row=row, column=1, value="DISBURSEMENTS (Credits)").font = bold_font
     row += 1
@@ -5308,10 +5291,13 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         row += 1
         ws6.cell(row=row, column=1, value="No disbursements")
         style_data_cell(ws6, row, 1)
-    for txn in loan_disb:
+    for idx, txn in enumerate(loan_disb, 1):
         row += 1
-        values = [txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
-        write_values(ws6, row, values, number_cols={3}, credit_cols={3})
+        values = [idx, txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
+        write_values(ws6, row, values, number_cols={4}, credit_cols={4})
+        ws6.cell(row=row, column=1).number_format = "0"
+        for centre_col in (1, 2, 4, 5):
+            ws6.cell(row=row, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     row += 2
     ws6.cell(row=row, column=1, value="REPAYMENTS (Debits)").font = bold_font
     row += 1
@@ -5320,14 +5306,18 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         row += 1
         ws6.cell(row=row, column=1, value="No repayments")
         style_data_cell(ws6, row, 1)
-    for txn in loan_repay:
+    for idx, txn in enumerate(loan_repay, 1):
         row += 1
-        values = [txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
-        write_values(ws6, row, values, number_cols={3}, debit_cols={3})
-    ws6.column_dimensions["A"].width = 14   # Date
-    ws6.column_dimensions["B"].width = 55   # Description
-    ws6.column_dimensions["C"].width = 18   # Amount
-    ws6.column_dimensions["D"].width = 22   # Category
+        values = [idx, txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
+        write_values(ws6, row, values, number_cols={4}, debit_cols={4})
+        ws6.cell(row=row, column=1).number_format = "0"
+        for centre_col in (1, 2, 4, 5):
+            ws6.cell(row=row, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws6.column_dimensions["A"].width = 6    # No.
+    ws6.column_dimensions["B"].width = 14   # Date
+    ws6.column_dimensions["C"].width = 55   # Description
+    ws6.column_dimensions["D"].width = 18   # Amount
+    ws6.column_dimensions["E"].width = 22   # Category
 
     # Risk Signals
     ws7 = wb.create_sheet("Risk Signals")
