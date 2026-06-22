@@ -4854,8 +4854,16 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                     credit_cols=credit_cols if side == "CREDIT" else set(),
                     debit_cols=debit_cols if side == "DEBIT" else set(),
                 )
+                # Force "No." column to display as whole integer, not float
+                ws.cell(row=row, column=1).number_format = "0"
+                ws.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="top")
             row += 2
-        auto_width(ws)
+        # Column-specific auto widths for these 5-column transaction sheets
+        ws.column_dimensions["A"].width = 6    # No.
+        ws.column_dimensions["B"].width = 14   # Date
+        ws.column_dimensions["C"].width = 55   # Description
+        ws.column_dimensions["D"].width = 18   # Amount
+        ws.column_dimensions["E"].width = 18   # Balance
 
     schema_version = str(report_info.get("schema_version", ""))
     is_v620 = schema_version in ("6.2.0", "6.2.1", "6.2.2", "6.3.0", "6.3.1", "6.3.2", "6.3.3", "6.3.4", "6.3.5") or consolidated.get("total_fx_credits") is not None
@@ -5122,7 +5130,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         credit_cols={4},
         debit_cols={4}
     )
-    auto_width(ws_round)
 
     # Observations
     ws5f = wb.create_sheet("Observations")
@@ -5139,26 +5146,55 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws5f.column_dimensions["A"].width = 100
 
     # Facilities
+    # Facilities — matches the HTML Facilities tab exactly
     ws6 = wb.create_sheet("Facilities")
-    facility_headers = ["Date", "Description", "Amount", "Category", "Balance"]
-    row = 1
-    ws6.cell(row=row, column=1, value="LOAN DISBURSEMENTS (Credits)").font = bold_font
+
+    # Inline helpers matching _is_real_facility / _facility_amount from HTML report
+    def _fac_amount(t):
+        try:
+            return float(t.get("amount") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _is_real_fac(t, expected_category):
+        return isinstance(t, dict) and t.get("category") == expected_category and _fac_amount(t) > 0
+
+    # Filter same as HTML tab
+    loan_disb = [t for t in (loans.get("disbursements") or []) if _is_real_fac(t, "loan_disbursement")]
+    loan_repay = [t for t in (loans.get("repayments") or []) if _is_real_fac(t, "loan_repayment")]
+    loan_disb_total = round(sum(_fac_amount(t) for t in loan_disb), 2)
+    loan_repay_total = round(sum(_fac_amount(t) for t in loan_repay), 2)
+
+    # Summary stats (mirrors HTML summary cards)
+    ws6.cell(row=1, column=1, value="FACILITIES").font = title_font
+    summary_headers = ["Total Disbursements (RM)", "Total Repayments (RM)", "Disbursement Txns", "Repayment Txns"]
+    write_headers(ws6, 3, summary_headers, header_fill_green)
+    write_values(ws6, 4, [loan_disb_total, loan_repay_total, len(loan_disb), len(loan_repay)],
+                 number_cols={1, 2}, credit_cols={1}, debit_cols={2})
+
+    # 4-column layout (same as HTML: Date, Description, Amount, Category — NO Balance)
+    facility_headers = ["Date", "Description", "Amount", "Category"]
+    row = 6
+    ws6.cell(row=row, column=1, value="DISBURSEMENTS (Credits)").font = bold_font
     row += 1
     write_headers(ws6, row, facility_headers, header_fill_green)
-    for txn in loans.get("disbursements", []) or []:
+    for txn in loan_disb:
         row += 1
-        values = [txn.get("date"), (txn.get("description", "") or "")[:70], txn.get("amount"), txn.get("category", ""), txn.get("balance")]
-        write_values(ws6, row, values, number_cols={3, 5}, credit_cols={3})
+        values = [txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
+        write_values(ws6, row, values, number_cols={3}, credit_cols={3})
     row += 2
-    ws6.cell(row=row, column=1, value="LOAN REPAYMENTS (Debits)").font = bold_font
+    ws6.cell(row=row, column=1, value="REPAYMENTS (Debits)").font = bold_font
     row += 1
     write_headers(ws6, row, facility_headers, header_fill_red)
-    for txn in loans.get("repayments", []) or []:
+    for txn in loan_repay:
         row += 1
-        values = [txn.get("date"), (txn.get("description", "") or "")[:70], txn.get("amount"), txn.get("category", ""), txn.get("balance")]
-        write_values(ws6, row, values, number_cols={3, 5}, debit_cols={3})
-    auto_width(ws6)
-
+        values = [txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
+        write_values(ws6, row, values, number_cols={3}, debit_cols={3})
+    ws6.column_dimensions["A"].width = 14   # Date
+    ws6.column_dimensions["B"].width = 55   # Description
+    ws6.column_dimensions["C"].width = 18   # Amount
+    ws6.column_dimensions["D"].width = 22   # Category
+    
     # Risk Signals
     ws7 = wb.create_sheet("Risk Signals")
     risk_headers = ["#", "Signal", "Detected", "Remarks"]
