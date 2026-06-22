@@ -1270,68 +1270,11 @@ def generate_interactive_html(data):
     </tr>'''
 
     # ── Top parties with ghost-verb suppression ──
-    _GHOST_STOPWORDS = {
-        'TRANSFER', 'PAYMENT', 'IBG', 'IB2G', 'IBFT', 'IBK', 'CR', 'DR', 'CREDIT', 'DEBIT',
-        'TO', 'FR', 'FROM', 'A/C', 'C/A', 'ACCOUNT', 'ACCT', 'INTER', 'BANK', 'BANKING', 'INTO',
-        'ONLINE', 'DUITNOW', 'DUIT', 'NOW', 'FPX', 'RENTAS', 'REMITTANCE', 'ELECTRONIC',
-        'AUTOPAY', 'INSTANT', 'FAST', 'OUTWARD', 'INWARD', 'OUTW', 'INW',
-        'OUT', 'IN', 'ADVICE', 'TRF', 'BLKTRF', 'NBPS', 'TR', 'PYMT', 'PAY',
-        'THE', 'AND', 'OF', 'FOR', 'WITH',
-        'SA', 'CA', 'CCARD', 'CARD',
-        'CHQ', 'CHEQUE', 'CASH', 'DEPOSIT', 'WITHDRAWAL', 'HSE', 'HOUSE',
-        'CLRG', 'CDM', '2D', 'LOCAL', 'GIR', 'GIRO',
-        'HLB', 'MBB', 'RHB', 'ABB', 'PBB', 'BIMB', 'AMB', 'AMBANK', 'PBE',
-        'CIMB', 'OCBC', 'UOB', 'BSN',
-        'PMT', 'SLRY',
-    }
-    _CHEQUE_NOISE = {
-        'HSE CHQ DEPOSIT', 'CDM CASH DEPOSIT', '2D LOCAL CHQ', 'CASH CHQ DR',
-        'HOUSE CHQ DR', 'CLRG CHQ DR', 'HSE CHQ', 'CHEQUE DEPOSIT', 'CHQ DEPOSIT',
-    }
-
-    def _is_ghost_verb(name):
-        if not name:
-            return True
-        normalised = re.sub(r'[.,]', '', name.upper())
-        normalised = re.sub(r'\b(SDN|BHD|& CO|\(M\)|PTY|LTD)\b', '', normalised)
-        normalised = re.sub(r'\s+', ' ', normalised).strip()
-        if not normalised:
-            return True
-        if normalised in _CHEQUE_NOISE:
-            return True
-        tokens = [t for t in re.split(r'[\s/\-]+', normalised) if t]
-        real_tokens = [t for t in tokens if len(t) >= 3 and t not in _GHOST_STOPWORDS and re.search(r'[A-Z]', t)]
-        return len(real_tokens) == 0
-
-    def _normalize_party(p, is_payer):
-        if not isinstance(p, dict):
-            return {}
-        amt = p.get('total_amount')
-        if amt is None:
-            amt = p.get('total_credits') if is_payer else p.get('total_debits')
-        if amt is None:
-            amt = p.get('amount', 0)
-        return {
-            'rank': p.get('rank', ''),
-            'party_name': p.get('party_name') or p.get('name') or '',
-            'total_amount': amt or 0,
-            'transaction_count': p.get('transaction_count') or p.get('txn_count') or 0,
-            'is_related_party': p.get('is_related_party', False),
-            'monthly_breakdown': p.get('monthly_breakdown'),
-        }
-
-    _raw_payers = top_parties.get('top_payers') or top_parties.get('top_creditors') or []
-    _raw_payees = top_parties.get('top_payees') or top_parties.get('top_debtors') or []
-    _payers_all = [_normalize_party(p, True) for p in _raw_payers]
-    _payees_all = [_normalize_party(p, False) for p in _raw_payees]
-    _payers_suppressed = [p for p in _payers_all if _is_ghost_verb(p.get('party_name', ''))]
-    _payees_suppressed = [p for p in _payees_all if _is_ghost_verb(p.get('party_name', ''))]
-    _payers = [p for p in _payers_all if not _is_ghost_verb(p.get('party_name', ''))][:10]
-    _payees = [p for p in _payees_all if not _is_ghost_verb(p.get('party_name', ''))][:10]
-    for i, p in enumerate(_payers, 1):
-        p['rank'] = i
-    for i, p in enumerate(_payees, 1):
-        p['rank'] = i
+    party_view = prepare_top_parties_for_report(top_parties)
+    _payers = party_view['payers']
+    _payees = party_view['payees']
+    _payers_suppressed = party_view['payers_suppressed']
+    _payees_suppressed = party_view['payees_suppressed']
 
     def _render_suppressed(entries, side_css):
         if not entries:
@@ -3387,6 +3330,90 @@ def _top_parties_from_transaction_analysis(transaction_analysis: dict) -> dict:
     return {"top_payers": top_payers or [], "top_payees": top_payees or []}
 
 
+_PARTY_GHOST_STOPWORDS = {
+    "TRANSFER", "PAYMENT", "IBG", "IB2G", "IBFT", "IBK", "CR", "DR", "CREDIT", "DEBIT",
+    "TO", "FR", "FROM", "A/C", "C/A", "ACCOUNT", "ACCT", "INTER", "BANK", "BANKING", "INTO",
+    "ONLINE", "DUITNOW", "DUIT", "NOW", "FPX", "RENTAS", "REMITTANCE", "ELECTRONIC",
+    "AUTOPAY", "INSTANT", "FAST", "OUTWARD", "INWARD", "OUTW", "INW",
+    "OUT", "IN", "ADVICE", "TRF", "BLKTRF", "NBPS", "TR", "PYMT", "PAY",
+    "THE", "AND", "OF", "FOR", "WITH",
+    "SA", "CA", "CCARD", "CARD",
+    "CHQ", "CHEQUE", "CASH", "DEPOSIT", "WITHDRAWAL", "HSE", "HOUSE",
+    "CLRG", "CDM", "2D", "LOCAL", "GIR", "GIRO",
+    "HLB", "MBB", "RHB", "ABB", "PBB", "BIMB", "AMB", "AMBANK", "PBE",
+    "CIMB", "OCBC", "UOB", "BSN",
+    "PMT", "SLRY",
+}
+_PARTY_CHEQUE_NOISE = {
+    "HSE CHQ DEPOSIT", "CDM CASH DEPOSIT", "2D LOCAL CHQ", "CASH CHQ DR",
+    "HOUSE CHQ DR", "CLRG CHQ DR", "HSE CHQ", "CHEQUE DEPOSIT", "CHQ DEPOSIT",
+}
+
+
+def _is_ghost_party_bucket(name) -> bool:
+    """Return True when a top-party label is only parser/payment-rail noise."""
+    if not name:
+        return True
+    normalised = re.sub(r"[.,]", "", str(name).upper())
+    normalised = re.sub(r"\b(SDN|BHD|& CO|\(M\)|PTY|LTD)\b", "", normalised)
+    normalised = re.sub(r"\s+", " ", normalised).strip()
+    if not normalised:
+        return True
+    if normalised in _PARTY_CHEQUE_NOISE:
+        return True
+    tokens = [t for t in re.split(r"[\s/\-]+", normalised) if t]
+    real_tokens = [
+        t for t in tokens
+        if len(t) >= 3 and t not in _PARTY_GHOST_STOPWORDS and re.search(r"[A-Z]", t)
+    ]
+    return len(real_tokens) == 0
+
+
+def _normalize_party_for_report(party: dict, is_payer: bool) -> dict:
+    if not isinstance(party, dict):
+        return {}
+    amount = party.get("total_amount")
+    if amount is None:
+        amount = party.get("total_credits") if is_payer else party.get("total_debits")
+    if amount is None:
+        amount = party.get("amount", 0)
+    return {
+        "rank": party.get("rank", ""),
+        "party_name": party.get("party_name") or party.get("name") or "",
+        "total_amount": safe_float(amount),
+        "transaction_count": int(safe_float(party.get("transaction_count") or party.get("txn_count") or 0)),
+        "is_related_party": bool(party.get("is_related_party", False)),
+        "monthly_breakdown": party.get("monthly_breakdown") or [],
+    }
+
+
+def prepare_top_parties_for_report(top_parties: dict, limit: int = 10) -> dict:
+    """Prepare the exact top-party view rendered by HTML and Excel."""
+    if not isinstance(top_parties, dict):
+        top_parties = {}
+    raw_payers = top_parties.get("top_payers") or top_parties.get("top_creditors") or []
+    raw_payees = top_parties.get("top_payees") or top_parties.get("top_debtors") or []
+
+    payers_all = [_normalize_party_for_report(p, True) for p in raw_payers]
+    payees_all = [_normalize_party_for_report(p, False) for p in raw_payees]
+    payers_suppressed = [p for p in payers_all if _is_ghost_party_bucket(p.get("party_name", ""))]
+    payees_suppressed = [p for p in payees_all if _is_ghost_party_bucket(p.get("party_name", ""))]
+    payers = [p for p in payers_all if not _is_ghost_party_bucket(p.get("party_name", ""))][:limit]
+    payees = [p for p in payees_all if not _is_ghost_party_bucket(p.get("party_name", ""))][:limit]
+
+    for idx, party in enumerate(payers, 1):
+        party["rank"] = idx
+    for idx, party in enumerate(payees, 1):
+        party["rank"] = idx
+
+    return {
+        "payers": payers,
+        "payees": payees,
+        "payers_suppressed": payers_suppressed,
+        "payees_suppressed": payees_suppressed,
+    }
+
+
 def build_round_transactions(transactions: List[dict], round_thresholds: List[float] | None = None) -> List[dict]:
     """Build the same signed round-number transaction rows shown in Railway."""
     round_rows = []
@@ -3478,6 +3505,75 @@ def _average_statutory_ratio_pct(stat_comp: dict, ratio_key: str, amount_key: st
     if not ratios:
         return None, 0
     return sum(ratios) / len(ratios), len(ratios)
+
+
+def build_formula_validation_checks_for_report(consolidated: dict, monthly_analysis: List[dict]) -> List[dict]:
+    """Build the V1-V6 validation rows displayed in the HTML Parsing QC tab."""
+    consolidated = consolidated or {}
+    monthly_analysis = monthly_analysis or []
+
+    gross_cr = safe_float(consolidated.get("gross_credits", 0))
+    own_cr = safe_float(consolidated.get("total_own_party_cr", 0))
+    rp_cr = safe_float(consolidated.get("total_related_party_cr", 0))
+    rev_cr = safe_float(consolidated.get("total_reversal_cr", 0))
+    loan_disb_cr = safe_float(consolidated.get("total_loan_disbursement_cr", 0))
+    fd_int_cr = safe_float(consolidated.get("total_fd_interest_cr", 0))
+    inward_ret_cr = safe_float(consolidated.get("total_inward_return_cr", 0))
+    net_cr = safe_float(consolidated.get("net_credits", 0))
+    expected_net_cr = gross_cr - own_cr - rp_cr - rev_cr - loan_disb_cr - fd_int_cr - inward_ret_cr
+    v1_delta = abs(net_cr - expected_net_cr)
+
+    gross_dr = safe_float(consolidated.get("gross_debits", 0))
+    own_dr = safe_float(consolidated.get("total_own_party_dr", 0))
+    net_dr = safe_float(consolidated.get("net_debits", 0))
+    expected_net_dr = gross_dr - own_dr
+    v2_delta = abs(net_dr - expected_net_dr)
+
+    salary = safe_float(consolidated.get("total_salary_paid", 0))
+    epf = safe_float(consolidated.get("total_statutory_epf", 0))
+    socso = safe_float(consolidated.get("total_statutory_socso", 0))
+    stat_comp = consolidated.get("statutory_compliance", {}) or {}
+
+    v3_avg_ratio, v3_month_count = _average_statutory_ratio_pct(
+        stat_comp,
+        "epf_per_month_ratios",
+        "epf_amount",
+    )
+    v4_avg_ratio, v4_month_count = _average_statutory_ratio_pct(
+        stat_comp,
+        "socso_per_month_ratios",
+        "socso_amount",
+    )
+
+    v3_ratio = v3_avg_ratio if v3_avg_ratio is not None else ((epf / salary * 100) if salary > 0 else 0)
+    v3_has_data = v3_avg_ratio is not None or salary > 0
+    v3_status = "PASS" if 8 <= v3_ratio <= 16 else ("WARN" if v3_has_data else "N/A")
+    v3_remark = (
+        f"Avg: {v3_ratio:.1f}% across {v3_month_count} month{'s' if v3_month_count != 1 else ''}"
+        if v3_avg_ratio is not None
+        else (f"{v3_ratio:.1f}%" if salary > 0 else "No salary detected")
+    )
+
+    v4_ratio = v4_avg_ratio if v4_avg_ratio is not None else ((socso / salary * 100) if salary > 0 else 0)
+    v4_has_data = v4_avg_ratio is not None or salary > 0
+    v4_status = "PASS" if 1 <= v4_ratio <= 5 else ("WARN" if v4_has_data else "N/A")
+    v4_remark = (
+        f"Avg: {v4_ratio:.1f}% across {v4_month_count} month{'s' if v4_month_count != 1 else ''}"
+        if v4_avg_ratio is not None
+        else (f"{v4_ratio:.1f}%" if salary > 0 else "No salary detected")
+    )
+
+    monthly_net_cr_sum = sum(safe_float(row.get("net_credits", 0)) for row in monthly_analysis if isinstance(row, dict))
+    v6_delta = abs(net_cr - monthly_net_cr_sum)
+
+    return [
+        {"ID": "V1", "Check": "Net Credits = Gross - Exclusions", "Severity": "BLOCKING", "Status": "PASS" if v1_delta < 0.02 else "FAIL", "Remarks": f"Delta: RM {v1_delta:,.2f}"},
+        {"ID": "V2", "Check": "Net Debits = Gross - Own Party (C02)", "Severity": "BLOCKING", "Status": "PASS" if v2_delta < 0.02 else "FAIL", "Remarks": f"Delta: RM {v2_delta:,.2f}"},
+        {"ID": "V3", "Check": "EPF/Salary ratio 8-16%", "Severity": "WARNING", "Status": v3_status, "Remarks": v3_remark},
+        {"ID": "V4", "Check": "SOCSO/Salary ratio 1-5%", "Severity": "WARNING", "Status": v4_status, "Remarks": v4_remark},
+        {"ID": "V5", "Check": "C02+C11 dual-tag exclusion", "Severity": "BLOCKING", "Status": "PASS", "Remarks": "Single deduction via C02"},
+        {"ID": "V6", "Check": "Monthly net_cr sum = consolidated", "Severity": "BLOCKING", "Status": "PASS" if v6_delta < 0.02 else "FAIL", "Remarks": f"Delta: RM {v6_delta:,.2f}"},
+    ]
 
 
 def _sync_data_quality_status(data: dict) -> dict:
@@ -4014,7 +4110,7 @@ def normalize_report_data_for_export(data: dict) -> dict:
     )
     if threshold <= 0:
         threshold = safe_float(normalized.get("summary", {}).get("high_value_threshold")) or 100000.0
-    if normalized.get("transactions"):
+    if normalized.get("transactions") and not normalized.get("large_transactions"):
         normalized["large_transactions"] = build_large_transactions(normalized.get("transactions", []), threshold)
     else:
         normalized.setdefault("large_transactions", [])
@@ -4037,6 +4133,114 @@ def normalize_report_data_for_export(data: dict) -> dict:
         large_threshold=threshold,
     )
     return normalized
+
+
+def _finalize_shared_report_data(
+    data: dict,
+    transactions: List[dict],
+    monthly_summary: List[dict],
+    threshold: float,
+    pdf_integrity: dict | None = None,
+) -> dict:
+    """Apply report-export fields that both HTML and Excel rely on."""
+    if not isinstance(data, dict):
+        data = {}
+
+    data.setdefault("transactions", transactions or [])
+    data.setdefault("classification_config", {})
+    data["classification_config"]["large_transaction_threshold"] = threshold
+    data["classification_config"]["large_credit_threshold"] = threshold
+    data.setdefault("consolidated", {})
+    data["consolidated"]["high_value_threshold"] = threshold
+    data["consolidated"]["large_transaction_threshold"] = threshold
+    data["consolidated"]["large_credit_threshold"] = threshold
+    data.setdefault("summary", {})
+    data["summary"]["high_value_threshold"] = threshold
+    if pdf_integrity is not None:
+        data["pdf_integrity"] = pdf_integrity
+
+    round_transactions = build_round_transactions(transactions or [])
+    data["round_transactions"] = round_transactions
+    data["round_figure_credits"] = round_transactions
+    data = apply_standard_monthly_summary_to_report(data, monthly_summary or [])
+    data = _sync_transaction_pattern_flags(
+        data,
+        round_transactions=round_transactions,
+        large_transactions=data.get("large_transactions", []),
+        large_threshold=threshold,
+    )
+    return _sync_data_quality_status(data)
+
+
+def build_shared_report_data(
+    transactions: List[dict],
+    monthly_summary: List[dict],
+    transaction_analysis: dict,
+    high_value_threshold: float,
+) -> dict:
+    """Build the complete report payload used by both HTML and Excel exports."""
+    pdf_integrity = st.session_state.get("integrity_analysis_results") or {}
+    threshold = float(high_value_threshold) if high_value_threshold else 100000.0
+    transaction_analysis = transaction_analysis or {}
+
+    if _TRACK2_AVAILABLE:
+        try:
+            cp_ledger = build_track2_counterparty_ledger(transactions)
+            company_names = list({
+                str(t.get("company_name", "") or "").strip()
+                for t in transactions
+                if isinstance(t, dict) and t.get("company_name")
+            })
+            override = (st.session_state.get("company_name_override") or "").strip()
+            if override and override not in company_names:
+                company_names.insert(0, override)
+
+            determinations = st.session_state.get("account_type_determinations") or []
+            account_meta = account_meta_from_determinations(determinations)
+            related_parties = st.session_state.get("related_parties_override") or []
+            factoring_entities = st.session_state.get("factoring_entities_override") or []
+
+            data = build_track2_result(
+                transactions=transactions,
+                counterparty_ledger=cp_ledger,
+                pdf_integrity=pdf_integrity if pdf_integrity else None,
+                company_names=company_names or None,
+                related_parties=related_parties or None,
+                factoring_entities=factoring_entities or None,
+                account_meta=account_meta or None,
+            )
+            data.setdefault("counterparty_ledger", cp_ledger)
+            return _finalize_shared_report_data(
+                data,
+                transactions,
+                monthly_summary,
+                threshold,
+                pdf_integrity,
+            )
+        except Exception as _track2_err:
+            import traceback
+            print(f"[Track2] ERROR in build_track2_result: {_track2_err}")
+            traceback.print_exc()
+            try:
+                st.error(f"Track 2 engine failed: {_track2_err}")
+            except Exception:
+                pass
+
+    print("[Track2] Using legacy fallback (loan detection may be incomplete)")
+    report_data = build_report_data_from_analysis(
+        transactions,
+        monthly_summary,
+        transaction_analysis,
+        threshold,
+    )
+    report_data["pdf_integrity"] = pdf_integrity
+    return _finalize_shared_report_data(
+        report_data,
+        transactions,
+        monthly_summary,
+        threshold,
+        pdf_integrity,
+    )
 
 
 def _excel_safe_value(value):
@@ -4736,6 +4940,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     schema_version = str(report_info.get("schema_version", ""))
     is_v620 = schema_version in ("6.2.0", "6.2.1", "6.2.2", "6.3.0", "6.3.1", "6.3.2", "6.3.3", "6.3.4", "6.3.5") or consolidated.get("total_fx_credits") is not None
+    is_v630 = schema_version in ("6.3.0", "6.3.1", "6.3.2", "6.3.3", "6.3.4", "6.3.5") or consolidated.get("total_unclassified_cr") is not None
     has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(parsing.get("account_month_checks"))
 
     # Summary
@@ -4779,6 +4984,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ("Loan Disbursements", consolidated.get("total_loan_disbursement_cr")),
         ("Loan Repayments", consolidated.get("total_loan_repayment_dr")),
         ("FD/Interest Credits", consolidated.get("total_fd_interest_cr")),
+        ("Inward Return (C16)", consolidated.get("total_inward_return_cr")),
         ("", ""),
         ("Cash Deposits", consolidated.get("total_cash_deposits")),
         ("Cash Withdrawals", consolidated.get("total_cash_withdrawals")),
@@ -4795,6 +5001,21 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ("EOD Highest", consolidated.get("eod_highest")),
         ("EOD Average", consolidated.get("eod_average")),
     ]
+    if has_recon:
+        consolidated_items.extend([
+            ("", ""),
+            ("Data Completeness", consolidated.get("data_completeness")),
+            ("Extraction Gaps", consolidated.get("total_extraction_gaps")),
+            ("Missing Debits", consolidated.get("total_missing_debits")),
+            ("Missing Credits", consolidated.get("total_missing_credits")),
+            ("Months With Gaps", consolidated.get("months_with_gaps")),
+        ])
+    if is_v630:
+        consolidated_items.extend([
+            ("", ""),
+            ("Unclassified Credits", consolidated.get("total_unclassified_cr")),
+            ("Unclassified Debits", consolidated.get("total_unclassified_dr")),
+        ])
     if is_v620:
         consolidated_items.extend([
             ("", ""),
@@ -4878,26 +5099,62 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Top Parties
     ws3 = wb.create_sheet("Top Parties")
-    payers = top_parties.get("top_payers") or top_parties.get("top_creditors") or []
-    payees = top_parties.get("top_payees") or top_parties.get("top_debtors") or []
-    monthly_bd = sorted({mb.get("month", "") for p in list(payers) + list(payees) for mb in (p.get("monthly_breakdown") or []) if mb.get("month")})
+    party_view = prepare_top_parties_for_report(top_parties)
+    payers = party_view["payers"]
+    payees = party_view["payees"]
+    suppressed_payers = party_view["payers_suppressed"]
+    suppressed_payees = party_view["payees_suppressed"]
+    all_party_rows = list(payers) + list(payees) + list(suppressed_payers) + list(suppressed_payees)
+    monthly_bd = sorted({
+        mb.get("month", "")
+        for party in all_party_rows
+        for mb in (party.get("monthly_breakdown") or [])
+        if isinstance(mb, dict) and mb.get("month")
+    })
     party_headers = ["Rank", "Party Name", "Total Amount", "Transactions", "Related Party"] + monthly_bd
-    ws3.cell(row=1, column=1, value="TOP PAYERS (Income Sources)").font = bold_font
-    write_headers(ws3, 2, party_headers, header_fill_green)
-    for row_idx, party in enumerate(payers, 3):
-        lookup = {mb.get("month"): mb.get("amount") for mb in (party.get("monthly_breakdown") or [])}
-        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
-        values.extend(lookup.get(month, 0) for month in monthly_bd)
-        write_values(ws3, row_idx, values, number_cols={3, *range(6, 6 + len(monthly_bd))}, credit_cols={3, *range(6, 6 + len(monthly_bd))})
-    row = len(payers) + 5
-    ws3.cell(row=row, column=1, value="TOP PAYEES (Payment Destinations)").font = bold_font
-    row += 1
-    write_headers(ws3, row, party_headers, header_fill_red)
-    for row_idx, party in enumerate(payees, row + 1):
-        lookup = {mb.get("month"): mb.get("amount") for mb in (party.get("monthly_breakdown") or [])}
-        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
-        values.extend(lookup.get(month, 0) for month in monthly_bd)
-        write_values(ws3, row_idx, values, number_cols={3, *range(6, 6 + len(monthly_bd))}, debit_cols={3, *range(6, 6 + len(monthly_bd))})
+    party_num_cols = {3, *range(6, 6 + len(monthly_bd))}
+
+    def write_party_section(row, title, parties, fill, credit_side=True):
+        ws3.cell(row=row, column=1, value=title).font = bold_font
+        row += 1
+        write_headers(ws3, row, party_headers, fill)
+        if not parties:
+            row += 1
+            ws3.cell(row=row, column=1, value="No data")
+            style_data_cell(ws3, row, 1)
+            return row + 2
+        for party in parties:
+            row += 1
+            lookup = {
+                mb.get("month"): safe_float(mb.get("amount"))
+                for mb in (party.get("monthly_breakdown") or [])
+                if isinstance(mb, dict)
+            }
+            values = [
+                party.get("rank"),
+                party.get("party_name") or party.get("name"),
+                party.get("total_amount"),
+                party.get("transaction_count"),
+                "Yes" if party.get("is_related_party") else "No",
+            ]
+            values.extend(lookup.get(month, 0) for month in monthly_bd)
+            write_values(
+                ws3,
+                row,
+                values,
+                number_cols=party_num_cols,
+                credit_cols=party_num_cols if credit_side else set(),
+                debit_cols=party_num_cols if not credit_side else set(),
+            )
+        return row + 2
+
+    row = 1
+    row = write_party_section(row, "TOP PAYERS (Income Sources)", payers, header_fill_green, True)
+    row = write_party_section(row, "TOP PAYEES (Payment Destinations)", payees, header_fill_red, False)
+    if suppressed_payers:
+        row = write_party_section(row, "PARSER-DROPPED PAYERS (Review Buckets)", suppressed_payers, header_fill_orange, True)
+    if suppressed_payees:
+        row = write_party_section(row, "PARSER-DROPPED PAYEES (Review Buckets)", suppressed_payees, header_fill_orange, False)
     auto_width(ws3)
 
     # Large Transactions - Updated with proper formatting
@@ -5047,6 +5304,10 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws6.cell(row=row, column=1, value="DISBURSEMENTS (Credits)").font = bold_font
     row += 1
     write_headers(ws6, row, facility_headers, header_fill_green)
+    if not loan_disb:
+        row += 1
+        ws6.cell(row=row, column=1, value="No disbursements")
+        style_data_cell(ws6, row, 1)
     for txn in loan_disb:
         row += 1
         values = [txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
@@ -5055,6 +5316,10 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws6.cell(row=row, column=1, value="REPAYMENTS (Debits)").font = bold_font
     row += 1
     write_headers(ws6, row, facility_headers, header_fill_red)
+    if not loan_repay:
+        row += 1
+        ws6.cell(row=row, column=1, value="No repayments")
+        style_data_cell(ws6, row, 1)
     for txn in loan_repay:
         row += 1
         values = [txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
@@ -5079,43 +5344,106 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Parsing QC
     ws8 = wb.create_sheet("Parsing QC")
     ws8.cell(row=1, column=1, value="PARSING QUALITY METRICS").font = title_font
-    ws8.cell(row=3, column=1, value="Overall Success Rate")
-    ws8.cell(row=3, column=2, value=f"{safe_float(parsing.get('overall_success_rate', 0)):.1f}%")
-    ws8.cell(row=4, column=1, value="Transactions Extracted")
-    ws8.cell(row=4, column=2, value=parsing.get("total_transactions_extracted", 0))
-    ws8.cell(row=5, column=1, value="Balance Checks Passed")
-    ws8.cell(row=5, column=2, value=f"{parsing.get('total_balance_checks_passed', 0)} / {parsing.get('total_balance_checks', 0)}")
-    for row_idx in range(3, 6):
+    success_rate = safe_float(parsing.get("overall_success_rate", 0))
+    success_rate_pct = success_rate * 100 if success_rate <= 1 else success_rate
+    p_total_gaps = int(consolidated.get("total_extraction_gaps") or len(parsing.get("extraction_gaps", []) or []))
+    p_missing_dr = safe_float(consolidated.get("total_missing_debits", 0))
+    p_missing_cr = safe_float(consolidated.get("total_missing_credits", 0))
+    metric_rows = [
+        ("Success Rate", f"{success_rate_pct:.1f}%"),
+        ("Transactions Extracted", parsing.get("total_transactions_extracted", 0)),
+        ("Balance Checks Passed", f"{parsing.get('total_balance_checks_passed', 0)} / {parsing.get('total_balance_checks', 0)}"),
+    ]
+    if has_recon:
+        metric_rows.extend([
+            ("Extraction Gaps", p_total_gaps),
+            ("Missing Debits", p_missing_dr),
+            ("Missing Credits", p_missing_cr),
+        ])
+    for row_idx, (label, value) in enumerate(metric_rows, 3):
+        ws8.cell(row=row_idx, column=1, value=label)
+        ws8.cell(row=row_idx, column=2, value=value)
         ws8.cell(row=row_idx, column=1).font = bold_font
         ws8.cell(row=row_idx, column=1).border = thin_border
         ws8.cell(row=row_idx, column=2).border = thin_border
-    row = 7
-    qc_headers = ["Month", "Account", "Bank", "Opening Bal", "Closing Bal", "Gross Cr", "Gross Dr", "Expected Close", "Recon Delta", "Passed", "Txns Extracted", "Notes"]
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            ws8.cell(row=row_idx, column=2).number_format = num_fmt
+
+    row = 3 + len(metric_rows) + 2
+    qc_headers = [
+        "Month", "Account", "Opening Balance", "Gross Credits", "Gross Debits",
+        "Expected Closing", "Actual Closing", "Delta", "Status", "Txns", "Gaps", "Notes",
+    ]
     write_headers(ws8, row, qc_headers)
     for check in parsing.get("account_month_checks", []) or []:
         row += 1
+        passed = bool(check.get("passed"))
         values = [
-            check.get("month"), check.get("account_number"), check.get("bank_name"),
-            check.get("opening_balance"), check.get("closing_balance"), check.get("gross_credits"), check.get("gross_debits"),
-            check.get("expected_closing"), check.get("reconciliation_delta"), "PASS" if check.get("passed") else "FAIL",
-            check.get("transactions_extracted"), check.get("notes", ""),
+            check.get("month"),
+            check.get("account_number"),
+            check.get("opening_balance"),
+            check.get("gross_credits"),
+            check.get("gross_debits"),
+            check.get("expected_closing"),
+            check.get("closing_balance"),
+            check.get("reconciliation_delta"),
+            "PASS" if passed else "FAIL",
+            check.get("transactions_extracted"),
+            check.get("extraction_gaps", 0),
+            check.get("notes", ""),
         ]
-        write_values(ws8, row, values, number_cols={4, 5, 6, 7, 8, 9, 11})
-        ws8.cell(row=row, column=10).font = Font(name="Calibri", color="196F3D" if check.get("passed") else "922B21", bold=True)
+        write_values(ws8, row, values, number_cols={3, 4, 5, 6, 7, 8, 10, 11}, credit_cols={4}, debit_cols={5})
+        ws8.cell(row=row, column=9).font = Font(name="Calibri", color="196F3D" if passed else "922B21", bold=True)
     if parsing.get("extraction_gaps"):
         row += 2
         ws8.cell(row=row, column=1, value="EXTRACTION GAPS DETAIL").font = title_font
         row += 1
-        gap_headers = ["Month", "Date", "Page", "Source File", "Missing Type", "Missing Amount", "Balance Before Gap", "Balance After Gap", "Last Good Transaction", "Next Transaction"]
+        gap_headers = ["Month", "Date", "Page", "Source File", "Missing", "Amount (RM)", "Before Gap", "After Gap"]
         write_headers(ws8, row, gap_headers, header_fill_red)
         for gap in parsing.get("extraction_gaps", []) or []:
             row += 1
+            before_gap = f"{(gap.get('prev_description', '') or '')[:60]} (RM {safe_float(gap.get('balance_before_gap', 0)):,.2f})"
+            after_gap = f"{(gap.get('next_description', '') or '')[:60]} (RM {safe_float(gap.get('balance_after_gap', 0)):,.2f})"
             values = [
                 gap.get("month", ""), gap.get("date", ""), gap.get("page", ""), gap.get("source_file", ""),
-                gap.get("missing_type", ""), gap.get("missing_amount", 0), gap.get("balance_before_gap", 0),
-                gap.get("balance_after_gap", 0), (gap.get("prev_description", "") or "")[:60], (gap.get("next_description", "") or "")[:60],
+                gap.get("missing_type", ""), gap.get("missing_amount", 0), before_gap, after_gap,
             ]
-            write_values(ws8, row, values, number_cols={6, 7, 8}, debit_cols={6})
+            write_values(ws8, row, values, number_cols={6}, debit_cols={6})
+
+    cls_config = report_data.get("classification_config", {}) or {}
+    if cls_config or schema_version:
+        row += 2
+        ws8.cell(row=row, column=1, value="CLASSIFICATION CONFIGURATION").font = title_font
+        row += 1
+        config_headers = ["Setting", "Value"]
+        write_headers(ws8, row, config_headers, header_fill_orange)
+        factoring_entities = cls_config.get("known_factoring_entities", [])
+        config_rows = [
+            ("Schema Version", schema_version or "N/A"),
+            ("Rulebook Version", cls_config.get("rulebook_version", "N/A")),
+            ("Execution Mode", cls_config.get("execution_mode", "N/A")),
+            ("Large Transaction Threshold", safe_float(cls_config.get("large_transaction_threshold") or consolidated.get("high_value_threshold") or 100000)),
+            ("Unclassified Listing Threshold", safe_float(cls_config.get("unclassified_listing_threshold", 10000))),
+            ("Known Factoring Entities", ", ".join(factoring_entities) if factoring_entities else "None configured"),
+        ]
+        for label, value in config_rows:
+            row += 1
+            write_values(ws8, row, [label, value], number_cols={2} if isinstance(value, (int, float)) else set())
+
+    validation_rows = build_formula_validation_checks_for_report(consolidated, monthly_analysis)
+    if validation_rows:
+        row += 2
+        ws8.cell(row=row, column=1, value="FORMULA VALIDATION CHECKS (V1-V6)").font = title_font
+        row += 1
+        validation_headers = ["ID", "Check", "Severity", "Status", "Remarks"]
+        write_headers(ws8, row, validation_headers, header_fill_orange)
+        for item in validation_rows:
+            row += 1
+            values = [item.get("ID"), item.get("Check"), item.get("Severity"), item.get("Status"), item.get("Remarks")]
+            write_values(ws8, row, values)
+            status = item.get("Status")
+            status_color = "196F3D" if status == "PASS" else "B9770E" if status in ("WARN", "N/A") else "922B21"
+            ws8.cell(row=row, column=4).font = Font(name="Calibri", color=status_color, bold=True)
     auto_width(ws8)
 
     # Fraud Detector
@@ -5314,105 +5642,13 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
 
 def generate_html_report_from_data(transactions: List[dict], monthly_summary: List[dict], 
                                    transaction_analysis: dict, high_value_threshold: float) -> str:
-    """Generate interactive HTML report from parsed transactions using Track 2 engine."""
-    # Get pdf_integrity from session state
-    pdf_integrity = st.session_state.get("integrity_analysis_results") or {}
-    
-    # Ensure threshold is a float
-    threshold = float(high_value_threshold) if high_value_threshold else 100000.0
-    
-    # ALWAYS use Track 2 if available - this is the key change
-    if _TRACK2_AVAILABLE:
-        try:
-            # Build counterparty ledger in the format Track 2 expects
-            cp_ledger = build_track2_counterparty_ledger(transactions)
-
-            # Collect company names and account meta from session state
-            company_names = list({
-                str(t.get("company_name", "") or "").strip()
-                for t in transactions
-                if t.get("company_name")
-            })
-            override = (st.session_state.get("company_name_override") or "").strip()
-            if override and override not in company_names:
-                company_names.insert(0, override)
-
-            # Account-type determinations
-            determinations = st.session_state.get("account_type_determinations") or []
-            account_meta = account_meta_from_determinations(determinations)
-
-            # Analyst-supplied related parties
-            related_parties = st.session_state.get("related_parties_override") or []
-
-            # CRITICAL: Pass factoring_entities if you have them
-            # This helps with loan detection for factoring companies
-            factoring_entities = st.session_state.get("factoring_entities_override") or []
-
-            # Build Track 2 result - THIS IS WHERE LOAN DETECTION HAPPENS
-            data = build_track2_result(
-                transactions=transactions,
-                counterparty_ledger=cp_ledger,
-                pdf_integrity=pdf_integrity if pdf_integrity else None,
-                company_names=company_names or None,
-                related_parties=related_parties or None,
-                factoring_entities=factoring_entities or None,
-                account_meta=account_meta or None,
-            )
-
-            # Track 2 owns classifier defaults, but the report's large
-            # transaction threshold is chosen by the user in the app.
-            data.setdefault('classification_config', {})
-            data['classification_config']['large_transaction_threshold'] = threshold
-            data['classification_config']['large_credit_threshold'] = threshold
-            data.setdefault('consolidated', {})
-            data['consolidated']['high_value_threshold'] = threshold
-            data['consolidated']['large_transaction_threshold'] = threshold
-            data['consolidated']['large_credit_threshold'] = threshold
-            data.setdefault('summary', {})
-            data['summary']['high_value_threshold'] = threshold
-            
-            # DO NOT override large_transactions - Track 2 already computed them correctly
-            # Track 2's compute_large_credits uses the same threshold but has loan context
-            
-            # Preserve the original Track 2 loan detection results
-            # Only add missing fields that Track 2 doesn't compute
-            if 'transactions' not in data:
-                data['transactions'] = transactions
-            
-            # Add round transactions for display (Track 2 may not have this exact field)
-            round_transactions = build_round_transactions(transactions)
-            data['round_transactions'] = round_transactions
-            data['round_figure_credits'] = round_transactions
-            
-            # Apply monthly summary standardization if needed
-            data = apply_standard_monthly_summary_to_report(data, monthly_summary)
-            
-            # Debug: Print loan counts to verify detection
-            loan_txns = data.get('loan_transactions', {})
-            disbursements = loan_txns.get('disbursements', [])
-            repayments = loan_txns.get('repayments', [])
-            print(f"[Track2] Loan disbursements: {len(disbursements)} rows, total: {sum(d.get('amount',0) for d in disbursements):,.2f}")
-            print(f"[Track2] Loan repayments: {len(repayments)} rows, total: {sum(r.get('amount',0) for r in repayments):,.2f}")
-            
-            # Use Track 2's HTML generator (it has the full loan transactions tab)
-            return generate_interactive_html(data)
-            
-        except Exception as _track2_err:
-            import traceback
-            print(f"[Track2] ERROR in build_track2_result: {_track2_err}")
-            traceback.print_exc()
-            st.error(f"Track 2 engine failed: {_track2_err}")
-            # Fall through to legacy
-
-    # Legacy fallback path (only if Track 2 fails or is unavailable)
-    print("[Track2] Using legacy fallback (loan detection may be incomplete)")
-    report_data = build_report_data_from_analysis(
+    """Generate interactive HTML report from the shared export payload."""
+    report_data = build_shared_report_data(
         transactions,
         monthly_summary,
         transaction_analysis,
-        threshold,
+        high_value_threshold,
     )
-    report_data['pdf_integrity'] = pdf_integrity
     return generate_interactive_html(report_data)
 
 # ============================================================
@@ -8657,22 +8893,19 @@ if st.session_state.results:
             use_container_width=True
         )
 
-    with col3:
-    # Make sure data is JSON serializable first
-        serialized_transactions = make_json_serializable(st.session_state.results)
-        serialized_monthly_summary = make_json_serializable(monthly_summary)
-        serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
+    serialized_transactions = make_json_serializable(st.session_state.results)
+    serialized_monthly_summary = make_json_serializable(monthly_summary)
+    serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
+    shared_report_data = build_shared_report_data(
+        serialized_transactions,
+        serialized_monthly_summary,
+        serialized_transaction_analysis,
+        high_value_threshold,
+    ) if serialized_transactions else {}
 
-        report_excel_data = build_report_data_from_analysis(
-            serialized_transactions,
-            serialized_monthly_summary,
-            serialized_transaction_analysis,
-            high_value_threshold,
-        )
-        
-        # Pass monthly_summary and transaction_analysis to generate_excel_report
+    with col3:
         output = generate_excel_report(
-            report_excel_data, 
+            shared_report_data,
             monthly_summary=serialized_monthly_summary, 
             transaction_analysis=serialized_transaction_analysis
         )
@@ -8689,12 +8922,7 @@ if st.session_state.results:
         # NEW: Generate and download HTML report from current data
         if st.session_state.results:
             try:
-                html_content = generate_html_report_from_data(
-                    st.session_state.results,
-                    monthly_summary,
-                    transaction_analysis_report,
-                    high_value_threshold
-                )
+                html_content = generate_interactive_html(shared_report_data)
                 
                 # Get company name for filename
                 company_name = st.session_state.company_name_override or "company"
