@@ -2982,8 +2982,7 @@ def generate_interactive_html(data):
 
         <!-- TOP PARTIES TAB -->
         <div id="tab-parties" class="tab">
-            <div class="top-parties-grid" style="display:flex !important;flex-direction:row !important;flex-wrap:nowrap !important;gap:1.5rem;align-items:flex-start;width:100%;overflow-x:auto">
-                <div class="two-col top-parties-grid">
+            <div class="two-col top-parties-grid">
                 <div class="section">
                     <div class="section-head"><h2 style="color:var(--green)">Top 10 Payers (Income)</h2></div>
                     <div class="section-body" style="padding:0">
@@ -3007,7 +3006,7 @@ def generate_interactive_html(data):
             </div>
             <div class="note"><span class="rp-badge">RP</span> = Related Party</div>
         </div>
-        
+
         <!-- LARGE TRANSACTIONS TAB -->
         <div id="tab-large" class="tab">
             <div class="section">
