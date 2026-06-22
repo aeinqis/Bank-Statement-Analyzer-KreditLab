@@ -4796,6 +4796,62 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     def safe_amount(txn):
         return safe_float(txn.get("amount", txn.get("credit", 0) or txn.get("debit", 0)))
 
+    def infer_txn_side(txn):
+        raw_type = str(txn.get("type") or txn.get("transaction_type") or "").upper()
+        if "CR" in raw_type or "CREDIT" in raw_type:
+            return "CREDIT"
+        if "DR" in raw_type or "DEBIT" in raw_type:
+            return "DEBIT"
+        if safe_float(txn.get("credit", 0)) > 0:
+            return "CREDIT"
+        if safe_float(txn.get("debit", 0)) > 0:
+            return "DEBIT"
+        return "DEBIT" if safe_amount(txn) < 0 else "CREDIT"
+
+    def write_split_transaction_sheet(ws, title, txns, caption=None):
+        ws.cell(row=1, column=1, value=title).font = title_font
+        row = 2
+        if caption:
+            ws.cell(row=row, column=1, value=caption)
+            ws.cell(row=row, column=1).font = Font(name="Calibri", italic=True, color="475569")
+            row += 2
+        else:
+            row += 1
+
+        display_headers = ["Nom", "Date", "Description", "Amount", "Balance"]
+        for section_title, side, fill in (
+            ("CREDIT TRANSACTIONS", "CREDIT", header_fill_green),
+            ("DEBIT TRANSACTIONS", "DEBIT", header_fill_red),
+        ):
+            section_rows = [txn for txn in (txns or []) if infer_txn_side(txn) == side]
+            ws.cell(row=row, column=1, value=section_title).font = bold_font
+            row += 1
+            write_headers(ws, row, display_headers, fill)
+            if not section_rows:
+                row += 1
+                ws.cell(row=row, column=1, value="No transactions")
+                style_data_cell(ws, row, 1)
+            for idx, txn in enumerate(section_rows, 1):
+                row += 1
+                amount = abs(safe_amount(txn))
+                values = [
+                    idx,
+                    txn.get("date", ""),
+                    (txn.get("description", "") or "")[:100],
+                    amount,
+                    txn.get("balance"),
+                ]
+                write_values(
+                    ws,
+                    row,
+                    values,
+                    number_cols={4, 5},
+                    credit_cols={4} if side == "CREDIT" else set(),
+                    debit_cols={4} if side == "DEBIT" else set(),
+                )
+            row += 2
+        auto_width(ws)
+
     schema_version = str(report_info.get("schema_version", ""))
     is_v620 = schema_version in ("6.2.0", "6.2.1", "6.2.2", "6.3.0", "6.3.1", "6.3.2", "6.3.3", "6.3.4", "6.3.5") or consolidated.get("total_fx_credits") is not None
     has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(parsing.get("account_month_checks"))
@@ -4964,16 +5020,12 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Preserved: Large Transactions
     ws_large = wb.create_sheet("Large Transactions")
-    ws_large.cell(row=1, column=1, value=f"Large Transactions (>= RM {consolidated.get('high_value_threshold', 100000):,.0f})").font = title_font
-    large_headers = ["Date", "Description", "Amount", "Type", "Category", "Balance"]
-    write_headers(ws_large, 3, large_headers, header_fill_green)
     large_rows = report_data.get("large_transactions", []) or report_data.get("large_credits", []) or []
-    for row_idx, txn in enumerate(large_rows, 4):
-        amount = safe_amount(txn)
-        txn_type = (txn.get("type") or ("CREDIT" if safe_float(txn.get("credit", 0)) > 0 else "DEBIT")).upper()
-        values = [txn.get("date", ""), (txn.get("description", "") or "")[:80], amount, txn_type, txn.get("category", ""), txn.get("balance")]
-        write_values(ws_large, row_idx, values, number_cols={3, 6}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type == "DEBIT" else set())
-    auto_width(ws_large)
+    write_split_transaction_sheet(
+        ws_large,
+        f"Large Transactions (>= RM {consolidated.get('high_value_threshold', 100000):,.0f})",
+        large_rows,
+    )
 
     # Large Credits
     ws4 = wb.create_sheet("Large Credits")
@@ -5062,15 +5114,12 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Preserved: Round Figure Transactions
     round_rows = get_round_transactions_for_report(report_data)
     ws_round = wb.create_sheet("Round Figure Transactions")
-    ws_round.cell(row=1, column=1, value="ROUND FIGURE TRANSACTIONS").font = title_font
-    round_headers = ["Date", "Description", "Amount", "Type", "Balance"]
-    write_headers(ws_round, 3, round_headers, header_fill_green)
-    for row_idx, txn in enumerate(round_rows, 4):
-        amount = safe_float(txn.get("amount", 0))
-        txn_type = (txn.get("type") or ("CREDIT" if amount >= 0 else "DEBIT")).upper()
-        values = [txn.get("date", ""), (txn.get("description", "") or "")[:80], amount, txn_type, txn.get("balance")]
-        write_values(ws_round, row_idx, values, number_cols={3, 5}, credit_cols={3} if amount >= 0 else set(), debit_cols={3} if amount < 0 else set())
-    auto_width(ws_round)
+    write_split_transaction_sheet(
+        ws_round,
+        "ROUND FIGURE TRANSACTIONS",
+        round_rows,
+        caption="Round figure transactions are amounts that are multiples of RM 10,000.",
+    )
 
     # Round Figure Cr
     ws5e = wb.create_sheet("Round Figure Cr")
