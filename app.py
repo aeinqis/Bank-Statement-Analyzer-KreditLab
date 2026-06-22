@@ -2740,13 +2740,9 @@ def generate_interactive_html(data):
         .obs-item.positive {{ background:var(--green-bg); border-left:3px solid var(--green); }}
         .obs-item.concern {{ background:var(--red-bg); border-left:3px solid var(--red); }}
 
-        /* Two column layout */
+       /* Two column layout */
         .two-col {{ display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }}
-        .top-parties-grid {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; }}
-        .top-parties-grid > .section {{ min-width:0; }}
-        .top-parties-grid table {{ min-width:0; }}
         @media (max-width:900px) {{ .two-col {{ grid-template-columns:1fr; }} }}
-        @media (min-width:640px) {{ .top-parties-grid {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr) !important; }} }}
 
         /* Charts */
         .chart-box {{ background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1rem; }}
@@ -2982,7 +2978,7 @@ def generate_interactive_html(data):
 
         <!-- TOP PARTIES TAB -->
         <div id="tab-parties" class="tab">
-            <div class="two-col top-parties-grid">
+            <div class="two-col">
                 <div class="section">
                     <div class="section-head"><h2 style="color:var(--green)">Top 10 Payers (Income)</h2></div>
                     <div class="section-body" style="padding:0">
