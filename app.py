@@ -4518,8 +4518,63 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     pdf_integrity = report_data.get("pdf_integrity", {}) or {}
     consolidated = report_data.get("consolidated", {}) or {}
     monthly_analysis = report_data.get("monthly_analysis", []) or []
+    report_info = report_data.get("report_info", {}) or {}
+    accounts = report_data.get("accounts", []) or []
+    top_parties = report_data.get("top_parties", {}) or {}
     statutory_compliance = consolidated.get("statutory_compliance", {}) or {}
+    observations = normalize_observations(report_data.get("observations", {}) or {})
 
+    # ── Backfill consolidated totals from monthly_analysis when Track 2 keys are absent ──
+    # The HTML uses build_track2_result which computes these directly; the Excel path
+    # uses build_report_data_from_analysis which omits them. Sum/min/max from monthly rows.
+    def _sum_monthly(key):
+        return round(sum(safe_float(m.get(key, 0)) for m in monthly_analysis), 2)
+
+    def _min_monthly(key):
+        vals = [safe_float(m.get(key, 0)) for m in monthly_analysis if m.get(key) is not None]
+        return round(min(vals), 2) if vals else 0.0
+
+    def _max_monthly(key):
+        vals = [safe_float(m.get(key, 0)) for m in monthly_analysis if m.get(key) is not None]
+        return round(max(vals), 2) if vals else 0.0
+
+    def _avg_monthly(key):
+        vals = [safe_float(m.get(key, 0)) for m in monthly_analysis if m.get(key) is not None]
+        return round(sum(vals) / len(vals), 2) if vals else 0.0
+
+    backfill_map = {
+        "total_own_party_cr":        ("sum", "own_party_cr"),
+        "total_own_party_dr":        ("sum", "own_party_dr"),
+        "total_related_party_cr":    ("sum", "related_party_cr"),
+        "total_related_party_dr":    ("sum", "related_party_dr"),
+        "total_loan_disbursement_cr":("sum", "loan_disbursement_cr"),
+        "total_loan_repayment_dr":   ("sum", "loan_repayment_dr"),
+        "total_fd_interest_cr":      ("sum", "fd_interest_cr"),
+        "total_cash_deposits":       ("sum", "cash_deposits_amount"),
+        "total_cash_withdrawals":    ("sum", "cash_withdrawals_amount"),
+        "total_cheque_deposits":     ("sum", "cheque_deposits_amount"),
+        "total_cheque_issues":       ("sum", "cheque_issues_amount"),
+        "total_salary_paid":         ("sum", "salary_paid"),
+        "total_statutory_epf":       ("sum", "statutory_epf"),
+        "total_statutory_socso":     ("sum", "statutory_socso"),
+        "total_statutory_tax":       ("sum", "statutory_tax"),
+        "total_statutory_hrdf":      ("sum", "statutory_hrdf"),
+        "eod_lowest":                ("min", "eod_lowest"),
+        "eod_highest":               ("max", "eod_highest"),
+        "eod_average":               ("avg", "eod_average"),
+    }
+
+    for consol_key, (agg, monthly_key) in backfill_map.items():
+        if not consolidated.get(consol_key):          # only fill when absent or zero
+            if agg == "sum":
+                consolidated[consol_key] = _sum_monthly(monthly_key)
+            elif agg == "min":
+                consolidated[consol_key] = _min_monthly(monthly_key)
+            elif agg == "max":
+                consolidated[consol_key] = _max_monthly(monthly_key)
+            elif agg == "avg":
+                consolidated[consol_key] = _avg_monthly(monthly_key)
+                
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         report_info = report_data.get("report_info", {}) or {}
