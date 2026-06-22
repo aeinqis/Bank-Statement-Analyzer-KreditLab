@@ -4503,13 +4503,27 @@ def build_risk_signals_dataframe_for_excel(flags_data: dict, consolidated: dict,
     
     return pd.DataFrame(risk_signals)
 
+
+
 def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transaction_analysis: dict = None) -> BytesIO:
-    """Generate a multi-sheet XLSX report matching the HTML report tabs."""
+    """Generate Excel workbook using the original generate_excel structure."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return BytesIO()
+
     report_data = normalize_report_data_for_export(data)
     own_related = report_data.get("own_related_transactions", {}) or {}
     if isinstance(own_related, list):
         own_related = {"transactions": own_related, "summary": {}}
+    elif not isinstance(own_related, dict):
+        own_related = {"transactions": [], "summary": {}}
+
     loans = report_data.get("loan_transactions", {}) or {}
+    if isinstance(loans, list):
+        loans = {"transactions": loans, "disbursements": [], "repayments": []}
     flags = report_data.get("flags", {}) or {}
     cp_ledger = report_data.get("counterparty_ledger", {}) or {}
     if (not cp_ledger or not cp_ledger.get("counterparties")) and report_data.get("transactions"):
@@ -4563,210 +4577,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         "eod_highest":               ("max", "eod_highest"),
         "eod_average":               ("avg", "eod_average"),
     }
-
-    for consol_key, (agg, monthly_key) in backfill_map.items():
-        if not consolidated.get(consol_key):          # only fill when absent or zero
-            if agg == "sum":
-                consolidated[consol_key] = _sum_monthly(monthly_key)
-            elif agg == "min":
-                consolidated[consol_key] = _min_monthly(monthly_key)
-            elif agg == "max":
-                consolidated[consol_key] = _max_monthly(monthly_key)
-            elif agg == "avg":
-                consolidated[consol_key] = _avg_monthly(monthly_key)
-                
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        report_info = report_data.get("report_info", {}) or {}
-        overview_rows = [
-            {"Section": "Report Info", "Metric": key, "Value": _excel_safe_value(value)}
-            for key, value in report_info.items()
-        ]
-        overview_rows.extend(
-            {"Section": "Consolidated", "Metric": key, "Value": _excel_safe_value(value)}
-            for key, value in consolidated.items()
-        )
-        _write_excel_sheet(writer, "Overview", pd.DataFrame(overview_rows), "Report Overview")
-
-        _write_excel_sheet(
-            writer,
-            "Accounts",
-            _records_to_excel_df(report_data.get("accounts", [])),
-            "Account Details",
-        )
-        _write_excel_sheet(
-            writer,
-            "Cash Flow",
-            _records_to_excel_df(report_data.get("monthly_analysis", [])),
-            "Monthly Cash Flow",
-        )
-
-        _write_excel_sections_sheet(
-            writer,
-            "Top Parties",
-            [
-                (
-                    "Top 10 Counterparties by Credit",
-                    _records_to_excel_df(
-                        _top_counterparty_excel_rows(cp_ledger, "total_credits", "credit_count"),
-                        ["Counterparty", "Total Txn", "Total Amnt of Txn"],
-                    ),
-                ),
-                (
-                    "Top 10 Counterparties by Debit",
-                    _records_to_excel_df(
-                        _top_counterparty_excel_rows(cp_ledger, "total_debits", "debit_count"),
-                        ["Counterparty", "Total Txn", "Total Amnt of Txn"],
-                    ),
-                ),
-            ],
-        )
-
-        large_txns = report_data.get("large_transactions", [])
-        if not large_txns:
-            large_txns = report_data.get("large_credits", [])  # Fallback
-            
-        _write_excel_sheet(
-            writer,
-            "Large Transactions",
-            _records_to_excel_df(large_txns),
-            f"Large Transactions (≥ RM {report_data.get('consolidated', {}).get('high_value_threshold', 100000):,.0f})",
-        )
-
-        cp_rows = _records_to_excel_df(cp_ledger.get("counterparties", []))
-        if "transactions" in cp_rows.columns:
-            cp_rows = cp_rows.drop(columns=["transactions"])
-        _write_excel_sheet(writer, "Counterparty", cp_rows, "Counterparty Ledger")
-
-        cp_txn_rows = []
-        for cp in cp_ledger.get("counterparties", []) or []:
-            for txn in cp.get("transactions", []) or []:
-                cp_txn_rows.append({"counterparty": cp.get("counterparty_name", ""), **txn})
-        if not cp_txn_rows:
-            cp_txn_rows = own_related.get("transactions", []) or []
-        _write_excel_sheet(writer, "Counterparty Txns", _records_to_excel_df(cp_txn_rows), "Counterparty Transactions")
-
-        loan_rows = []
-        for txn_type, txns in (
-            ("Disbursement", loans.get("disbursements", [])),
-            ("Repayment", loans.get("repayments", [])),
-            ("Transaction", loans.get("transactions", [])),
-        ):
-            for row in txns or []:
-                loan_rows.append({"facility_type": txn_type, **row})
-        _write_excel_sheet(writer, "Facilities", _records_to_excel_df(loan_rows), "Facilities")
-
-        # ===== FIXED: Build Risk Signals with actual data =====
-        risk_signals_df = build_risk_signals_dataframe_for_excel(
-            flags, consolidated, statutory_compliance, monthly_analysis, report_data
-        )
-        _write_excel_sheet(writer, "Risk Signals", risk_signals_df, "Risk Signals")
-        
-        round_rows = []
-        for row in get_round_transactions_for_report(report_data):
-            amount = safe_float(row.get("amount", 0))
-            round_rows.append(
-                {
-                    "date": row.get("date", ""),
-                    "description": row.get("description", ""),
-                    "amount": f"{'+' if amount >= 0 else '-'}{abs(amount):,.2f}",
-                    "balance": safe_float(row.get("balance", 0)),
-                }
-            )
-        _write_excel_sheet(
-            writer,
-            "Round Figures",
-            _records_to_excel_df(
-                round_rows,
-                ["date", "description", "amount", "balance"],
-            ),
-            "Round Figure Transactions",
-        )
-
-        fx_rows = [
-            row for row in report_data.get("monthly_analysis", [])
-            if any(row.get(key) for key in ("fx_credit_count", "fx_credit_amount", "fx_debit_count", "fx_debit_amount"))
-        ]
-        if fx_rows:
-            _write_excel_sheet(writer, "FX Remittance", _records_to_excel_df(fx_rows), "FX / Remittance")
-
-        unclassified_rows = report_data.get("unclassified_transactions", []) or []
-        if unclassified_rows:
-            _write_excel_sheet(writer, "Unclassified", _records_to_excel_df(unclassified_rows), "Unclassified Transactions")
-
-        # Parsing QC sheet
-        if parsing:
-            parsing_qc_df = build_parsing_qc_dataframe_from_parsing_metadata(parsing)
-            if not parsing_qc_df.empty:
-                _write_excel_sheet(writer, "Parsing QC", parsing_qc_df, "Parsing Quality Control")
-            
-            if parsing.get("extraction_gaps"):
-                _write_excel_sheet(
-                    writer,
-                    "Extraction Gaps",
-                    _records_to_excel_df(parsing.get("extraction_gaps", [])),
-                    "Extraction Gaps",
-                )
-
-        if pdf_integrity:
-            integrity_rows = []
-            for file_name, result in pdf_integrity.items():
-                if isinstance(result, dict):
-                    integrity_rows.extend(_normalise_pdf_integrity_layer_rows(file_name, result))
-            _write_excel_sheet(
-                writer,
-                "Fraud Detector",
-                _records_to_excel_df(
-                    integrity_rows,
-                    ["file_name", "overall_risk", "layer", "severity", "finding", "anomaly_count", "detail"],
-                ),
-                "Fraud Detector",
-            )
-
-        if report_data.get("transactions"):
-            _write_excel_sheet(
-                writer,
-                "Transactions",
-                _records_to_excel_df(report_data.get("transactions", [])),
-                "All Transactions",
-            )
-
-    output.seek(0)
-    return output
-
-
-def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transaction_analysis: dict = None) -> BytesIO:
-    """Generate Excel workbook using the original generate_excel structure."""
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
-    except ImportError:
-        return BytesIO()
-
-    report_data = normalize_report_data_for_export(data)
-    own_related = report_data.get("own_related_transactions", {}) or {}
-    if isinstance(own_related, list):
-        own_related = {"transactions": own_related, "summary": {}}
-    elif not isinstance(own_related, dict):
-        own_related = {"transactions": [], "summary": {}}
-
-    loans = report_data.get("loan_transactions", {}) or {}
-    if isinstance(loans, list):
-        loans = {"transactions": loans, "disbursements": [], "repayments": []}
-    flags = report_data.get("flags", {}) or {}
-    cp_ledger = report_data.get("counterparty_ledger", {}) or {}
-    if (not cp_ledger or not cp_ledger.get("counterparties")) and report_data.get("transactions"):
-        cp_ledger = build_track2_counterparty_ledger(report_data.get("transactions", []))
-    parsing = report_data.get("parsing_metadata", {}) or {}
-    pdf_integrity = report_data.get("pdf_integrity", {}) or {}
-    consolidated = report_data.get("consolidated", {}) or {}
-    monthly_analysis = report_data.get("monthly_analysis", []) or []
-    report_info = report_data.get("report_info", {}) or {}
-    accounts = report_data.get("accounts", []) or []
-    top_parties = report_data.get("top_parties", {}) or {}
-    statutory_compliance = consolidated.get("statutory_compliance", {}) or {}
-    observations = normalize_observations(report_data.get("observations", {}) or {})
 
     wb = openpyxl.Workbook()
 
