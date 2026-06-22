@@ -2740,9 +2740,14 @@ def generate_interactive_html(data):
         .obs-item.positive {{ background:var(--green-bg); border-left:3px solid var(--green); }}
         .obs-item.concern {{ background:var(--red-bg); border-left:3px solid var(--red); }}
 
-       /* Two column layout */
+        /* Two column layout */
         .two-col {{ display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }}
+        .top-parties-grid {{ display:flex !important; flex-direction:row !important; flex-wrap:nowrap !important; gap:1.5rem; align-items:flex-start; width:100%; overflow-x:auto; }}
+        .top-parties-grid > .section {{ flex:1 1 0 !important; min-width:0 !important; width:calc(50% - 0.75rem) !important; margin-bottom:0; }}
+        .top-parties-grid .table-wrap {{ overflow-x:auto; }}
+        .top-parties-grid table {{ min-width:420px; width:100%; }}
         @media (max-width:900px) {{ .two-col {{ grid-template-columns:1fr; }} }}
+        @media (max-width:760px) {{ .top-parties-grid > .section {{ min-width:420px !important; }} }}
 
         /* Charts */
         .chart-box {{ background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1rem; }}
@@ -2978,8 +2983,8 @@ def generate_interactive_html(data):
 
         <!-- TOP PARTIES TAB -->
         <div id="tab-parties" class="tab">
-            <div class="two-col">
-                <div class="section">
+            <div class="top-parties-grid" style="display:flex !important;flex-direction:row !important;flex-wrap:nowrap !important;gap:1.5rem;align-items:flex-start;width:100%;overflow-x:auto">
+                <div class="section" style="flex:1 1 0;min-width:0;width:calc(50% - 0.75rem);margin-bottom:0">
                     <div class="section-head"><h2 style="color:var(--green)">Top 10 Payers (Income)</h2></div>
                     <div class="section-body" style="padding:0">
                         <div class="table-wrap"><table>
@@ -2989,7 +2994,7 @@ def generate_interactive_html(data):
                         {payers_suppressed_html}
                     </div>
                 </div>
-                <div class="section">
+                <div class="section" style="flex:1 1 0;min-width:0;width:calc(50% - 0.75rem);margin-bottom:0">
                     <div class="section-head"><h2 style="color:var(--red)">Top 10 Payees (Outflow)</h2></div>
                     <div class="section-body" style="padding:0">
                         <div class="table-wrap"><table>
