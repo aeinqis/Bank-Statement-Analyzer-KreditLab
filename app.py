@@ -4856,12 +4856,16 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                 )
                 # Force "No." column to display as whole integer, not float
                 ws.cell(row=row, column=1).number_format = "0"
-                ws.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="top")
+                # Centre + middle align: No.(1), Date(2), Amount(4), Balance(5) only
+                for centre_col in (1, 2, 4, 5):
+                    ws.cell(row=row, column=centre_col).alignment = Alignment(
+                        horizontal="center", vertical="center", wrap_text=True
+                    )
             row += 2
         # Column-specific auto widths for these 5-column transaction sheets
         ws.column_dimensions["A"].width = 6    # No.
         ws.column_dimensions["B"].width = 14   # Date
-        ws.column_dimensions["C"].width = 55   # Description
+        ws.column_dimensions["C"].width = 65   # Description
         ws.column_dimensions["D"].width = 18   # Amount
         ws.column_dimensions["E"].width = 18   # Balance
 
@@ -5194,7 +5198,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws6.column_dimensions["B"].width = 55   # Description
     ws6.column_dimensions["C"].width = 18   # Amount
     ws6.column_dimensions["D"].width = 22   # Category
-    
+
     # Risk Signals
     ws7 = wb.create_sheet("Risk Signals")
     risk_headers = ["#", "Signal", "Detected", "Remarks"]
