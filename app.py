@@ -1358,7 +1358,7 @@ def generate_interactive_html(data):
             <table style="width:100%;font-size:0.78rem"><thead><tr>
                 <th style="text-align:left">Bucket (parser artifact)</th>
                 <th class="r">Amount (RM)</th><th class="r">Txns</th>
-            </tr></thead><tbody>{rows}</tbody>
+            </tr></thead><tbody>{rows}</tbody></table>
         </div>'''
 
     payers_suppressed_html = _render_suppressed(_payers_suppressed, 'credit')
