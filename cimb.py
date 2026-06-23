@@ -62,7 +62,10 @@ CIMB_COUNTERPARTY_RULES = [
     (re.compile(r"^JOMPAY\s+(?P<counterparty>\S+).*$", re.I), None),
     (
         re.compile(
-            r"^TR IBG\s+(?P<counterparty>.+?)(?:\s+(?:CLAIM|GENERAL LABOUR|AC|DET\s+\d+|ROADTAX.*|INSURANCE.*|HOUSE\s+RENTAL.*|RENTAL.*|SEWA.*|PAYMENT.*|INVOICE.*|PETTY\s+CASH.*|EC\s+EXCEL.*))?$",
+            r"^TR IBG\s+(?P<counterparty>.+?)(?:\s+(?:CLAIM|GENERAL LABOUR|AC|DET\s+\d+|"
+            r"ROADTAX.*|INSURANCE.*|HOUSE\s+RENTAL.*|RENTAL.*|SEWA.*|PAYMENT.*|INVOICE.*|"
+            r"PETTY\s+CASH.*|EC\s+EXCEL.*|TRANSFER\s+BACK.*|MONTHLY\s+INSTALMENT.*|"
+            r"[A-Z]{0,3}\d{3,}[A-Z0-9]*))?$",
             re.I,
         ),
         None,
@@ -90,7 +93,7 @@ CIMB_COUNTERPARTY_RULES = [
     ),
     (
         re.compile(
-            r"^IBG CREDIT\s+(?:\S+\s+\S+\s+)?(?P<counterparty>[A-Z][A-Z0-9&()./\- ]+)$",
+            r"^IBG CREDIT\s+(?:INTERBANK\s+GIRO\s+){0,2}(?:\S+\s+\S+\s+)?(?P<counterparty>[A-Z][A-Z0-9&()./\- ]+)$",
             re.I,
         ),
         None,
@@ -131,6 +134,7 @@ CIMB_PERSON_NAME_MARKER_RE = re.compile(r"\b(?:BIN|BINTI|BT|B|ANAK)\b", re.I)
 CIMB_PERSON_PURPOSE_SUFFIX_RE = re.compile(
     r"\s+(?:HOUSE\s+RENTAL|GENERAL\s+LABOUR|PETTY\s+CASH|EC\s+EXCEL|"
     r"CLAIM|MILEAGE|LOAN|ROADTAX|INSURANCE|RENTAL|TENDER|FAREWELL|"
+    r"TRANSFER\s+BACK(?:\s+TO\b.*)?|MONTHLY\s+INSTALMENT|"
     r"PERUNTUKAN(?:\s+BAJET)?|BAJET)\b.*$",
     re.I,
 )
@@ -252,15 +256,17 @@ def extract_cimb_duitnow_party(line_parts) -> str:
             if is_cimb_party_candidate_line(part):
                 return normalize_cimb_rule_party_name(part)
 
-    match = re.match(
+    for ref_pat in [
+        r"^DUITNOW TO ACCOUNT\s+\S+\s+\S+\s+(?P<counterparty>[A-Z][A-Z0-9&()./\- ]{3,})$",
         r"^DUITNOW TO ACCOUNT\s+\S+\s+(?P<counterparty>[A-Z][A-Z0-9&()./\- ]{3,})$",
-        first_line,
-        re.I,
-    )
-    if not match:
-        return ""
+        r"^DUITNOW TO ACCOUNT\s+(?:ONLINE\s+TRANSFER\s+){1,2}(?P<counterparty>[A-Z][A-Z0-9&()./\- ]{3,})$",
+    ]:
+        match = re.match(ref_pat, first_line, re.I)
+        if match:
+            return normalize_cimb_rule_party_name(match.group("counterparty"))
 
-    return normalize_cimb_rule_party_name(match.group("counterparty"))
+    return ""
+
 
 
 def extract_cimb_tr_from_party(line_parts, raw_description: str) -> str:
@@ -372,6 +378,14 @@ def extract_cimb_party_name_by_rule(description: str) -> str:
     if tr_to_party:
         return tr_to_party
 
+    autopay_party = _extract_autopay_party(raw)
+    if autopay_party:
+        return autopay_party
+
+    remittance_party = _extract_remittance_party(raw)
+    if remittance_party:
+        return remittance_party
+
     candidates = []
     for candidate in [normalized_full, *(part.upper() for part in line_parts)]:
         if candidate and candidate not in candidates:
@@ -398,6 +412,10 @@ def extract_cimb_party_name(description: str) -> str:
     """
     if not description:
         return "UNKNOWN"
+
+    # Catch OTHER TRANSFER FEE early — avoids it leaking into the fallback
+    if is_cimb_transfer_fee(description):
+        return "TRANSFER FEE"
 
     party_by_rule = extract_cimb_party_name_by_rule(description)
     if party_by_rule:
@@ -426,6 +444,40 @@ def extract_cimb_party_name(description: str) -> str:
 
 def is_cimb_transfer_fee(description: str) -> bool:
     return bool(CIMB_TRANSFER_FEE_RE.search(clean_text(description).upper()))
+
+
+def _extract_autopay_party(description: str) -> str:
+    """Extract counterparty from AUTOPAY CR/DR by stripping the prefix and any
+    reference tokens that contain digits. Party name tokens are purely alphabetic."""
+    m = re.match(r"^AUTOPAY\s+(?:CR|DR)\s+(.+)$", description, re.I)
+    if not m:
+        return ""
+    tokens = m.group(1).strip().split()
+    # Reference codes always contain digits; party name tokens do not
+    party_tokens = [t for t in tokens if not re.search(r"\d", t) and len(t) >= 2]
+    if not party_tokens:
+        return ""
+    party = normalize_cimb_rule_party_name(" ".join(party_tokens))
+    return party if len(party) >= 4 else ""
+
+
+def _extract_remittance_party(description: str) -> str:
+    """Extract counterparty from REMITTANCE CR — party name is always the final
+    alphabetic-only tokens after all the numeric reference segments."""
+    m = re.match(r"^REMITTANCE\s+CR\s+(.+)$", description, re.I)
+    if not m:
+        return ""
+    tokens = m.group(1).strip().split()
+    party_tokens: list[str] = []
+    for token in reversed(tokens):
+        if re.search(r"\d", token):
+            break          # hit a ref code; stop collecting
+        if len(token) >= 2:
+            party_tokens.insert(0, token)
+    if not party_tokens:
+        return ""
+    party = normalize_cimb_rule_party_name(" ".join(party_tokens))
+    return party if len(party) >= 4 else ""
 
 
 def annotate_cimb_counterparties(rows):
