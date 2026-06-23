@@ -1597,57 +1597,11 @@ def generate_interactive_html(data):
             val_fail_warning = '<div style="background:var(--amber-dim);border:1px solid var(--amber);color:var(--amber);margin:0.75rem 0;padding:0.75rem;border-radius:8px;display:flex;gap:0.5rem;align-items:center"><div>⚠️</div><div><div style="font-weight:600">Counterparty ledger cleaning failed validation</div><div style="font-size:0.85rem">Showing original parser output.</div></div></div>'
 
         raw_counterparties = cp_ledger.get('counterparties', []) or []
-        raw_cp_names = [cp.get('counterparty_name', '') for cp in raw_counterparties if isinstance(cp, dict)]
-        deduped_cp_names = deduplicate_counterparty_names(raw_cp_names) if raw_cp_names else []
-        merged_counterparties = {}
-        for cp, clean_name in zip(raw_counterparties, deduped_cp_names):
-            if not isinstance(cp, dict):
-                continue
-            clean_name = clean_name or clean_counterparty_name(cp.get('counterparty_name', '')) or 'UNKNOWN'
-            key = clean_name.upper()
-            merged = merged_counterparties.setdefault(
-                key,
-                {
-                    'counterparty_name': clean_name,
-                    'total_credits': 0.0,
-                    'total_debits': 0.0,
-                    'net_position': 0.0,
-                    'transaction_count': 0,
-                    'credit_count': 0,
-                    'debit_count': 0,
-                    'transactions': [],
-                    'raw_names': set(),
-                },
-            )
-            merged['raw_names'].add(str(cp.get('counterparty_name', '') or '').strip())
-            merged['total_credits'] += safe_float(cp.get('total_credits', 0))
-            merged['total_debits'] += safe_float(cp.get('total_debits', 0))
-            merged['transaction_count'] += int(safe_float(cp.get('transaction_count', 0)))
-            merged['credit_count'] += int(safe_float(cp.get('credit_count', 0)))
-            merged['debit_count'] += int(safe_float(cp.get('debit_count', 0)))
-            for txn in cp.get('transactions', []) or []:
-                if isinstance(txn, dict):
-                    txn = dict(txn)
-                    txn['counterparty_name_clean'] = clean_name
-                    merged['transactions'].append(txn)
-
-        counterparties = []
-        for cp in merged_counterparties.values():
-            cp['total_credits'] = round(cp['total_credits'], 2)
-            cp['total_debits'] = round(cp['total_debits'], 2)
-            cp['net_position'] = round(cp['total_credits'] - cp['total_debits'], 2)
-            cp['raw_names'] = sorted(name for name in cp['raw_names'] if name)
-            if not cp['transaction_count']:
-                cp['transaction_count'] = len(cp.get('transactions', []) or [])
-            counterparties.append(cp)
-        if raw_counterparties and len(counterparties) != len(raw_counterparties):
+        counterparties_sorted = build_canonical_counterparty_ledger_rows(cp_ledger)
+        if raw_counterparties and len(counterparties_sorted) != len(raw_counterparties):
             original_cp = original_cp or len(raw_counterparties)
-            merges = merges or (len(raw_counterparties) - len(counterparties))
-        total_cp = len(counterparties)
-        counterparties_sorted = sorted(
-            counterparties,
-            key=lambda c: str(c.get('counterparty_name', '') or '').casefold(),
-        )
+            merges = merges or (len(raw_counterparties) - len(counterparties_sorted))
+        total_cp = len(counterparties_sorted)
 
         cp_rows_html = ''
         for idx, cp in enumerate(counterparties_sorted):
@@ -3433,6 +3387,85 @@ def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: int 
         "top_payers": [{**party, "rank": idx} for idx, party in enumerate(payers[:limit], 1)],
         "top_payees": [{**party, "rank": idx} for idx, party in enumerate(payees[:limit], 1)],
     }
+
+
+def build_canonical_counterparty_ledger_rows(cp_ledger: dict) -> List[dict]:
+    """Return the shared counterparty ledger view used by UI, HTML, and Excel."""
+    raw_counterparties = cp_ledger.get("counterparties", []) if isinstance(cp_ledger, dict) else []
+    raw_counterparties = [cp for cp in raw_counterparties or [] if isinstance(cp, dict)]
+    if not raw_counterparties:
+        return []
+
+    raw_names = [str(cp.get("counterparty_name", cp.get("counterparty", "")) or "") for cp in raw_counterparties]
+    try:
+        clean_names = deduplicate_counterparty_names(raw_names)
+    except Exception:
+        clean_names = [clean_counterparty_name(name) or name for name in raw_names]
+
+    merged_counterparties = {}
+    for cp, clean_name in zip(raw_counterparties, clean_names):
+        clean_name = clean_name or clean_counterparty_name(cp.get("counterparty_name", "")) or "UNKNOWN"
+        clean_name = re.sub(r"\s+", " ", str(clean_name).strip()).upper() or "UNKNOWN"
+        key = clean_name.casefold()
+        merged = merged_counterparties.setdefault(
+            key,
+            {
+                "counterparty_name": clean_name,
+                "total_credits": 0.0,
+                "total_debits": 0.0,
+                "net_position": 0.0,
+                "transaction_count": 0,
+                "credit_count": 0,
+                "debit_count": 0,
+                "pattern_matched": 0,
+                "special_bucket": 0,
+                "raw_fallback": 0,
+                "transactions": [],
+                "raw_names": set(),
+                "is_related_party": False,
+            },
+        )
+
+        raw_name = str(cp.get("counterparty_name", cp.get("counterparty", "")) or "").strip()
+        if raw_name:
+            merged["raw_names"].add(raw_name)
+        merged["total_credits"] += safe_float(cp.get("total_credits", cp.get("total_credit", 0)))
+        merged["total_debits"] += safe_float(cp.get("total_debits", cp.get("total_debit", 0)))
+        merged["credit_count"] += int(safe_float(cp.get("credit_count", cp.get("credit_tx_count", 0))))
+        merged["debit_count"] += int(safe_float(cp.get("debit_count", cp.get("debit_tx_count", 0))))
+        merged["transaction_count"] += int(safe_float(cp.get("transaction_count", 0)))
+        merged["pattern_matched"] += int(safe_float(cp.get("pattern_matched", 0)))
+        merged["special_bucket"] += int(safe_float(cp.get("special_bucket", 0)))
+        merged["raw_fallback"] += int(safe_float(cp.get("raw_fallback", 0)))
+
+        related_raw = cp.get("is_related_party", cp.get("related_party", False))
+        if bool(related_raw) and str(related_raw).strip().lower() not in {"false", "no", "0"}:
+            merged["is_related_party"] = True
+
+        for txn in cp.get("transactions", []) or []:
+            if isinstance(txn, dict):
+                txn_copy = dict(txn)
+                txn_copy["counterparty_name_clean"] = clean_name
+                merged["transactions"].append(txn_copy)
+
+    rows = []
+    for cp in merged_counterparties.values():
+        cp["total_credits"] = round(cp["total_credits"], 2)
+        cp["total_debits"] = round(cp["total_debits"], 2)
+        cp["net_position"] = round(cp["total_credits"] - cp["total_debits"], 2)
+        if not cp["transaction_count"]:
+            cp["transaction_count"] = cp["credit_count"] + cp["debit_count"]
+        if not cp["transaction_count"]:
+            cp["transaction_count"] = len(cp.get("transactions", []) or [])
+        cp["raw_names"] = sorted(name for name in cp["raw_names"] if name)
+        cp["transactions"] = sorted(
+            cp.get("transactions", []) or [],
+            key=lambda tx: (str(tx.get("date") or ""), str(tx.get("description") or "")),
+        )
+        rows.append(cp)
+
+    rows.sort(key=lambda cp: str(cp.get("counterparty_name", "") or "").casefold())
+    return rows
 
 
 _PARTY_GHOST_STOPWORDS = {
@@ -5240,7 +5273,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         values.extend(lookup.get(month, 0) for month in monthly_bd)
         write_values(ws3, row_idx, values, number_cols=party_num_cols, credit_cols=party_num_cols)
         ws3.cell(row=row_idx, column=1).number_format = "0"
-        ws3.cell(row=row_idx, column=3).number_format = "0"
+        ws3.cell(row=row_idx, column=4).number_format = "0"
         ws3.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         for col in range(3, 12):  # from column 3 to 11
@@ -5256,8 +5289,16 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
         values.extend(lookup.get(month, 0) for month in monthly_bd)
         write_values(ws3, row_idx, values, number_cols=party_num_cols, debit_cols=party_num_cols)
+        ws3.cell(row=row_idx, column=1).number_format = "0"
+        ws3.cell(row=row_idx, column=4).number_format = "0"
+        ws3.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for col in range(3, 12):  # from column 3 to 11
+            ws3.cell(row=row_idx, column=col).alignment = alignment
     auto_width(ws3)
-    ws3.column_dimensions["D"].width = 55
+    ws3.column_dimensions["A"].width = 11
+    ws3.column_dimensions["B"].width = 55
+    ws3.column_dimensions["D"].width = 13
 
     # Large Transactions - Updated with proper formatting
     ws_large = wb.create_sheet("Large Transactions")
@@ -5306,7 +5347,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ledger_headers = ["Counterparty", "Total Credits", "Total Debits", "Net Position", "Cr Count", "Dr Count", "Txn Count"]
     row = 3
     write_headers(ws5b, row, ledger_headers)
-    cp_sorted = sorted(cp_ledger.get("counterparties", []) or [], key=lambda cp: safe_float(cp.get("total_credits", 0)) + safe_float(cp.get("total_debits", 0)), reverse=True)
+    cp_sorted = build_canonical_counterparty_ledger_rows(cp_ledger)
     for cp in cp_sorted:
         row += 1
         values = [cp.get("counterparty_name", ""), cp.get("total_credits", 0), cp.get("total_debits", 0), cp.get("net_position", 0), cp.get("credit_count", 0), cp.get("debit_count", 0), cp.get("transaction_count", 0)]
@@ -5464,7 +5505,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         if item.get("Detected") == "YES":
             ws7.cell(row=row_idx, column=3).font = Font(name="Calibri", color="922B21", bold=True)
     auto_width(ws7)
-    ws7.column_dimensions["D"].width = 55
+    ws7.column_dimensions["D"].width = 70
 
     # Parsing QC
     ws8 = wb.create_sheet("Parsing QC")
@@ -7316,8 +7357,23 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
 
     prepared_df = prepare_counterparty_dataframe(df)
 
-    # Build counterparty summary
-    counterparty_summary = build_counterparty_ledger_from_transactions(prepared_df)
+    # Build the same canonical counterparty summary used by HTML and Excel.
+    display_cp_ledger = build_track2_counterparty_ledger(prepared_df.to_dict("records"))
+    canonical_cp_rows = build_canonical_counterparty_ledger_rows(display_cp_ledger)
+    counterparty_summary = pd.DataFrame(
+        [
+            {
+                "counterparty_name": row.get("counterparty_name", ""),
+                "transaction_count": row.get("transaction_count", 0),
+                "credit_count": row.get("credit_count", 0),
+                "debit_count": row.get("debit_count", 0),
+                "total_credits": row.get("total_credits", 0),
+                "total_debits": row.get("total_debits", 0),
+                "net_position": row.get("net_position", 0),
+            }
+            for row in canonical_cp_rows
+        ]
+    )
     
     if counterparty_summary.empty:
         st.info("No counterparty data available.")
@@ -7400,15 +7456,27 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     )
     
     # Show transactions for selected counterparty
-    df_copy = prepared_df
-    counterparty_tx = df_copy[df_copy['counterparty'] == selected_counterparty].copy()
+    selected_cp_row = next(
+        (row for row in canonical_cp_rows if row.get("counterparty_name") == selected_counterparty),
+        {},
+    )
+    counterparty_tx = pd.DataFrame(selected_cp_row.get("transactions", []) or [])
 
     if not counterparty_tx.empty:
-        # Format for display
-        display_tx = counterparty_tx[['date', 'description', 'credit', 'debit', 'balance']].copy()
-        display_tx['credit'] = display_tx['credit'].apply(lambda x: f"RM {x:,.2f}" if x and x > 0 else "")
-        display_tx['debit'] = display_tx['debit'].apply(lambda x: f"RM {x:,.2f}" if x and x > 0 else "")
-        display_tx['balance'] = display_tx['balance'].apply(lambda x: f"RM {x:,.2f}" if x and str(x) != 'nan' else "")
+        for required_col in ("date", "description", "amount", "type", "balance"):
+            if required_col not in counterparty_tx.columns:
+                counterparty_tx[required_col] = ""
+        display_tx = counterparty_tx[["date", "description", "amount", "type", "balance"]].copy()
+        display_tx["credit"] = display_tx.apply(
+            lambda row: f"RM {safe_float(row.get('amount')):,.2f}" if str(row.get("type", "")).upper() == "CREDIT" else "",
+            axis=1,
+        )
+        display_tx["debit"] = display_tx.apply(
+            lambda row: f"RM {safe_float(row.get('amount')):,.2f}" if str(row.get("type", "")).upper() == "DEBIT" else "",
+            axis=1,
+        )
+        display_tx["balance"] = display_tx["balance"].apply(lambda x: f"RM {safe_float(x):,.2f}" if str(x) != "nan" and x != "" else "")
+        display_tx = display_tx[["date", "description", "credit", "debit", "balance"]]
         
         st.dataframe(
             display_tx,
