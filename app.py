@@ -5239,6 +5239,14 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
         values.extend(lookup.get(month, 0) for month in monthly_bd)
         write_values(ws3, row_idx, values, number_cols=party_num_cols, credit_cols=party_num_cols)
+        ws3.cell(row=row_idx, column=1).number_format = "0"
+        ws3.cell(row=row_idx, column=3).number_format = "0"
+        ws3.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for col in range(3, 12):  # from column 3 to 11
+            ws3.cell(row=row_idx, column=col).alignment = alignment
+    auto_width(ws3)
+
     row = len(payers) + 5
     ws3.cell(row=row, column=1, value="TOP PAYEES (Payment Destinations)").font = bold_font
     row += 1
@@ -5249,6 +5257,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         values.extend(lookup.get(month, 0) for month in monthly_bd)
         write_values(ws3, row_idx, values, number_cols=party_num_cols, debit_cols=party_num_cols)
     auto_width(ws3)
+    ws3.column_dimensions["D"].width = 55
 
     # Large Transactions - Updated with proper formatting
     ws_large = wb.create_sheet("Large Transactions")
@@ -5442,15 +5451,20 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Risk Signals
     ws7 = wb.create_sheet("Risk Signals")
-    risk_headers = ["#", "Signal", "Detected", "Remarks"]
+    risk_headers = ["No.", "Signal", "Detected", "Remarks"]
     write_headers(ws7, 1, risk_headers)
     risk_df = build_risk_signals_dataframe_for_excel(flags, consolidated, statutory_compliance, monthly_analysis, report_data)
     for row_idx, item in enumerate(risk_df.to_dict(orient="records"), 2):
         values = [item.get("#"), item.get("Signal"), item.get("Detected"), item.get("Remarks")]
         write_values(ws7, row_idx, values)
+        ws7.cell(row=row_idx, column=1).number_format = "0"
+        ws7.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center", vertical="center")
+        ws7.cell(row=row_idx, column=2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws7.cell(row=row_idx, column=3).alignment = Alignment(horizontal="center", vertical="center")
         if item.get("Detected") == "YES":
             ws7.cell(row=row_idx, column=3).font = Font(name="Calibri", color="922B21", bold=True)
     auto_width(ws7)
+    ws7.column_dimensions["D"].width = 55
 
     # Parsing QC
     ws8 = wb.create_sheet("Parsing QC")
