@@ -3302,6 +3302,9 @@ def adapt_to_v6(src):
     }
 
 def _top_parties_from_transaction_analysis(transaction_analysis: dict) -> dict:
+    if not isinstance(transaction_analysis, dict):
+        return {"top_payers": [], "top_payees": []}
+
     top_payers = transaction_analysis.get("top_payers") or transaction_analysis.get("top_creditors")
     top_payees = transaction_analysis.get("top_payees") or transaction_analysis.get("top_debtors")
 
@@ -3328,6 +3331,108 @@ def _top_parties_from_transaction_analysis(transaction_analysis: dict) -> dict:
         ]
 
     return {"top_payers": top_payers or [], "top_payees": top_payees or []}
+
+
+def _has_top_party_rows(top_parties: dict) -> bool:
+    if not isinstance(top_parties, dict):
+        return False
+    payers = top_parties.get("top_payers") or top_parties.get("top_creditors") or []
+    payees = top_parties.get("top_payees") or top_parties.get("top_debtors") or []
+    return bool(payers or payees)
+
+
+def _ledger_monthly_breakdown(transactions: List[dict], side: str) -> List[dict]:
+    buckets = {}
+    side = side.upper()
+    for txn in transactions or []:
+        if not isinstance(txn, dict):
+            continue
+
+        raw_type = str(txn.get("type") or txn.get("transaction_type") or "").upper()
+        credit = safe_float(txn.get("credit", 0))
+        debit = safe_float(txn.get("debit", 0))
+        amount = 0.0
+        if side == "CREDIT":
+            if credit > 0:
+                amount = credit
+            elif raw_type in ("CREDIT", "CR") or "CREDIT" in raw_type:
+                amount = abs(safe_float(txn.get("amount", 0)))
+        else:
+            if debit > 0:
+                amount = debit
+            elif raw_type in ("DEBIT", "DR") or "DEBIT" in raw_type:
+                amount = abs(safe_float(txn.get("amount", 0)))
+        if amount <= 0:
+            continue
+
+        date_text = str(txn.get("date") or txn.get("transaction_date") or "")
+        month_match = re.search(r"\d{4}-\d{2}", date_text)
+        if not month_match:
+            continue
+        month = month_match.group(0)
+        bucket = buckets.setdefault(month, {"month": month, "amount": 0.0, "count": 0})
+        bucket["amount"] += amount
+        bucket["count"] += 1
+
+    return [
+        {"month": month, "amount": round(row["amount"], 2), "count": row["count"]}
+        for month, row in sorted(buckets.items())
+    ]
+
+
+def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: int = 10) -> dict:
+    if not isinstance(counterparty_ledger, dict):
+        return {"top_payers": [], "top_payees": []}
+
+    payers = []
+    payees = []
+    for cp in counterparty_ledger.get("counterparties", []) or []:
+        if not isinstance(cp, dict):
+            continue
+        name = (
+            cp.get("counterparty_name")
+            or cp.get("party_name")
+            or cp.get("name")
+            or ""
+        )
+        name = str(name).strip()
+        if not name:
+            continue
+
+        transactions = cp.get("transactions") or []
+        related_raw = cp.get("is_related_party", cp.get("related_party", False))
+        is_related = bool(related_raw) and str(related_raw).strip().lower() not in {"false", "no", "0"}
+
+        credit_amount = safe_float(cp.get("total_credits", cp.get("total_credit", 0)))
+        debit_amount = safe_float(cp.get("total_debits", cp.get("total_debit", 0)))
+        credit_count = int(safe_float(cp.get("credit_count", cp.get("credit_tx_count", 0))))
+        debit_count = int(safe_float(cp.get("debit_count", cp.get("debit_tx_count", 0))))
+
+        if credit_amount > 0:
+            monthly = _ledger_monthly_breakdown(transactions, "CREDIT")
+            payers.append({
+                "party_name": name,
+                "total_amount": round(credit_amount, 2),
+                "transaction_count": credit_count or sum(m.get("count", 0) for m in monthly),
+                "is_related_party": is_related,
+                "monthly_breakdown": monthly,
+            })
+        if debit_amount > 0:
+            monthly = _ledger_monthly_breakdown(transactions, "DEBIT")
+            payees.append({
+                "party_name": name,
+                "total_amount": round(debit_amount, 2),
+                "transaction_count": debit_count or sum(m.get("count", 0) for m in monthly),
+                "is_related_party": is_related,
+                "monthly_breakdown": monthly,
+            })
+
+    payers.sort(key=lambda party: party.get("total_amount", 0), reverse=True)
+    payees.sort(key=lambda party: party.get("total_amount", 0), reverse=True)
+    return {
+        "top_payers": [{**party, "rank": idx} for idx, party in enumerate(payers[:limit], 1)],
+        "top_payees": [{**party, "rank": idx} for idx, party in enumerate(payees[:limit], 1)],
+    }
 
 
 _PARTY_GHOST_STOPWORDS = {
@@ -4070,6 +4175,7 @@ def normalize_report_data_for_export(data: dict) -> dict:
     transaction_analysis = source.get("transaction_analysis", {})
     if isinstance(transaction_analysis, dict):
         source.setdefault("counterparty_ledger", transaction_analysis.get("counterparty_ledger", {}))
+    analysis_top_parties = _top_parties_from_transaction_analysis(transaction_analysis)
 
     if "monthly_analysis" not in source and "transactions" in source:
         normalized = adapt_to_v6(source)
@@ -4078,7 +4184,6 @@ def normalize_report_data_for_export(data: dict) -> dict:
         normalized = dict(source)
 
     if isinstance(transaction_analysis, dict):
-        normalized["top_parties"] = _top_parties_from_transaction_analysis(transaction_analysis)
         normalized["large_credits"] = transaction_analysis.get(
             "high_value_credits",
             normalized.get("large_credits", []),
@@ -4100,6 +4205,11 @@ def normalize_report_data_for_export(data: dict) -> dict:
     normalized.setdefault("observations", {"positive": [], "concerns": []})
     normalized.setdefault("counterparty_ledger", {})
     normalized.setdefault("parsing_metadata", {})
+    ledger_top_parties = _top_parties_from_counterparty_ledger(normalized.get("counterparty_ledger", {}), limit=10)
+    if not _has_top_party_rows(normalized.get("top_parties")) and _has_top_party_rows(ledger_top_parties):
+        normalized["top_parties"] = ledger_top_parties
+    if not _has_top_party_rows(normalized.get("top_parties")) and _has_top_party_rows(analysis_top_parties):
+        normalized["top_parties"] = analysis_top_parties
     threshold = safe_float(
         normalized.get("consolidated", {}).get("high_value_threshold")
         or normalized.get("consolidated", {}).get("large_transaction_threshold")
@@ -4739,6 +4849,16 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     report_info = report_data.get("report_info", {}) or {}
     accounts = report_data.get("accounts", []) or []
     top_parties = report_data.get("top_parties", {}) or {}
+    if not _has_top_party_rows(top_parties):
+        ledger_top_parties = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
+        if _has_top_party_rows(ledger_top_parties):
+            top_parties = ledger_top_parties
+            report_data["top_parties"] = top_parties
+    if not _has_top_party_rows(top_parties):
+        analysis_top_parties = _top_parties_from_transaction_analysis(transaction_analysis or {})
+        if _has_top_party_rows(analysis_top_parties):
+            top_parties = analysis_top_parties
+            report_data["top_parties"] = top_parties
     statutory_compliance = consolidated.get("statutory_compliance", {}) or {}
     observations = normalize_observations(report_data.get("observations", {}) or {})
 
@@ -5099,8 +5219,9 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Top Parties
     ws3 = wb.create_sheet("Top Parties")
-    payers = top_parties.get("top_payers") or top_parties.get("top_creditors") or []
-    payees = top_parties.get("top_payees") or top_parties.get("top_debtors") or []
+    party_view = prepare_top_parties_for_report(top_parties, limit=10)
+    payers = party_view["payers"]
+    payees = party_view["payees"]
     all_party_rows = list(payers) + list(payees)
     monthly_bd = sorted({
         mb.get("month", "")
@@ -8742,6 +8863,7 @@ if st.session_state.results:
     # Original transaction analysis from existing code
     transaction_analysis_report = parse_top_parties_and_high_value(
         st.session_state.results,
+        top_n=10,
         high_value_threshold=high_value_threshold,
     )
 
