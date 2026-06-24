@@ -9190,6 +9190,27 @@ if st.session_state.results:
         st.markdown("---")
         render_counterparty_ledger_table(df)
 
+        # ── Define make_json_serializable here so it's available to both
+        # the Related Party Manager and the download buttons below ──
+        def make_json_serializable(obj):
+            """Recursively convert non-serializable objects to JSON-serializable format"""
+            if isinstance(obj, dict):
+                return {key: make_json_serializable(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [make_json_serializable(item) for item in obj]
+            elif isinstance(obj, pd.Timestamp):
+                return obj.isoformat()
+            elif isinstance(obj, pd.Period):
+                return str(obj)
+            try:
+                if pd.isna(obj):
+                    return None
+            except Exception:
+                pass
+            if hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            return obj
+
         # Build serialized inputs and shared_report_data EARLY so the
         # Related Party Manager and download buttons all use the same object.
         serialized_transactions = make_json_serializable(st.session_state.results)
@@ -9301,24 +9322,6 @@ if st.session_state.results:
     col1, col2, col3, col4 = st.columns(4)
 
     df_download = df.copy() if not df.empty else pd.DataFrame([])
-
-    # Helper function to convert dataframe to JSON-serializable format
-    def make_json_serializable(obj):
-        """Recursively convert non-serializable objects to JSON-serializable format"""
-        if isinstance(obj, dict):
-            return {key: make_json_serializable(value) for key, value in obj.items()}
-        elif isinstance(obj, list):
-            return [make_json_serializable(item) for item in obj]
-        elif isinstance(obj, pd.Timestamp):
-            return obj.isoformat()
-        elif isinstance(obj, pd.Period):
-            return str(obj)
-        elif pd.isna(obj):
-            return None
-        elif hasattr(obj, 'isoformat'):
-            return obj.isoformat()
-        else:
-            return obj
 
     # Convert transactions to JSON-serializable format
     if not df_download.empty:
