@@ -5296,8 +5296,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         for col in range(3, 12):  # from column 3 to 11
             ws3.cell(row=row_idx, column=col).alignment = alignment
     auto_width(ws3)
-    ws3.column_dimensions["A"].width = 11
-    ws3.column_dimensions["B"].width = 55
+    ws3.column_dimensions["A"].width = 8
+    ws3.column_dimensions["B"].width = 50
     ws3.column_dimensions["D"].width = 13
 
     # Large Transactions - Updated with proper formatting
@@ -5394,9 +5394,10 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                      credit_cols={4} if txn_type == "CREDIT" else set(),
                      debit_cols={4} if txn_type != "CREDIT" else set())
         ws5d.cell(row=row_idx, column=1).number_format = "0"
-        for centre_col in (1, 2, 4, 6):
+        for centre_col in (1, 2, 4, 5, 6):
             ws5d.cell(row=row_idx, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     auto_width(ws5d)
+    ws5d.column_dimensions["A"].width = 8
 
     # Round Figure Transactions - Updated with proper formatting
     round_rows = get_round_transactions_for_report(report_data)
@@ -5460,7 +5461,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     write_headers(ws6, row, facility_headers, header_fill_green)
     if not loan_disb:
         row += 1
-        ws6.cell(row=row, column=1, value="No disbursements")
+        ws6.cell(row=row, column=3, value="No disbursements")
         style_data_cell(ws6, row, 1)
     for idx, txn in enumerate(loan_disb, 1):
         row += 1
@@ -5475,7 +5476,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     write_headers(ws6, row, facility_headers, header_fill_red)
     if not loan_repay:
         row += 1
-        ws6.cell(row=row, column=1, value="No repayments")
+        ws6.cell(row=row, column=3, value="No repayments")
         style_data_cell(ws6, row, 1)
     for idx, txn in enumerate(loan_repay, 1):
         row += 1
@@ -5484,7 +5485,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ws6.cell(row=row, column=1).number_format = "0"
         for centre_col in (1, 2, 4, 5):
             ws6.cell(row=row, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws6.column_dimensions["A"].width = 6    # No.
+    ws6.column_dimensions["A"].width = 8    # No.
     ws6.column_dimensions["B"].width = 14   # Date
     ws6.column_dimensions["C"].width = 55   # Description
     ws6.column_dimensions["D"].width = 18   # Amount
@@ -6775,6 +6776,12 @@ if "account_type_determinations" not in st.session_state:
 if "related_parties_override" not in st.session_state:
     st.session_state.related_parties_override = []
 
+if "related_party_candidates_dismissed" not in st.session_state:
+    st.session_state.related_party_candidates_dismissed = set()
+
+if "related_party_manager_expanded" not in st.session_state:
+    st.session_state.related_party_manager_expanded = True
+
 if "counterparty_name_overrides" not in st.session_state:
     st.session_state.counterparty_name_overrides = {}
 
@@ -7506,6 +7513,276 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
             use_container_width=True,
             hide_index=True,
         )
+
+def detect_related_party_candidates(
+    cp_ledger: dict,
+    confirmed_names: set,
+    dismissed: set,
+    shared_report_data: dict = None,
+) -> list:
+    """
+    Produce a ranked candidate list from three sources (highest priority first):
+    1. Track 2 scan_related_party_candidates (if in shared_report_data)
+    2. Person-name heuristic (BIN / BINTI in counterparty name)
+    3. High-debit counterparties above a volume threshold
+    """
+    _NOISE = {
+        "UNKNOWN", "TRANSFER FEE", "OTHER TRANSFER FEE", "CHEQUE",
+        "CASH DEPOSIT", "CASH WITHDRAWAL", "BANK FEES", "BULK SALARY",
+        "FD/INTEREST", "LOAN REPAYMENT", "LOAN DISBURSEMENT", "KWSP",
+        "SOCSO", "LHDN", "HRDF", "REVERSAL", "RETURNED CHEQUE",
+        "INWARD RETURN", "JANM", "IBG RETURN",
+    }
+    _PERSON_RE = re.compile(r"\b(?:BIN|BINTI|BT|B\.?\s*BINTI|ANAK)\b", re.I)
+
+    candidates_by_name: dict = {}
+
+    # ── Source 1: Track 2 candidates ──
+    if isinstance(shared_report_data, dict):
+        t2_cands = (
+            shared_report_data.get("report_info", {}).get("related_party_candidates", []) or []
+        )
+        for c in t2_cands:
+            if not isinstance(c, dict):
+                continue
+            name = str(c.get("name", "") or "").strip().upper()
+            if not name or name in confirmed_names or name in dismissed or name in _NOISE:
+                continue
+            candidates_by_name[name] = {
+                "name": c.get("name", "").strip(),
+                "confidence": str(c.get("confidence", "MEDIUM")).upper(),
+                "evidence": c.get("evidence", "Flagged by Track 2 engine"),
+                "total_cr": safe_float(c.get("total_cr", 0)),
+                "total_dr": safe_float(c.get("total_dr", 0)),
+                "source": "track2",
+            }
+
+    # ── Sources 2 & 3: counterparty ledger heuristics ──
+    for cp in (cp_ledger or {}).get("counterparties", []) if isinstance(cp_ledger, dict) else []:
+        raw_name = str(cp.get("counterparty_name", "") or "").strip()
+        name_upper = raw_name.upper()
+        if (
+            not raw_name
+            or name_upper in confirmed_names
+            or name_upper in dismissed
+            or name_upper in _NOISE
+            or name_upper in candidates_by_name  # already added by Track 2
+        ):
+            continue
+
+        cr = safe_float(cp.get("total_credits", 0))
+        dr = safe_float(cp.get("total_debits", 0))
+        total = cr + dr
+        if total < 10_000:
+            continue
+
+        is_person = bool(_PERSON_RE.search(raw_name))
+        has_circular = cr > 0 and dr > 0  # money flowing both ways
+
+        confidence = "LOW"
+        evidence_parts = []
+
+        if is_person:
+            confidence = "MEDIUM"
+            evidence_parts.append("Person name detected (Malay naming marker)")
+        if has_circular:
+            confidence = "MEDIUM"
+            evidence_parts.append(f"Circular flow — CR RM {cr:,.0f} / DR RM {dr:,.0f}")
+        if dr > 500_000:
+            confidence = "HIGH" if is_person or has_circular else "MEDIUM"
+            evidence_parts.append(f"High outflow RM {dr:,.0f}")
+
+        if confidence == "LOW" and not evidence_parts:
+            continue  # skip pure-noise LOW entries
+
+        candidates_by_name[name_upper] = {
+            "name": raw_name,
+            "confidence": confidence,
+            "evidence": "; ".join(evidence_parts) or "High transaction volume",
+            "total_cr": cr,
+            "total_dr": dr,
+            "source": "heuristic",
+        }
+
+    # Sort: HIGH → MEDIUM → LOW, then by total debit desc
+    order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    return sorted(
+        candidates_by_name.values(),
+        key=lambda x: (order.get(x["confidence"], 3), -x["total_dr"]),
+    )[:30]
+
+
+def render_related_party_manager(
+    cp_ledger: dict = None,
+    shared_report_data: dict = None,
+) -> bool:
+    """
+    Editable related-party panel.
+    Returns True if the user made any change this render (caller should
+    regenerate reports).
+    """
+    st.markdown("## 🔗 Related Party Management")
+    st.caption(
+        "Confirm or dismiss candidate parties. Changes are immediately reflected "
+        "in the downloaded HTML and Excel reports."
+    )
+
+    changed = False
+
+    # ── Working copies ──
+    confirmed_rps: list = list(st.session_state.get("related_parties_override", []) or [])
+    dismissed: set = set(st.session_state.get("related_party_candidates_dismissed", set()))
+
+    confirmed_names = {
+        (rp.get("name") if isinstance(rp, dict) else str(rp)).strip().upper()
+        for rp in confirmed_rps
+        if rp
+    }
+
+    def _save(new_confirmed, new_dismissed):
+        st.session_state.related_parties_override = new_confirmed
+        st.session_state.related_party_candidates_dismissed = new_dismissed
+
+    # ─────────────────────────────────────────────────────────────────────
+    # SECTION 1 — Add new related party
+    # ─────────────────────────────────────────────────────────────────────
+    with st.expander("➕ Add Related Party Manually", expanded=False):
+        a1, a2, a3 = st.columns([3, 3, 1])
+        new_name = a1.text_input("Party Name", key="_rp_new_name")
+        new_rel = a2.text_input("Relationship (e.g. Director, Spouse)", key="_rp_new_rel")
+        a3.write("")
+        a3.write("")
+        if a3.button("Add", key="_rp_add_btn", use_container_width=True):
+            clean = new_name.strip()
+            if clean and clean.upper() not in confirmed_names:
+                confirmed_rps.append({"name": clean, "relationship": new_rel.strip()})
+                _save(confirmed_rps, dismissed)
+                changed = True
+                st.rerun()
+
+    # ─────────────────────────────────────────────────────────────────────
+    # SECTION 2 — Confirmed Related Parties
+    # ─────────────────────────────────────────────────────────────────────
+    st.markdown("### ✅ Confirmed Related Parties")
+
+    if not confirmed_rps:
+        st.info("No confirmed related parties yet. Add one above or promote from candidates below.")
+    else:
+        h = st.columns([3, 2, 2, 2, 1])
+        for label, col in zip(["Party Name", "Relationship", "Credits (RM)", "Debits (RM)", ""], h):
+            col.markdown(f"**{label}**")
+        st.divider()
+
+        to_remove = None
+        for i, rp in enumerate(confirmed_rps):
+            name = (rp.get("name") if isinstance(rp, dict) else str(rp)).strip()
+            rel  = (rp.get("relationship", "") if isinstance(rp, dict) else "").strip() or "—"
+
+            # look up financials from CP ledger
+            cr_amt = dr_amt = 0.0
+            for cp in (cp_ledger or {}).get("counterparties", []) if isinstance(cp_ledger, dict) else []:
+                if cp.get("counterparty_name", "").strip().upper() == name.upper():
+                    cr_amt = safe_float(cp.get("total_credits", 0))
+                    dr_amt = safe_float(cp.get("total_debits", 0))
+                    break
+
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
+            c1.write(f"**{name}**")
+            c2.write(rel)
+            c3.write(f"RM {cr_amt:,.2f}" if cr_amt else "—")
+            c4.write(f"RM {dr_amt:,.2f}" if dr_amt else "—")
+            if c5.button("✕ Remove", key=f"_rp_rm_{i}", help="Remove from confirmed list"):
+                to_remove = i
+
+        if to_remove is not None:
+            confirmed_rps.pop(to_remove)
+            _save(confirmed_rps, dismissed)
+            changed = True
+            st.rerun()
+
+    # ─────────────────────────────────────────────────────────────────────
+    # SECTION 3 — Candidate / Possible Related Parties
+    # ─────────────────────────────────────────────────────────────────────
+    st.markdown("### 🔍 Possible Related Parties")
+    st.caption(
+        "Detected from transaction patterns. Click **✓ Confirm** to add to the confirmed list, "
+        "or **✕ Dismiss** to hide permanently."
+    )
+
+    candidates = detect_related_party_candidates(
+        cp_ledger, confirmed_names, dismissed, shared_report_data
+    )
+
+    _CONF_ICON = {"HIGH": "🔴 HIGH", "MEDIUM": "🟡 MEDIUM", "LOW": "⚪ LOW"}
+
+    if not candidates:
+        st.info("No additional candidates — all significant counterparties are confirmed or dismissed.")
+    else:
+        h = st.columns([3, 2, 2, 2, 1, 1])
+        for label, col in zip(
+            ["Party Name", "Confidence", "Credits (RM)", "Debits (RM)", "Confirm", "Dismiss"], h
+        ):
+            col.markdown(f"**{label}**")
+        st.divider()
+
+        action = None  # ("confirm"|"dismiss", index)
+        for i, cand in enumerate(candidates):
+            name = cand["name"]
+            conf = cand.get("confidence", "LOW")
+            evidence = cand.get("evidence", "")
+            cr_amt = cand.get("total_cr", 0)
+            dr_amt = cand.get("total_dr", 0)
+
+            c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 2, 2, 1, 1])
+            c1.write(f"**{name}**")
+            if evidence:
+                c1.caption(evidence[:80])
+            c2.write(_CONF_ICON.get(conf, conf))
+            c3.write(f"RM {cr_amt:,.2f}" if cr_amt else "—")
+            c4.write(f"RM {dr_amt:,.2f}" if dr_amt else "—")
+
+            if c5.button("✓", key=f"_cand_confirm_{i}", help="Add to confirmed related parties"):
+                action = ("confirm", i)
+            if c6.button("✕", key=f"_cand_dismiss_{i}", help="Dismiss this candidate"):
+                action = ("dismiss", i)
+
+        if action:
+            act, idx = action
+            cand = candidates[idx]
+            if act == "confirm":
+                confirmed_rps.append({
+                    "name": cand["name"],
+                    "relationship": "Analyst-confirmed — review required",
+                })
+                dismissed.discard(cand["name"].upper())
+            else:
+                dismissed.add(cand["name"].upper())
+            _save(confirmed_rps, dismissed)
+            changed = True
+            st.rerun()
+
+    # ─────────────────────────────────────────────────────────────────────
+    # SECTION 4 — Restore dismissed candidates
+    # ─────────────────────────────────────────────────────────────────────
+    if dismissed:
+        with st.expander(f"🚫 Dismissed Candidates ({len(dismissed)})", expanded=False):
+            st.caption("Click ↩ to restore a dismissed candidate to the possible list.")
+            to_restore = None
+            for dname in sorted(dismissed):
+                d1, d2 = st.columns([5, 1])
+                d1.write(dname)
+                if d2.button("↩ Restore", key=f"_restore_{dname}", use_container_width=True):
+                    to_restore = dname
+            if to_restore:
+                dismissed.discard(to_restore)
+                _save(confirmed_rps, dismissed)
+                changed = True
+                st.rerun()
+
+    if changed:
+        st.success("✅ Related party list updated — regenerate your reports to apply changes.")
+
+    return changed
 
 # -----------------------------
 # Pattern Analysis Functions
@@ -8909,8 +9186,26 @@ if st.session_state.results:
         render_extracted_transaction_section(df)
         
         # Display Counterparty Ledger Table
+        # Display Counterparty Ledger Table
         st.markdown("---")
         render_counterparty_ledger_table(df)
+
+        # Related Party Manager — must run BEFORE report generation
+        st.markdown("---")
+        rp_changed = render_related_party_manager(
+            cp_ledger=shared_report_data.get("counterparty_ledger") if shared_report_data else None,
+            shared_report_data=shared_report_data,
+        )
+        # If the user changed anything, rebuild the shared report data so
+        # the downloads below reflect the new related party list.
+        if rp_changed or not shared_report_data:
+            shared_report_data = build_shared_report_data(
+                serialized_transactions,
+                serialized_monthly_summary,
+                serialized_transaction_analysis,
+                high_value_threshold,
+            ) if serialized_transactions else {}
+            
     else:
         st.info("No line-item transactions extracted.")
     
