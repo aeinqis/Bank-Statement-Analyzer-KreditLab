@@ -9190,22 +9190,33 @@ if st.session_state.results:
         st.markdown("---")
         render_counterparty_ledger_table(df)
 
-        # Related Party Manager — must run BEFORE report generation
+        # Build serialized inputs and shared_report_data EARLY so the
+        # Related Party Manager and download buttons all use the same object.
+        serialized_transactions = make_json_serializable(st.session_state.results)
+        serialized_monthly_summary = make_json_serializable(monthly_summary)
+        serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
+        shared_report_data = build_shared_report_data(
+            serialized_transactions,
+            serialized_monthly_summary,
+            serialized_transaction_analysis,
+            high_value_threshold,
+        ) if serialized_transactions else {}
+
+        # Related Party Manager — runs after shared_report_data is ready
         st.markdown("---")
         rp_changed = render_related_party_manager(
-            cp_ledger=shared_report_data.get("counterparty_ledger") if shared_report_data else None,
+            cp_ledger=shared_report_data.get("counterparty_ledger"),
             shared_report_data=shared_report_data,
         )
-        # If the user changed anything, rebuild the shared report data so
-        # the downloads below reflect the new related party list.
-        if rp_changed or not shared_report_data:
+        # Rebuild if user made changes so downloads pick up the new RP list
+        if rp_changed:
             shared_report_data = build_shared_report_data(
                 serialized_transactions,
                 serialized_monthly_summary,
                 serialized_transaction_analysis,
                 high_value_threshold,
-            ) if serialized_transactions else {}
-            
+            )
+
     else:
         st.info("No line-item transactions extracted.")
     
@@ -9381,16 +9392,6 @@ if st.session_state.results:
             "application/json",
             use_container_width=True
         )
-
-    serialized_transactions = make_json_serializable(st.session_state.results)
-    serialized_monthly_summary = make_json_serializable(monthly_summary)
-    serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
-    shared_report_data = build_shared_report_data(
-        serialized_transactions,
-        serialized_monthly_summary,
-        serialized_transaction_analysis,
-        high_value_threshold,
-    ) if serialized_transactions else {}
 
     with col3:
         output = generate_excel_report(
