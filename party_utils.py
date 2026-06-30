@@ -20,7 +20,7 @@ GENERIC_PARTY_SUFFIX_TOKENS = {
 }
 
 PARTY_NUMERIC_TOKEN_RE = re.compile(r"\b\S*\d\S*\b")
-PERSON_NAME_MARKER_TOKENS = {"BIN", "BINTI", "B", "BT", "ANAK"}
+PERSON_NAME_MARKER_TOKENS = {"BIN", "BINT", "BINTE", "BINTI", "B", "BT", "ANAK"}
 TRANSACTION_DETAIL_SUFFIX_TOKENS = {
     "AC", "BERAM", "CASH", "CLAIM", "DELIVERY", "DET", "EC", "EXCEL",
     "FAREWELL", "GENERAL", "HOUSE", "INSURANCE", "INVOICE", "LABOUR", "PAYMENT",
@@ -45,7 +45,7 @@ COUNTERPARTY_CHANNEL_TOKENS = {
     "MBB", "HLBB", "RHB", "BSN", "PBB", "ABMB", "AMFB", "QTN", "POB",
     "CA", "X", "SST",
 }
-COUNTERPARTY_PERSON_CONNECTOR_TOKENS = {"BIN", "BINTI", "ANAK", "EN"}
+COUNTERPARTY_PERSON_CONNECTOR_TOKENS = {"BIN", "BINT", "BINTE", "BINTI", "ANAK", "EN"}
 COUNTERPARTY_COMPANY_SUFFIX_TOKENS = {"SDN", "BHD", "BERHAD"}
 COUNTERPARTY_NOISE_TOKENS = (
     COUNTERPARTY_DESCRIPTOR_TOKENS
@@ -64,7 +64,26 @@ COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS = {
     "REFUND", "CAR", "SERVICE", "THAILAND", "TRIP", "PIKM", "THE",
     "PARK", "RESIDENT", "UNIFORM", "RENT", "RENTAL", "HOUSE", "MEDICAL",
     "ALLOWANCE", "HOSTEL", "TRANSPORT", "PETROL", "TOLL", "PARKING",
+    "FAREWELL", "INSTALMENT", "INSTALLMENT", "BILL", "BILLS", "UTILITIES",
+    "WATER", "PHONE", "INTERNET", "MAINTENANCE", "REIMBURSEMENT",
+    "REIMBURSE", "EXPENSE", "EXPENSES",
 }
+COUNTERPARTY_PERSON_MEMO_PREFIX_TOKENS = {
+    "KETUA", "UNIT", "KESELAMAT", "KESELAMATAN", "JABATAN", "BAHAGIAN",
+    "DEPARTMENT", "DEPT", "DIVISION", "SECTION", "TEAM", "STAFF",
+    "PAYMENT", "BAYARAN", "CLAIM", "EXPENSE", "EXPENSES", "REIMBURSE",
+    "REIMBURSEMENT", "REFUND", "PETTY", "CASH", "BALANCE", "ADVANCE",
+}
+COUNTERPARTY_PERSON_NAME_START_TOKENS = {
+    "ABD", "ABDUL", "AHMAD", "AINA", "AISYAH", "DAYANG", "FATHIN",
+    "FATIN", "KHAIRUL", "MOHAMAD", "MOHAMED", "MOHAMMAD", "MOHD",
+    "MUHAMAD", "MUHAMMAD", "NOOR", "NOR", "NUR", "NURUL", "PUAN",
+    "SHAHARUDDIN", "SHAUFIAH", "SITI", "WAN",
+}
+COUNTERPARTY_MEMO_SUFFIX_LEADING_TOKENS = (
+    TRANSACTION_DETAIL_LEADING_TOKENS
+    | COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS
+)
 PERSON_TRANSACTION_DETAIL_SUFFIX_RE = re.compile(
     r"\s+(?:HOUSE\s+RENTAL|GENERAL\s+LABOUR|PETTY\s+CASH|EC\s+EXCEL|"
     r"CLAIM|MILEAGE|LOAN|ROADTAX|INSURANCE|RENTAL|TENDER|FAREWELL|"
@@ -123,6 +142,8 @@ def _normalise_counterparty(name: str) -> str:
         return "UNIDENTIFIED"
     n = name.upper().strip()
     n = re.sub(r"[.,;:]", " ", n)
+    n = re.sub(r"^(?:&\s+)+", "", n)
+    n = re.sub(r"(?:\s+&)+$", "", n)
     n = re.sub(r"^(?:PAYM|PAYMENT|SI)\s+", "", n).strip()
 
     # Legal entity suffixes are load-bearing for classification. Expand
@@ -318,14 +339,48 @@ def _collapse_adjacent_duplicate_tokens(tokens: List[str]) -> List[str]:
     return collapsed
 
 
-def _strip_person_memo_suffix_tokens(tokens: List[str]) -> List[str]:
+def _looks_like_person_name_base(tokens: List[str]) -> bool:
+    if len(tokens) < 2 or len(tokens) > 5:
+        return False
+    if any(token in COUNTERPARTY_COMPANY_SUFFIX_TOKENS for token in tokens):
+        return False
+    if tokens[0] in COUNTERPARTY_PERSON_NAME_START_TOKENS:
+        return True
+    return all(
+        token not in COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS
+        and token not in COUNTERPARTY_PERSON_MEMO_PREFIX_TOKENS
+        and token not in COUNTERPARTY_DESCRIPTOR_TOKENS
+        and token not in COUNTERPARTY_MONTH_TOKENS
+        for token in tokens
+    )
+
+
+def _strip_person_memo_prefix_tokens(tokens: List[str]) -> List[str]:
     if len(tokens) <= 3:
         return tokens
     if any(token in COUNTERPARTY_COMPANY_SUFFIX_TOKENS for token in tokens):
         return tokens
-    for keep_count in range(3, len(tokens)):
+    for start in range(1, min(5, len(tokens) - 1)):
+        prefix = tokens[:start]
+        remainder = tokens[start:]
+        if all(token in COUNTERPARTY_PERSON_MEMO_PREFIX_TOKENS for token in prefix) and _looks_like_person_name_base(remainder[:4]):
+            return remainder
+    return tokens
+
+
+def _strip_person_memo_suffix_tokens(tokens: List[str]) -> List[str]:
+    tokens = _strip_person_memo_prefix_tokens(tokens)
+    if len(tokens) <= 2:
+        return tokens
+    if any(token in COUNTERPARTY_COMPANY_SUFFIX_TOKENS for token in tokens):
+        return tokens
+    for keep_count in range(2, len(tokens)):
         suffix = tokens[keep_count:]
-        if suffix and all(token in COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS for token in suffix):
+        if not suffix:
+            continue
+        if keep_count == 2 and suffix[0] not in COUNTERPARTY_MEMO_SUFFIX_LEADING_TOKENS:
+            continue
+        if all(token in COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS for token in suffix) and _looks_like_person_name_base(tokens[:keep_count]):
             return tokens[:keep_count]
     return tokens
 

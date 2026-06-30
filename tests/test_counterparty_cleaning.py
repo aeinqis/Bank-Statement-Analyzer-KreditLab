@@ -78,12 +78,59 @@ class CounterpartyCleaningTests(unittest.TestCase):
         cleaned = deduplicate_counterparty_names(
             [
                 "DAYANG SITI RAUDZAH",
+                "& DAYANG SITI RAUDZAH",
                 "DAYANG SITI RAUDZAH CASH",
                 "DAYANG SITI RAUDZAH HOUSING LOAN",
                 "DAYANG SITI RAUDZAH OFFICE ELECTRICITY",
             ]
         )
-        self.assertEqual(cleaned, ["DAYANG SITI RAUDZAH"] * 4)
+        self.assertEqual(cleaned, ["DAYANG SITI RAUDZAH"] * 5)
+
+    def test_strips_description_noise_from_person_counterparties(self):
+        self.assertEqual(clean_counterparty_name("& DAYANG SITI RAUDZAH"), "DAYANG SITI RAUDZAH")
+        self.assertEqual(clean_counterparty_name("SHAHARUDDIN SAMS HOUSE INSTALMENT"), "SHAHARUDDIN SAMS")
+        self.assertEqual(clean_counterparty_name("SHAHARUDDIN SAMS INSTALMENT"), "SHAHARUDDIN SAMS")
+        self.assertEqual(
+            clean_counterparty_name("KETUA UNIT KESELAMAT DAYANG SURIATI BINT FAREWELL"),
+            "DAYANG SURIATI",
+        )
+
+    def test_ledger_groups_names_after_description_noise_stripping(self):
+        import pandas as pd
+
+        rows = pd.DataFrame(
+            [
+                {
+                    "date": "2026-01-01",
+                    "description": "TR IBG DAYANG SITI RAUDZAH",
+                    "party_name": "DAYANG SITI RAUDZAH",
+                    "credit": 0.0,
+                    "debit": 100.0,
+                    "source_file": "sample.pdf",
+                },
+                {
+                    "date": "2026-01-02",
+                    "description": "TR IBG DAYANG SITI RAUDZAH OFFICE ELECTRICITY",
+                    "party_name": "DAYANG SITI RAUDZAH OFFICE ELECTRICITY",
+                    "credit": 0.0,
+                    "debit": 50.0,
+                    "source_file": "sample.pdf",
+                },
+                {
+                    "date": "2026-01-03",
+                    "description": "TR IBG & DAYANG SITI RAUDZAH",
+                    "party_name": "& DAYANG SITI RAUDZAH",
+                    "credit": 0.0,
+                    "debit": 25.0,
+                    "source_file": "sample.pdf",
+                },
+            ]
+        )
+
+        party_tables = build_transactions_by_party(rows)
+        self.assertEqual(len(party_tables), 1)
+        self.assertEqual(party_tables[0]["party"], "DAYANG SITI RAUDZAH")
+        self.assertEqual(party_tables[0]["count"], 3)
 
     def test_cimb_rows_keep_raw_and_clean_counterparty_fields(self):
         rows = [
