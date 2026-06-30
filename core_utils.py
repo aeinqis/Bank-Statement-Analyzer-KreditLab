@@ -663,3 +663,74 @@ def present_monthly_summary_standard(rows: List[Dict[str, Any]]) -> List[Dict[st
             }
         )
     return out
+
+_COMPANY_SUFFIX_NORM_RE = re.compile(
+    r"\b(SB|SDN\s*\.?\s*BHD\.?|SDN\s*\.?\s*BH|SDN\s*\.?\s*B|SDN\.?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def normalize_company_suffix(name: Any) -> str:
+    """Restore truncated Malaysian "SDN BHD" tails to the canonical form.
+
+    Variants handled at end-of-string only:
+      "SB", "SDN", "SDN.", "SDN B", "SDN. B", "SDN B.",
+      "SDN BH", "SDN. BH", "SDN BHD", "SDN BHD.",
+      "SDN. BHD.", "SDN. BHD"  →  "SDN BHD"
+
+    Returns the original (stripped) string when no tail variant matches.
+    Empty / non-string input is coerced to "".
+    """
+    if not name:
+        return ""
+    s = str(name)
+    return _COMPANY_SUFFIX_NORM_RE.sub("SDN BHD", s).strip()
+
+# =========================================================
+# STOP-WORDS — names that should never survive as counterparty
+# =========================================================
+
+_MONTH_TOKENS: set = {
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "SEPT", "OCT", "NOV", "DEC",
+    "JANUARY", "FEBRUARY", "MARCH", "APRIL", "JUNE",
+    "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+}
+
+_PURPOSE_STOP_TOKENS: set = {
+    "BULK", "SALARY", "PAYMENT", "PAY", "TRANSFER", "TRF",
+    "FUND", "SETTLEMENT", "SETTLE",
+    "LOAN", "REPAYMENT", "ADVANCE",
+    "IBG", "ADVICE", "CREDIT", "DEBIT", "ACCOUNT",
+    "HUB", "MISC",
+    "DUITNOW", "FPX", "INSTANT",
+    "CR", "DR", "TO", "FROM", "FR",
+    "TRANSACTION", "TRANSACTIONS", "TRANS",
+    "DEPOSIT", "WITHDRAWAL", "CASH",
+    "INWARD", "OUTWARD",
+}
+
+
+def should_drop_as_counterparty(name: Any) -> bool:
+    """Return True if a cleaned counterparty name is actually just a purpose fragment /
+    month / stop word and should be dropped (transaction has no real counterparty).
+
+    Examples that return True:
+      "JAN FEB", "BULK", "LOAN REPAYMENT", "CR ADVICE", "PAYMENT TRANSFER",
+      "IBG TRANSACTION", "" (empty), "X" (too short), "123" (no letters).
+    """
+    s = normalize_text(name).upper()
+    if not s:
+        return True
+    if not re.search(r"[A-Z]", s):
+        return True
+    if len(s) <= 2:
+        return True
+    toks = s.split()
+    # all tokens are months (covers "JAN FEB" / "FEB MAR" etc.)
+    if toks and all(t in _MONTH_TOKENS for t in toks):
+        return True
+    # all tokens are purpose stop-words or months
+    if toks and all(t in _PURPOSE_STOP_TOKENS or t in _MONTH_TOKENS for t in toks):
+        return True
+    return False

@@ -7,7 +7,9 @@ from typing import Any, Callable, Dict, List, Tuple
 from core_utils import (
     display_transaction_date,
     normalize_text,
+    normalize_company_suffix as normalize_company_suffix_core,
     parse_any_date,
+    should_drop_as_counterparty,
     signed_amount_from_record,
 )
 
@@ -50,7 +52,6 @@ COUNTERPARTY_NOISE_TOKENS = (
     | COUNTERPARTY_MONTH_TOKENS
     | COUNTERPARTY_CHANNEL_TOKENS
     | COUNTERPARTY_PERSON_CONNECTOR_TOKENS
-    | COUNTERPARTY_COMPANY_SUFFIX_TOKENS
 )
 COUNTERPARTY_DATE_RE = re.compile(
     r"\b(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b"
@@ -70,6 +71,176 @@ PERSON_TRANSACTION_DETAIL_SUFFIX_RE = re.compile(
     r"PERUNTUKAN(?:\s+BAJET)?|BAJET)\b.*$",
     re.I,
 )
+_CP_NOISE_NAMES = {
+    "ACCOUNT",
+    "BANK",
+    "BULK",
+    "CREDIT",
+    "DEBIT",
+    "DUITNOW",
+    "FPX",
+    "FUND TRANSFER",
+    "IBG",
+    "INSTANT TRANSFER",
+    "PAYM",
+    "PAYMENT",
+    "TRANSFER",
+    "TRANSFER TO",
+    "TRANSFER FROM",
+}
+_OWN_PARTY_BOILER_SUFFIX = {
+    "SDN",
+    "BHD",
+    "BERHAD",
+    "LTD",
+    "LIMITED",
+    "PLT",
+    "LLP",
+    "ENTERPRISE",
+    "ENT",
+    "TRADING",
+    "RESOURCES",
+    "HOLDINGS",
+    "GROUP",
+    "COMPANY",
+    "CO",
+    "CORP",
+    "CORPORATION",
+    "INC",
+    "PRIVATE",
+}
+_OWN_PARTY_DESC_TOKEN_RE = re.compile(r"[A-Z0-9]+")
+
+
+def _normalise_counterparty(name: str) -> str:
+    """CP11 normalisation: uppercase, preserve legal suffixes, merge known variants.
+
+    Conservative: this does not do broad fragment/prefix merging. Wrong
+    normalisation is worse than duplicate buckets; aliasing handles close
+    variants later.
+    """
+    if not name:
+        return "UNIDENTIFIED"
+    n = name.upper().strip()
+    n = re.sub(r"[.,;:]", " ", n)
+    n = re.sub(r"^(?:PAYM|PAYMENT|SI)\s+", "", n).strip()
+
+    # Legal entity suffixes are load-bearing for classification. Expand
+    # truncated Malaysian company tails through the shared core utility.
+    n = normalize_company_suffix_core(n)
+    n = re.sub(r"\bBERHAD\b", "BHD", n)
+    n = re.sub(r"\bBER\b\.?(?=\s|$)", "BHD", n)
+
+    n = re.sub(r"\b(?:MAL|\(M\)|& CO)\b\.?", " ", n)
+    n = re.sub(r"\((?:SARAWAK|SABAH|MALAYSI[A]?|SAR|L|M)\b\)?", " ", n)
+    n = re.sub(r"\s+", " ", n).strip()
+
+    while True:
+        m2 = re.match(r"^(.*?)(?<=\s)(?:BH|SD|B|M|&|MALA|MALAY)\s*$", n)
+        if not m2:
+            break
+        n = m2.group(1).strip()
+        if not n:
+            break
+
+    if "PLANWORTH" in n:
+        return "PLANWORTH GLOBAL"
+    if n == "JANM" or n.startswith("JANM ") or " JANM" in f" {n} " or "JANM CAWANGAN" in n:
+        return "JANM"
+
+    if n in _CP_NOISE_NAMES or len(n) < 3 or should_drop_as_counterparty(n):
+        return "UNCATEGORIZED"
+
+    return n or "UNIDENTIFIED"
+
+
+def _own_party_core_tokens(own_party: Any) -> List[str]:
+    cleaned = _normalise_counterparty(normalize_text(own_party))
+    tokens = [
+        token
+        for token in _OWN_PARTY_DESC_TOKEN_RE.findall(cleaned)
+        if token not in _OWN_PARTY_BOILER_SUFFIX and not token.isdigit()
+    ]
+    return tokens
+
+
+def _own_party_token_matches(candidate: str, own_token: str) -> bool:
+    candidate = candidate.strip(" .,-/&()")
+    own_token = own_token.strip(" .,-/&()")
+    if not candidate or not own_token:
+        return False
+    if candidate == own_token:
+        return True
+    shorter, longer = sorted((candidate, own_token), key=len)
+    return len(shorter) >= 3 and longer.startswith(shorter) and len(longer) - len(shorter) <= 3
+
+
+def _strip_own_party_tokens(name: str, own_party: str) -> str:
+    """Strip statement-holder tokens from an extracted counterparty name.
+
+    Handles prefix, suffix, bracketing, and column-width truncation forms.
+    Requires at least two non-boilerplate holder tokens to match and keeps the
+    original name when the remainder would not contain a useful counterparty.
+    """
+    if not name or not own_party:
+        return name
+    name_up = _normalise_counterparty(name).split()
+    if not name_up:
+        return name
+    own_core = _own_party_core_tokens(own_party)
+    if len(own_core) < 2:
+        return name
+
+    min_matches = max(2, (len(own_core) + 1) // 2)
+    best_window: Tuple[int, int, int] | None = None
+
+    for start in range(len(name_up)):
+        for own_start in range(len(own_core)):
+            count = 0
+            while (
+                start + count < len(name_up)
+                and own_start + count < len(own_core)
+                and _own_party_token_matches(name_up[start + count], own_core[own_start + count])
+            ):
+                count += 1
+            if count < min_matches:
+                continue
+            end = start + count
+            own_tokens = set(_OWN_PARTY_DESC_TOKEN_RE.findall(str(own_party).upper()))
+            while end < len(name_up) and name_up[end] in _OWN_PARTY_BOILER_SUFFIX and name_up[end] in own_tokens:
+                end += 1
+            expanded_start = start
+            while (
+                expanded_start > 0
+                and name_up[expanded_start - 1] in _OWN_PARTY_BOILER_SUFFIX
+                and name_up[expanded_start - 1] in own_tokens
+            ):
+                expanded_start -= 1
+            rank = (end - expanded_start, count)
+            if best_window is None or rank > (best_window[1] - best_window[0], best_window[2]):
+                best_window = (expanded_start, end, count)
+
+    if best_window is None:
+        return name
+
+    start, end, _count = best_window
+    remainder = " ".join(name_up[:start] + name_up[end:]).strip()
+    if len(remainder) < 3 or should_drop_as_counterparty(remainder):
+        return name
+
+    return remainder
+
+
+def _description_implies_own_party(desc: str, own_party: str) -> bool:
+    """Return True iff at least two holder core tokens and >=50% of them are in desc."""
+    own_core = _own_party_core_tokens(own_party)
+    if len(own_core) < 2:
+        return False
+    desc_tokens = set(_OWN_PARTY_DESC_TOKEN_RE.findall(str(desc).upper()))
+    if not desc_tokens:
+        return False
+    matched = sum(1 for token in own_core if token in desc_tokens)
+    return matched >= 2 and matched / len(own_core) >= 0.5
 
 
 def normalize_company_suffix(name: Any) -> str:
@@ -163,9 +334,8 @@ def clean_counterparty_name(raw_name: Any) -> str:
     """Return a reusable display/matching name for noisy counterparty strings.
 
     The cleaner strips transaction descriptors, month prefixes, channel
-    suffixes, Malay personal-name connectors, company suffixes, and reference
-    fragments while preserving meaningful company punctuation such as ``&``
-    and parentheses.
+    suffixes, Malay personal-name connectors, and reference fragments while
+    preserving legal company suffixes such as SDN BHD / BHD / LTD.
     """
     raw = normalize_text(raw_name).upper()
     if not raw or raw in {"UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}:
@@ -176,6 +346,7 @@ def clean_counterparty_name(raw_name: Any) -> str:
     raw = COUNTERPARTY_DATE_RE.sub(" ", raw)
     raw = raw.replace(".", " ")
     raw = COUNTERPARTY_ALLOWED_PUNCT_RE.sub(" ", raw)
+    raw = normalize_company_suffix_core(raw)
     raw = re.sub(r"\s+", " ", raw).strip()
     if not raw:
         return "UNKNOWN"
@@ -197,7 +368,8 @@ def clean_counterparty_name(raw_name: Any) -> str:
     tokens = _strip_person_memo_suffix_tokens(tokens)
     tokens = _collapse_adjacent_duplicate_tokens(tokens)
     cleaned = normalize_text(" ".join(tokens)).strip()
-    return cleaned or "UNKNOWN"
+    cleaned = _normalise_counterparty(cleaned)
+    return "UNKNOWN" if cleaned == "UNIDENTIFIED" else cleaned or "UNKNOWN"
 
 
 def _last_token_prefix_match(a_tokens: List[str], b_tokens: List[str]) -> bool:
@@ -287,6 +459,31 @@ def deduplicate_counterparty_names(
     return [alias_map.get(name, name) for name in cleaned]
 
 
+def normalise_counterparty_for_ledger(
+    raw_name: Any,
+    *,
+    own_party: Any = "",
+    description: Any = "",
+) -> str:
+    """Return the canonical counterparty bucket used by the Counterparty Ledger."""
+    cleaned = clean_counterparty_name(raw_name)
+    normalised = _normalise_counterparty(cleaned)
+
+    if own_party:
+        stripped = _strip_own_party_tokens(normalised, normalize_text(own_party))
+        if stripped != normalised:
+            normalised = _normalise_counterparty(stripped)
+        elif (
+            normalised in {"UNKNOWN", "UNIDENTIFIED", "UNCATEGORIZED"}
+            and _description_implies_own_party(normalize_text(description), normalize_text(own_party))
+        ):
+            normalised = "OWN PARTY"
+
+    if normalised == "UNIDENTIFIED":
+        return "UNKNOWN"
+    return normalised or "UNKNOWN"
+
+
 def canonicalize_party_name(name: Any) -> str:
     cleaned = normalize_company_suffix(_strip_person_transaction_detail_suffix(_strip_numeric_party_tokens(name)))
     if not cleaned:
@@ -298,7 +495,8 @@ def canonicalize_party_name(name: Any) -> str:
     if re.fullmatch(r"(?:TM\s+)?UNIFI", cleaned, re.I):
         return "UNIFI"
 
-    return cleaned
+    normalised = _normalise_counterparty(cleaned)
+    return "UNKNOWN" if normalised == "UNIDENTIFIED" else normalised
 
 
 def looks_like_suspicious_short_party(name: Any) -> bool:
@@ -598,13 +796,23 @@ def apply_party_aliasing(party_series: Any):
 
 
 def _resolve_group_party_name(row: Any, fallback_party_extractor: Callable[[Any], str] | None = None) -> str:
-    candidate = normalize_text(row.get("party_name")).upper()
+    own_party = normalize_text(row.get("company_name"))
+    description = normalize_text(row.get("description"))
+    candidate = normalise_counterparty_for_ledger(
+        row.get("party_name"),
+        own_party=own_party,
+        description=description,
+    )
 
     if candidate and not looks_like_suspicious_short_party(candidate):
         return candidate
 
     if callable(fallback_party_extractor):
-        fallback = normalize_text(fallback_party_extractor(normalize_text(row.get("description")))).upper()
+        fallback = normalise_counterparty_for_ledger(
+            fallback_party_extractor(description),
+            own_party=own_party,
+            description=description,
+        )
         if fallback:
             return fallback
 
@@ -647,8 +855,13 @@ def build_transactions_by_party(
             axis=1,
         )
     elif callable(fallback_party_extractor):
-        party_df["group_party"] = party_df["description"].apply(
-            lambda value: fallback_party_extractor(normalize_text(value))
+        party_df["group_party"] = party_df.apply(
+            lambda row: normalise_counterparty_for_ledger(
+                fallback_party_extractor(normalize_text(row.get("description"))),
+                own_party=normalize_text(row.get("company_name")),
+                description=normalize_text(row.get("description")),
+            ),
+            axis=1,
         )
     else:
         party_df["group_party"] = "UNKNOWN"

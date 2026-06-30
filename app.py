@@ -23,6 +23,7 @@ from party_utils import (
     build_transactions_by_party,
     clean_counterparty_name,
     deduplicate_counterparty_names,
+    normalise_counterparty_for_ledger,
 )
 
 from maybank import parse_transactions_maybank
@@ -7238,21 +7239,30 @@ def prepare_counterparty_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     prepared = df.copy()
     resolved_names = []
+    ledger_names = []
     matched_flags = []
     for _idx, row in prepared.iterrows():
         counterparty, matched = _resolve_transaction_counterparty_details(row)
         resolved_names.append(counterparty)
+        ledger_names.append(
+            normalise_counterparty_for_ledger(
+                counterparty,
+                own_party=row.get("company_name", ""),
+                description=row.get("description", ""),
+            )
+        )
         matched_flags.append(bool(matched))
 
     raw_series = pd.Series(resolved_names, index=prepared.index, dtype="object")
+    ledger_input_series = pd.Series(ledger_names, index=prepared.index, dtype="object")
     try:
-        clean_names = deduplicate_counterparty_names(raw_series.fillna("").astype(str).tolist())
+        clean_names = deduplicate_counterparty_names(ledger_input_series.fillna("").astype(str).tolist())
         grouped_series = pd.Series(clean_names, index=prepared.index, dtype="object")
     except Exception:
         try:
-            grouped_series = apply_party_aliasing(raw_series)
+            grouped_series = apply_party_aliasing(ledger_input_series)
         except Exception:
-            grouped_series = raw_series
+            grouped_series = ledger_input_series
 
     grouped_series = grouped_series.apply(lambda value: normalize_counterparty_value(value) or "UNKNOWN")
     grouped_series = pd.Series(
