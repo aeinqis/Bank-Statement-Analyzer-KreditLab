@@ -36,6 +36,15 @@ COUNTERPARTY_DESCRIPTOR_TOKENS = {
     "INVOICES", "PAYMENT", "BALANCE", "TOKEN", "AWARD", "TOPUP", "REF",
     "INV", "POLICY", "NO", "ACC", "ACCOUNT", "TRANSFER", "MONTHLY",
     "INCENTIVE",
+    # Malaysian admin / licensing / stamping purpose words — these describe
+    # *why* money moved, not *who* it moved to/from. Stripping them lets
+    # the underlying person/company name survive intact for grouping.
+    "ADJUST", "ADJUSTMENT", "STAMP", "STAMPING", "STAMPS", "DUTI", "SETEM",
+    "PEMBAHARUAN", "LSEN", "LESEN", "LICENSE", "LICENCE", "KDN", "RUJ",
+    "RUJUKAN", "SIGN", "SURAT", "PGM", "PROGRAM", "MPC", "MSSB", "TRADE",
+    "HOSTEL", "MELAKA", "MELAKA.", "TM",
+    "SHARE", "CAPITAL", "CAP", "SHARECAP", "SHARECAPITAL",
+    "AND", "BOULEV", "BOULEVARD", "TRIENEKEN",
 }
 COUNTERPARTY_MONTH_TOKENS = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
