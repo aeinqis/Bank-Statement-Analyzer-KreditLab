@@ -2,6 +2,7 @@ import unittest
 
 from cimb import annotate_cimb_counterparties
 from party_utils import (
+    _merge_counterparty_groups,
     build_transactions_by_party,
     clean_counterparty_name,
     deduplicate_counterparty_names,
@@ -131,6 +132,67 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(len(party_tables), 1)
         self.assertEqual(party_tables[0]["party"], "DAYANG SITI RAUDZAH")
         self.assertEqual(party_tables[0]["count"], 3)
+
+    def test_iterative_counterparty_group_merge_preserves_totals(self):
+        groups = {
+            "FATHIN SYAIRAH NAJL": {
+                "counterparty_name": "FATHIN SYAIRAH NAJL",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "credit_count": 1,
+                "debit_count": 0,
+                "transaction_count": 1,
+                "transactions": [{"description": "A"}],
+            },
+            "FATHIN SYAIRAH NAJLA": {
+                "counterparty_name": "FATHIN SYAIRAH NAJLA",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "credit_count": 0,
+                "debit_count": 1,
+                "transaction_count": 1,
+                "transactions": [{"description": "B"}],
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(list(merged.keys()), ["FATHIN SYAIRAH NAJLA"])
+        row = merged["FATHIN SYAIRAH NAJLA"]
+        self.assertEqual(row["total_credits"], 10.0)
+        self.assertEqual(row["total_debits"], 5.0)
+        self.assertEqual(row["transaction_count"], 2)
+        self.assertEqual(len(row["transactions"]), 2)
+
+    def test_build_transactions_by_party_applies_iterative_merge(self):
+        import pandas as pd
+
+        rows = pd.DataFrame(
+            [
+                {
+                    "date": "2026-01-01",
+                    "description": "TR IBG FATHIN SYAIRAH NAJL",
+                    "party_name": "FATHIN SYAIRAH NAJL",
+                    "credit": 0.0,
+                    "debit": 100.0,
+                    "source_file": "sample.pdf",
+                },
+                {
+                    "date": "2026-01-02",
+                    "description": "TR IBG FATHIN SYAIRAH NAJLA",
+                    "party_name": "FATHIN SYAIRAH NAJLA",
+                    "credit": 25.0,
+                    "debit": 0.0,
+                    "source_file": "sample.pdf",
+                },
+            ]
+        )
+
+        party_tables = build_transactions_by_party(rows)
+        self.assertEqual(len(party_tables), 1)
+        self.assertEqual(party_tables[0]["party"], "FATHIN SYAIRAH NAJLA")
+        self.assertEqual(party_tables[0]["count"], 2)
+        self.assertEqual(party_tables[0]["total_credit"], 25.0)
+        self.assertEqual(party_tables[0]["total_debit"], 100.0)
 
     def test_cimb_rows_keep_raw_and_clean_counterparty_fields(self):
         rows = [

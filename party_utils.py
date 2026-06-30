@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from difflib import SequenceMatcher
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core_utils import (
     display_transaction_date,
@@ -798,7 +798,7 @@ def build_party_alias_map(party_names: List[str]) -> Dict[str, str]:
                     and len(longer) - len(shorter) <= 3
                     and longer.startswith(shorter)
                 ):
-                    canonical_name = base_name if len(base_name) <= len(candidate_name) else candidate_name
+                    canonical_name = base_name if len(base_name) >= len(candidate_name) else candidate_name
                     alias_map[base_name] = canonical_name
                     alias_map[candidate_name] = canonical_name
                     continue
@@ -877,6 +877,329 @@ def _resolve_group_party_name(row: Any, fallback_party_extractor: Callable[[Any]
     return "UNKNOWN"
 
 
+_CP_MERGE_PROTECTED = {
+    "UNIDENTIFIED",
+    "UNIDENTIFIED (CHEQUE)",
+    "CASH DEPOSIT",
+    "CASH WITHDRAWAL",
+    "RETURNED CHEQUE",
+    "INWARD RETURN",
+    "REVERSAL",
+    "FD/INTEREST",
+    "BANK FEES",
+    "BULK SALARY",
+    "JANM",
+    "PLANWORTH GLOBAL",
+    "UNCATEGORIZED",
+}
+
+
+def _cp_tokens(name: str) -> List[str]:
+    return _cp_merge_key(name).split()
+
+
+def _cp_merge_key(name: Any) -> str:
+    cleaned = normalise_counterparty_for_ledger(name)
+    cleaned = re.sub(r"[^A-Z0-9\s]", " ", cleaned.upper())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if cleaned in {"UNKNOWN", "UNIDENTIFIED"}:
+        return ""
+    return cleaned
+
+
+def _cp_count(group: dict) -> int:
+    count = int(float(group.get("transaction_count") or group.get("count") or 0))
+    if count:
+        return count
+    credit_count = int(float(group.get("credit_count") or group.get("credit_tx_count") or 0))
+    debit_count = int(float(group.get("debit_count") or group.get("debit_tx_count") or 0))
+    if credit_count or debit_count:
+        return credit_count + debit_count
+    transactions = group.get("transactions")
+    if isinstance(transactions, list):
+        return len(transactions)
+    table = group.get("table")
+    try:
+        return int(len(table)) if table is not None else 0
+    except Exception:
+        return 0
+
+
+def _cp_volume(group: dict) -> float:
+    credit = float(group.get("total_credits") or group.get("total_credit") or 0.0)
+    debit = float(group.get("total_debits") or group.get("total_debit") or 0.0)
+    return abs(credit) + abs(debit)
+
+
+def _cp_score(group: dict) -> Tuple[int, int, float]:
+    name = str(group.get("counterparty_name") or group.get("party") or "")
+    return (_cp_count(group), len(name), _cp_volume(group))
+
+
+def _cp_add_numeric(target: dict, source: dict, singular_key: str, plural_key: str) -> None:
+    source_value = float(source.get(singular_key) or source.get(plural_key) or 0.0)
+    if singular_key in target or singular_key in source:
+        target[singular_key] = round(float(target.get(singular_key) or 0.0) + source_value, 2)
+    if plural_key in target or plural_key in source:
+        target[plural_key] = round(float(target.get(plural_key) or 0.0) + source_value, 2)
+
+
+def _cp_absorb(target: dict, source: dict) -> None:
+    target_name = str(target.get("counterparty_name") or target.get("party") or "").strip()
+
+    _cp_add_numeric(target, source, "total_credit", "total_credits")
+    _cp_add_numeric(target, source, "total_debit", "total_debits")
+
+    source_count = _cp_count(source)
+    if "count" in target or "count" in source:
+        target["count"] = int(target.get("count") or 0) + source_count
+    if "transaction_count" in target or "transaction_count" in source:
+        target["transaction_count"] = int(target.get("transaction_count") or 0) + source_count
+
+    for key in ("credit_count", "debit_count", "pattern_matched", "special_bucket", "raw_fallback"):
+        if key in target or key in source:
+            target[key] = int(target.get(key) or 0) + int(source.get(key) or 0)
+
+    if "sort_volume" in target or "sort_volume" in source:
+        target["sort_volume"] = round(float(target.get("sort_volume") or 0.0) + float(source.get("sort_volume") or _cp_volume(source)), 2)
+
+    if "net_position" in target or "net_position" in source:
+        credit = float(target.get("total_credits") or target.get("total_credit") or 0.0)
+        debit = float(target.get("total_debits") or target.get("total_debit") or 0.0)
+        target["net_position"] = round(credit - debit, 2)
+
+    target["is_related_party"] = bool(target.get("is_related_party")) or bool(source.get("is_related_party"))
+
+    if "raw_names" in target or "raw_names" in source:
+        raw_names = set()
+        for value in (target.get("raw_names"), source.get("raw_names")):
+            if isinstance(value, set):
+                raw_names.update(value)
+            elif isinstance(value, list):
+                raw_names.update(value)
+            elif value:
+                raw_names.add(str(value))
+        source_name = source.get("counterparty_name") or source.get("party")
+        if source_name:
+            raw_names.add(str(source_name))
+        target["raw_names"] = raw_names
+
+    target_transactions = target.setdefault("transactions", []) if "transactions" in target or "transactions" in source else None
+    if isinstance(target_transactions, list):
+        for txn in source.get("transactions", []) or []:
+            if not isinstance(txn, dict):
+                continue
+            txn_copy = dict(txn)
+            if target_name:
+                txn_copy["counterparty_name_clean"] = target_name
+                txn_copy["counterparty_name"] = target_name
+                txn_copy["party_name"] = target_name
+            target_transactions.append(txn_copy)
+
+    if "table" in target or "table" in source:
+        target_table = target.get("table")
+        source_table = source.get("table")
+        if target_table is None:
+            target["table"] = source_table
+        elif source_table is not None:
+            try:
+                import pandas as pd
+
+                target["table"] = pd.concat([target_table, source_table], ignore_index=True)
+            except Exception:
+                pass
+
+
+def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
+    """Iterative M1-M6 counterparty merge for ledger buckets.
+
+    Preserves total credit/debit invariants: every transaction stays assigned
+    to exactly one counterparty; only the group key changes.
+    """
+
+    def _is_protected(name: str) -> bool:
+        return name.upper() in _CP_MERGE_PROTECTED
+
+    for _iteration in range(5):
+        merged_any = False
+        names = list(groups.keys())
+
+        by_key: Dict[str, List[str]] = {}
+        for n in names:
+            if _is_protected(n):
+                continue
+            k = _cp_merge_key(n)
+            if not k:
+                continue
+            by_key.setdefault(k, []).append(n)
+        for _k, variants in by_key.items():
+            if len(variants) < 2:
+                continue
+            variants.sort(key=lambda nm: _cp_score(groups[nm]), reverse=True)
+            survivor = variants[0]
+            for loser in variants[1:]:
+                if loser in groups and survivor in groups and loser != survivor:
+                    _cp_absorb(groups[survivor], groups[loser])
+                    del groups[loser]
+                    merged_any = True
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        keys = {n: _cp_merge_key(n) for n in names}
+        toks = {n: _cp_tokens(n) for n in names}
+        names_sorted = sorted(names, key=lambda nm: len(keys[nm]), reverse=True)
+
+        for short in list(names):
+            if short not in groups:
+                continue
+            sk = keys.get(short, "")
+            if len(sk) < 10:
+                continue
+            for long in names_sorted:
+                if long == short or long not in groups or short not in groups:
+                    continue
+                lk = keys.get(long, "")
+                if len(lk) <= len(sk):
+                    continue
+                if lk.startswith(sk) and (len(lk) == len(sk) or lk[len(sk)] == " "):
+                    survivor, loser = (long, short) if _cp_score(groups[long]) >= _cp_score(groups[short]) else (short, long)
+                    _cp_absorb(groups[survivor], groups[loser])
+                    del groups[loser]
+                    merged_any = True
+                    break
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        toks = {n: _cp_tokens(n) for n in names}
+
+        def _bin_split(tok_list: List[str]) -> Optional[Tuple[List[str], str, List[str]]]:
+            for i, t in enumerate(tok_list):
+                if t in ("BIN", "BINTI", "BT", "BTE"):
+                    return tok_list[:i], t, tok_list[i + 1:]
+            return None
+
+        name_list = list(names)
+        for i, a in enumerate(name_list):
+            if a not in groups:
+                continue
+            pa = _bin_split(toks.get(a, []))
+            if not pa:
+                continue
+            for b in name_list[i + 1:]:
+                if b not in groups or a not in groups:
+                    continue
+                pb = _bin_split(toks.get(b, []))
+                if not pb:
+                    continue
+                fa, _, sa = pa
+                fb, _, sb = pb
+                if fa != fb or not sa or not sb:
+                    continue
+                x, y = sa[0], sb[0]
+                if x == y:
+                    continue
+                short_tok, long_tok = (x, y) if len(x) < len(y) else (y, x)
+                if 3 <= len(short_tok) <= 4 and long_tok.startswith(short_tok):
+                    survivor, loser = (a, b) if _cp_score(groups[a]) >= _cp_score(groups[b]) else (b, a)
+                    _cp_absorb(groups[survivor], groups[loser])
+                    del groups[loser]
+                    merged_any = True
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        toks = {n: _cp_tokens(n) for n in names}
+
+        for a in list(names):
+            if a not in groups:
+                continue
+            ta = toks.get(a, [])
+            if len(ta) != 2:
+                continue
+            first_a, surn_a = ta
+            for b in list(names):
+                if b == a or b not in groups or a not in groups:
+                    continue
+                pb = _bin_split(toks.get(b, []))
+                if not pb:
+                    continue
+                fb, _, sb = pb
+                if not fb or fb[0] != first_a or not sb:
+                    continue
+                sa_full = surn_a
+                sb_full = sb[0]
+                if sa_full == sb_full or sa_full.startswith(sb_full) or sb_full.startswith(sa_full):
+                    if 3 <= min(len(sa_full), len(sb_full)):
+                        survivor, loser = (a, b) if _cp_score(groups[a]) >= _cp_score(groups[b]) else (b, a)
+                        _cp_absorb(groups[survivor], groups[loser])
+                        del groups[loser]
+                        merged_any = True
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        keys = {n: _cp_merge_key(n) for n in names}
+
+        for short in list(names):
+            if short not in groups:
+                continue
+            sk = keys.get(short, "")
+            stoks = sk.split()
+            if len(stoks) < 2:
+                continue
+            g_short = groups[short]
+            if _cp_count(g_short) < 2:
+                continue
+            for long in list(names):
+                if long == short or long not in groups or short not in groups:
+                    continue
+                lk = keys.get(long, "")
+                ltoks = lk.split()
+                if len(ltoks) <= len(stoks):
+                    continue
+                found = False
+                for i in range(0, len(ltoks) - len(stoks) + 1):
+                    if ltoks[i:i + len(stoks)] == stoks:
+                        found = True
+                        break
+                if not found:
+                    continue
+                survivor, loser = (long, short) if _cp_score(groups[long]) >= _cp_score(groups[short]) else (short, long)
+                _cp_absorb(groups[survivor], groups[loser])
+                del groups[loser]
+                merged_any = True
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        toks = {n: _cp_tokens(n) for n in names}
+
+        name_list = list(names)
+        for i, a in enumerate(name_list):
+            if a not in groups:
+                continue
+            ta = toks.get(a, [])
+            if len(ta) < 2:
+                continue
+            for b in name_list[i + 1:]:
+                if b not in groups or a not in groups:
+                    continue
+                tb = toks.get(b, [])
+                if len(tb) != len(ta):
+                    continue
+                if ta[:-1] != tb[:-1]:
+                    continue
+                xa, xb = ta[-1], tb[-1]
+                if xa == xb:
+                    continue
+                short_tok, long_tok = (xa, xb) if len(xa) < len(xb) else (xb, xa)
+                if not long_tok.startswith(short_tok):
+                    continue
+                if len(short_tok) < 3 and len(ta) < 3:
+                    continue
+                survivor, loser = (a, b) if _cp_score(groups[a]) >= _cp_score(groups[b]) else (b, a)
+                _cp_absorb(groups[survivor], groups[loser])
+                del groups[loser]
+                merged_any = True
+
+        if not merged_any:
+            break
+
+    return groups
+
+
 def build_transactions_by_party(
     df: Any,
     fallback_party_extractor: Callable[[Any], str] | None = None,
@@ -952,6 +1275,8 @@ def build_transactions_by_party(
             {
                 "party": str(party or "UNKNOWN"),
                 "count": int(len(group)),
+                "credit_count": int((group["credit"] > 0).sum()),
+                "debit_count": int((group["debit"] > 0).sum()),
                 "total_credit": round(float(group["credit"].sum()), 2),
                 "total_debit": round(float(group["debit"].sum()), 2),
                 "sort_volume": round(float(group["credit"].sum() + group["debit"].sum()), 2),
@@ -959,7 +1284,11 @@ def build_transactions_by_party(
             }
         )
 
-    return grouped_tables
+    merged_groups = _merge_counterparty_groups({item["party"]: item for item in grouped_tables})
+    return sorted(
+        merged_groups.values(),
+        key=lambda item: str(item.get("party") or "UNKNOWN").casefold(),
+    )
 
 
 def build_top_parties_tables(party_tables: List[Dict[str, Any]], limit: int = 5):

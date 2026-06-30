@@ -19,6 +19,7 @@ from core_utils import (
 )
 from transaction_analysis import parse_top_parties_and_high_value
 from party_utils import (
+    _merge_counterparty_groups,
     apply_party_aliasing,
     build_transactions_by_party,
     clean_counterparty_name,
@@ -3448,6 +3449,13 @@ def build_canonical_counterparty_ledger_rows(cp_ledger: dict) -> List[dict]:
                 txn_copy = dict(txn)
                 txn_copy["counterparty_name_clean"] = clean_name
                 merged["transactions"].append(txn_copy)
+
+    merged_counterparties = _merge_counterparty_groups(
+        {
+            str(cp.get("counterparty_name") or "UNKNOWN"): cp
+            for cp in merged_counterparties.values()
+        }
+    )
 
     rows = []
     for cp in merged_counterparties.values():
