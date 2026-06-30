@@ -17,7 +17,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from party_utils import clean_counterparty_name, deduplicate_counterparty_names
-
+from core_utils import should_drop_as_counterparty
 
 # -----------------------------
 # Regex
@@ -184,8 +184,9 @@ def normalize_cimb_party_name(name: str) -> str:
     cleaned = re.sub(r"\bSDN\.?\s*BHD\.?$", "SDN BHD", cleaned)
     cleaned = strip_cimb_person_purpose_suffix(cleaned)
 
-    return cleaned or "UNKNOWN"
-
+    if not cleaned or should_drop_as_counterparty(cleaned):
+        return "UNKNOWN"
+    return cleaned
 
 def strip_cimb_person_purpose_suffix(name: str) -> str:
     cleaned = clean_text(name).upper()
@@ -208,7 +209,9 @@ def normalize_cimb_rule_party_name(name: str) -> str:
     cleaned = re.sub(r"\bSDN\.?\s*BHD\.?$", "SDN BHD", cleaned)
     cleaned = strip_cimb_person_purpose_suffix(cleaned)
 
-    return cleaned or "UNKNOWN"
+    if not cleaned or should_drop_as_counterparty(cleaned):
+        return "UNKNOWN"
+    return cleaned
 
 
 def extract_cimb_trailing_uppercase_party(text: str) -> str:
