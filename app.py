@@ -9183,6 +9183,11 @@ if st.session_state.results:
     
     # Convert results to DataFrame
     df = pd.DataFrame(st.session_state.results) if st.session_state.results else pd.DataFrame()
+    monthly_summary = []
+    transaction_analysis_report = {}
+    serialized_monthly_summary = []
+    serialized_transaction_analysis = {}
+    shared_report_data = {}
     
     if not df.empty:
         # Run fraud/pattern checks
@@ -9220,6 +9225,14 @@ if st.session_state.results:
             if hasattr(obj, 'isoformat'):
                 return obj.isoformat()
             return obj
+
+        transaction_analysis_report = parse_top_parties_and_high_value(
+            st.session_state.results,
+            top_n=10,
+            high_value_threshold=high_value_threshold,
+        )
+        monthly_summary_raw = calculate_monthly_summary(st.session_state.results)
+        monthly_summary = present_monthly_summary_standard(monthly_summary_raw)
 
         # Build serialized inputs and shared_report_data EARLY so the
         # Related Party Manager and download buttons all use the same object.
@@ -9279,16 +9292,6 @@ if st.session_state.results:
                             if detail:
                                 st.json(detail)
     
-    # Original transaction analysis from existing code
-    transaction_analysis_report = parse_top_parties_and_high_value(
-        st.session_state.results,
-        top_n=10,
-        high_value_threshold=high_value_threshold,
-    )
-
-    monthly_summary_raw = calculate_monthly_summary(st.session_state.results)
-    monthly_summary = present_monthly_summary_standard(monthly_summary_raw)
-
     if monthly_summary:
         st.subheader("📅 Monthly Summary (Standardized)")
         summary_df = pd.DataFrame(monthly_summary)
