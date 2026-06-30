@@ -59,6 +59,7 @@ CIMB_SKIP_PARTY_LINES_RE = re.compile(
 CIMB_COUNTERPARTY_RULES = [
     (re.compile(r"\b(?:CHQ|CHEQUE)\b", re.I), "CHEQUE"),
     (re.compile(r"^(?:CDM\s+)?CASH\s+DEPOSIT$", re.I), "CASH DEPOSIT"),
+    (re.compile(r"\b(?:CHG|CHARGE|TAX|SST)\b", re.I), "SERVICE CHARGE"),
     (re.compile(r"^JOMPAY\s+(?P<counterparty>\S+).*$", re.I), None),
     (
         re.compile(
@@ -108,6 +109,13 @@ CIMB_COUNTERPARTY_RULES = [
     (
         re.compile(
             r"^I-PAYMENT\s+FPXPAY\s+(?P<counterparty>.+?)(?:\s+[A-Z]?\d{6,}.*)?$",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            r"^I-PYMT TO\s+CCARD\s+(?P<counterparty>.+?)(?:\s+[A-Z]?\d{6,}.*)?$",
             re.I,
         ),
         None,
