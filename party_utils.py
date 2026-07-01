@@ -54,7 +54,9 @@ COUNTERPARTY_CHANNEL_TOKENS = {
     "MBB", "HLBB", "RHB", "BSN", "PBB", "ABMB", "AMFB", "QTN", "POB",
     "CA", "X", "SST", "CIMB", 
 }
-COUNTERPARTY_PERSON_CONNECTOR_TOKENS = {"BIN", "BINT", "BINTE", "BINTI", "ANAK", "EN"}
+COUNTERPARTY_PERSON_CONNECTOR_TOKENS = {
+    "B", "BIN", "BINT", "BINTE", "BINTI", "BT", "BTE", "ANAK", "EN"
+}
 COUNTERPARTY_COMPANY_SUFFIX_TOKENS = {"SDN", "BHD", "BERHAD"}
 COUNTERPARTY_BANK_NAME_PHRASES: Tuple[Tuple[str, ...], ...] = tuple(
     sorted(
@@ -136,9 +138,10 @@ COUNTERPARTY_DATE_RE = re.compile(
 )
 COUNTERPARTY_REF_TOKEN_RE = re.compile(r"^(?:INV|REF|NO|ACC|ACCOUNT)?\d{2,}[A-Z0-9]*$")
 COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
-COUNTERPARTY_SDN_MARKER_TOKENS = {"SB", "SD", "SDN", "SND", "SN"}
+COUNTERPARTY_SDN_MARKER_TOKENS = {"MTSB", "SB", "SD", "SDN", "SND", "SN"}
 COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS = {
-    "CASH", "CLAIM", "CLEANER", "EAST", "COAST", "TRAVEL", "HOUSING",
+    "CARD", "CASH", "CC", "CCARD", "CLAIM", "CLEANER", "CREDIT",
+    "EAST", "COAST", "TRAVEL", "HOUSING",
     "LOAN", "LAPTOP", "MMU", "FEES", "FEE", "OFFICE", "ELECTRICITY",
     "REFUND", "CAR", "SERVICE", "THAILAND", "TRIP", "PIKM", "THE",
     "PARK", "RESIDENT", "UNIFORM", "RENT", "RENTAL", "HOUSE", "MEDICAL",
@@ -356,7 +359,7 @@ def normalize_company_suffix(name: Any) -> str:
 
         if token_core == "SN" and not tokens:
             token = "SN"
-        elif token_core in {"SB", "SN", "SND", "SD", "SDN"}:
+        elif token_core in {"MTSB", "SB", "SN", "SND", "SD", "SDN"}:
             token = "SDN"
         elif token_core in {"BH", "BDH", "B", "BHD"} and any(existing == "SDN" for existing in tokens):
             token = "BHD"
@@ -1063,6 +1066,39 @@ CP_SHARED_TOKEN_EXCLUDE = (
     | COUNTERPARTY_BANK_LEGAL_TAIL_TOKENS
     | {"UNKNOWN", "UNIDENTIFIED", "UNCATEGORIZED"}
 )
+CP_PREFIX_ALLOWED_SUFFIX_TOKENS = (
+    COUNTERPARTY_COMPANY_SUFFIX_TOKENS
+    | COUNTERPARTY_BANK_STANDALONE_TOKENS
+    | COUNTERPARTY_BANK_GENERIC_TOKENS
+    | COUNTERPARTY_BANK_LEGAL_TAIL_TOKENS
+    | CP_PERSON_MARKER_TOKENS
+    | {
+        "CAP",
+        "CAPITAL",
+        "CARD",
+        "CASH",
+        "CC",
+        "CCARD",
+        "CEO",
+        "CREDIT",
+        "PAYMENT",
+        "PETTY",
+        "SHARE",
+    }
+)
+CP_PERSON_SUFFIX_NOISE_TOKENS = {
+    "CAP",
+    "CAPITAL",
+    "CARD",
+    "CASH",
+    "CC",
+    "CCARD",
+    "CEO",
+    "CREDIT",
+    "PAYMENT",
+    "PETTY",
+    "SHARE",
+}
 
 
 def _cp_raw_key(name: Any) -> str:
@@ -1102,13 +1138,101 @@ def _cp_group_token_variants(name: str, group: dict) -> List[List[str]]:
     return variants
 
 
+def _cp_group_values(name: str, group: dict) -> List[Any]:
+    values: List[Any] = [name, group.get("counterparty_name"), group.get("party")]
+    raw_names = group.get("raw_names")
+    if isinstance(raw_names, (list, set, tuple)):
+        values.extend(raw_names)
+    elif raw_names:
+        values.append(raw_names)
+    return [value for value in values if value]
+
+
+def _cp_set_group_name(group: dict, name: str) -> None:
+    if not name:
+        return
+    if "counterparty_name" in group:
+        group["counterparty_name"] = name
+    if "party" in group:
+        group["party"] = name
+    for txn in group.get("transactions", []) or []:
+        if not isinstance(txn, dict):
+            continue
+        txn["counterparty_name_clean"] = name
+        txn["counterparty_name"] = name
+        txn["party_name"] = name
+
+
+def _cp_rename_group_key(groups: Dict[str, dict], current_key: str, canonical_name: str) -> str:
+    canonical_name = normalize_text(canonical_name).upper()
+    if not canonical_name or current_key not in groups:
+        return current_key
+
+    group = groups.pop(current_key)
+    _cp_set_group_name(group, canonical_name)
+    if canonical_name in groups:
+        _cp_absorb(groups[canonical_name], group)
+        _cp_set_group_name(groups[canonical_name], canonical_name)
+    else:
+        groups[canonical_name] = group
+    return canonical_name
+
+
+def _cp_merge_pair(
+    groups: Dict[str, dict],
+    left: str,
+    right: str,
+    canonical_name: str = "",
+) -> str:
+    if left not in groups or right not in groups or left == right:
+        return left
+    survivor, loser = (
+        (left, right) if _cp_score(groups[left]) >= _cp_score(groups[right]) else (right, left)
+    )
+    _cp_absorb(groups[survivor], groups[loser])
+    del groups[loser]
+    if canonical_name:
+        survivor = _cp_rename_group_key(groups, survivor, canonical_name)
+    return survivor
+
+
+def _cp_markerless_tokens(tokens: List[str]) -> List[str]:
+    return [
+        token
+        for token in tokens
+        if token
+        and token not in CP_PERSON_MARKER_TOKENS
+        and token not in CP_SHARED_TOKEN_EXCLUDE
+        and not token.isdigit()
+    ]
+
+
+def _cp_strip_person_suffix_noise(tokens: List[str]) -> List[str]:
+    stripped = list(tokens)
+    while stripped and stripped[-1] in CP_PERSON_SUFFIX_NOISE_TOKENS:
+        stripped.pop()
+    return stripped
+
+
+def _cp_plain_person_tokens(tokens: List[str]) -> List[str]:
+    plain = _cp_markerless_tokens(_cp_strip_person_suffix_noise(tokens))
+    if len(plain) < 2:
+        return []
+    if plain[0] in COUNTERPARTY_PERSON_NAME_START_TOKENS:
+        return plain
+    if len(plain) == 2 and all(len(token) >= 3 for token in plain):
+        return plain
+    return []
+
+
 def _cp_person_marker_split(tokens: List[str]) -> Optional[Tuple[List[str], str, List[str]]]:
-    for idx, token in enumerate(tokens):
+    clean_tokens = _cp_strip_person_suffix_noise(tokens)
+    for idx, token in enumerate(clean_tokens):
         marker = token.strip(" .,-").upper()
         if marker not in CP_PERSON_MARKER_TOKENS:
             continue
-        before = [tok for tok in tokens[:idx] if tok not in CP_SHARED_TOKEN_EXCLUDE]
-        after = [tok for tok in tokens[idx + 1:] if tok not in CP_SHARED_TOKEN_EXCLUDE]
+        before = _cp_markerless_tokens(clean_tokens[:idx])
+        after = _cp_markerless_tokens(clean_tokens[idx + 1:])
         if before and after:
             return before, marker, after
     return None
@@ -1151,19 +1275,183 @@ def _cp_human_marker_groups_similar(
     left_variants: List[List[str]],
     right_variants: List[List[str]],
 ) -> bool:
-    for left_tokens in left_variants:
-        left_split = _cp_person_marker_split(left_tokens)
-        if not left_split:
-            continue
-        left_before, _left_marker, left_after = left_split
-        for right_tokens in right_variants:
-            right_split = _cp_person_marker_split(right_tokens)
-            if not right_split:
-                continue
-            right_before, _right_marker, right_after = right_split
+    left_marker_splits = [
+        split for tokens in left_variants
+        if (split := _cp_person_marker_split(tokens))
+    ]
+    right_marker_splits = [
+        split for tokens in right_variants
+        if (split := _cp_person_marker_split(tokens))
+    ]
+    left_plain = [
+        plain for tokens in left_variants
+        if (plain := _cp_plain_person_tokens(tokens))
+    ]
+    right_plain = [
+        plain for tokens in right_variants
+        if (plain := _cp_plain_person_tokens(tokens))
+    ]
+
+    for left_before, _left_marker, left_after in left_marker_splits:
+        for right_before, _right_marker, right_after in right_marker_splits:
             if left_before == right_before and _cp_person_tail_similar(left_after, right_after):
                 return True
+
+    for marker_before, _marker, marker_after in left_marker_splits:
+        for plain in right_plain:
+            if marker_before == plain[: len(marker_before)] and _cp_person_tail_similar(marker_after, plain[len(marker_before):]):
+                return True
+    for marker_before, _marker, marker_after in right_marker_splits:
+        for plain in left_plain:
+            if marker_before == plain[: len(marker_before)] and _cp_person_tail_similar(marker_after, plain[len(marker_before):]):
+                return True
+
+    for left in left_plain:
+        for right in right_plain:
+            if left[:-1] == right[:-1] and _cp_person_tail_similar(left[-1:], right[-1:]):
+                return True
+
     return False
+
+
+def _cp_marker_rank(marker: str) -> int:
+    return {
+        "BIN": 0,
+        "BINTI": 0,
+        "BINT": 1,
+        "BINTE": 1,
+        "BT": 2,
+        "BTE": 2,
+        "B": 3,
+    }.get(marker, 4)
+
+
+def _cp_choose_person_canonical(names: List[str], groups: Dict[str, dict]) -> str:
+    marker_candidates: List[Tuple[str, List[str], str]] = []
+    plain_candidates: List[List[str]] = []
+    for name in names:
+        if name not in groups:
+            continue
+        for tokens in _cp_group_token_variants(name, groups[name]):
+            marker_split = _cp_person_marker_split(tokens)
+            if marker_split:
+                before, marker, after = marker_split
+                marker_candidates.append((" ".join(before + [marker] + after), before + after, marker))
+            plain = _cp_plain_person_tokens(tokens)
+            if plain:
+                plain_candidates.append(plain)
+
+    unique_plain = {tuple(tokens): tokens for tokens in plain_candidates}
+    plain_keys = set(unique_plain)
+    matching_markers = [
+        (display, markerless, marker)
+        for display, markerless, marker in marker_candidates
+        if tuple(markerless) in plain_keys
+    ]
+    if matching_markers:
+        return sorted(
+            matching_markers,
+            key=lambda item: (_cp_marker_rank(item[2]), -len(item[0]), item[0]),
+        )[0][0]
+
+    if unique_plain:
+        return " ".join(
+            sorted(
+                unique_plain.values(),
+                key=lambda tokens: (-len(tokens[-1]), len(tokens), " ".join(tokens)),
+            )[0]
+        )
+
+    if marker_candidates:
+        return sorted(
+            marker_candidates,
+            key=lambda item: (_cp_marker_rank(item[2]), -len(item[0]), item[0]),
+        )[0][0]
+
+    return ""
+
+
+def _cp_prefix_suffix_parts(tokens: List[str]) -> Optional[Tuple[Tuple[str, str], List[str]]]:
+    meaningful_positions = [
+        idx for idx, token in enumerate(tokens)
+        if token
+        and token not in CP_SHARED_TOKEN_EXCLUDE
+        and not token.isdigit()
+    ]
+    if len(meaningful_positions) < 2:
+        return None
+    first_idx, second_idx = meaningful_positions[0], meaningful_positions[1]
+    return (tokens[first_idx], tokens[second_idx]), tokens[second_idx + 1:]
+
+
+def _cp_suffix_looks_like_person_connector(tokens: List[str]) -> bool:
+    if not tokens or not any(token in CP_PERSON_MARKER_TOKENS for token in tokens):
+        return False
+    meaningful = [
+        token for token in tokens
+        if token not in CP_PREFIX_ALLOWED_SUFFIX_TOKENS
+        and token not in CP_SHARED_TOKEN_EXCLUDE
+        and not token.isdigit()
+    ]
+    return 1 <= len(meaningful) <= 4 and all(token.isalpha() and len(token) >= 2 for token in meaningful)
+
+
+def _cp_suffix_allowed_for_prefix_merge(tokens: List[str]) -> bool:
+    if not tokens:
+        return True
+    if all(
+        token in CP_PREFIX_ALLOWED_SUFFIX_TOKENS
+        or token.isdigit()
+        for token in tokens
+    ):
+        return True
+    return _cp_suffix_looks_like_person_connector(tokens)
+
+
+def _cp_prefix_allowed_suffix_match(
+    left_variants: List[List[str]],
+    right_variants: List[List[str]],
+) -> Optional[Tuple[str, str]]:
+    for left_tokens in left_variants:
+        left_parts = _cp_prefix_suffix_parts(left_tokens)
+        if not left_parts:
+            continue
+        left_anchor, left_suffix = left_parts
+        if not _cp_suffix_allowed_for_prefix_merge(left_suffix):
+            continue
+        for right_tokens in right_variants:
+            right_parts = _cp_prefix_suffix_parts(right_tokens)
+            if not right_parts:
+                continue
+            right_anchor, right_suffix = right_parts
+            if left_anchor == right_anchor and _cp_suffix_allowed_for_prefix_merge(right_suffix):
+                return left_anchor
+    return None
+
+
+def _cp_choose_prefix_canonical(
+    names: List[str],
+    groups: Dict[str, dict],
+    anchor: Tuple[str, str],
+) -> str:
+    candidates = {" ".join(anchor)}
+    for name in names:
+        if name not in groups:
+            continue
+        for value in _cp_group_values(name, groups[name]):
+            candidate = clean_counterparty_name(value)
+            if candidate and candidate != "UNKNOWN":
+                candidates.add(candidate)
+
+    sdn_candidates = [name for name in candidates if " SDN BHD " in f" {name} "]
+    if sdn_candidates:
+        return sorted(sdn_candidates, key=lambda value: (len(value.split()), len(value), value))[0]
+
+    prefixed = [
+        name for name in candidates
+        if tuple(name.split()[:2]) == anchor
+    ]
+    return sorted(prefixed or list(candidates), key=lambda value: (len(value.split()), len(value), value))[0]
 
 
 def _cp_meaningful_shared_tokens(tokens: List[str]) -> set:
@@ -1180,18 +1468,7 @@ def _cp_markerless_groups_share_two_tokens(
     left_variants: List[List[str]],
     right_variants: List[List[str]],
 ) -> bool:
-    if _cp_has_person_marker(left_variants) or _cp_has_person_marker(right_variants):
-        return False
-
-    for left_tokens in left_variants:
-        left_shared = _cp_meaningful_shared_tokens(left_tokens)
-        if len(left_shared) < 2:
-            continue
-        for right_tokens in right_variants:
-            right_shared = _cp_meaningful_shared_tokens(right_tokens)
-            if len(left_shared & right_shared) >= 2:
-                return True
-    return False
+    return _cp_prefix_allowed_suffix_match(left_variants, right_variants) is not None
 
 
 def _cp_merge_key(name: Any) -> str:
@@ -1331,6 +1608,7 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
         for _k, variants in by_key.items():
             if len(variants) < 2:
                 continue
+            canonical = _cp_choose_person_canonical(variants, groups)
             variants.sort(key=lambda nm: _cp_score(groups[nm]), reverse=True)
             survivor = variants[0]
             for loser in variants[1:]:
@@ -1338,6 +1616,8 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
                     _cp_absorb(groups[survivor], groups[loser])
                     del groups[loser]
                     merged_any = True
+            if canonical and survivor in groups:
+                _cp_rename_group_key(groups, survivor, canonical)
 
         names = [n for n in groups.keys() if not _is_protected(n)]
         keys = {n: _cp_merge_key(n) for n in names}
@@ -1442,9 +1722,8 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
                     variant_tokens.get(b, []),
                 ):
                     continue
-                survivor, loser = (a, b) if _cp_score(groups[a]) >= _cp_score(groups[b]) else (b, a)
-                _cp_absorb(groups[survivor], groups[loser])
-                del groups[loser]
+                canonical = _cp_choose_person_canonical([a, b], groups)
+                _cp_merge_pair(groups, a, b, canonical)
                 merged_any = True
 
         names = [n for n in groups.keys() if not _is_protected(n)]
@@ -1457,14 +1736,14 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
             for b in name_list[i + 1:]:
                 if b not in groups or a not in groups:
                     continue
-                if not _cp_markerless_groups_share_two_tokens(
+                anchor = _cp_prefix_allowed_suffix_match(
                     variant_tokens.get(a, []),
                     variant_tokens.get(b, []),
-                ):
+                )
+                if not anchor:
                     continue
-                survivor, loser = (a, b) if _cp_score(groups[a]) >= _cp_score(groups[b]) else (b, a)
-                _cp_absorb(groups[survivor], groups[loser])
-                del groups[loser]
+                canonical = _cp_choose_prefix_canonical([a, b], groups, anchor)
+                _cp_merge_pair(groups, a, b, canonical)
                 merged_any = True
 
         names = [n for n in groups.keys() if not _is_protected(n)]

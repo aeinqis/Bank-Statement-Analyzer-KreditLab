@@ -33,6 +33,7 @@ class CounterpartyCleaningTests(unittest.TestCase):
 
     def test_preserves_and_expands_company_suffixes(self):
         self.assertEqual(clean_counterparty_name("ALPHA SB"), "ALPHA SDN BHD")
+        self.assertEqual(clean_counterparty_name("ALPHA MTSB"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BH"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BHD"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA BERHAD"), "ALPHA BHD")
@@ -172,7 +173,31 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(row["transaction_count"], 2)
         self.assertEqual(len(row["transactions"]), 2)
 
-    def test_markerless_counterparties_merge_when_two_tokens_match(self):
+    def test_markerless_counterparties_merge_when_prefix_and_suffix_allowed(self):
+        groups = {
+            "ALPHA BETA SHARE CAP": {
+                "counterparty_name": "ALPHA BETA SHARE CAP",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "transaction_count": 1,
+            },
+            "ALPHA BETA PAYMENT": {
+                "counterparty_name": "ALPHA BETA PAYMENT",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(len(merged), 1)
+        row = next(iter(merged.values()))
+        self.assertEqual(row["total_credits"], 10.0)
+        self.assertEqual(row["total_debits"], 5.0)
+        self.assertEqual(row["transaction_count"], 2)
+        self.assertEqual(row["counterparty_name"], "ALPHA BETA")
+
+    def test_markerless_counterparties_do_not_merge_on_reordered_tokens(self):
         groups = {
             "ALPHA BETA TRADING": {
                 "counterparty_name": "ALPHA BETA TRADING",
@@ -189,11 +214,29 @@ class CounterpartyCleaningTests(unittest.TestCase):
         }
 
         merged = _merge_counterparty_groups(groups)
-        self.assertEqual(len(merged), 1)
-        row = next(iter(merged.values()))
-        self.assertEqual(row["total_credits"], 10.0)
-        self.assertEqual(row["total_debits"], 5.0)
-        self.assertEqual(row["transaction_count"], 2)
+        self.assertEqual(len(merged), 2)
+
+    def test_muhafiz_technology_variants_merge_to_sdn_bhd(self):
+        groups = {
+            "MUHAFIZ TECHNOLOGY MTSB": {
+                "counterparty_name": "MUHAFIZ TECHNOLOGY MTSB",
+                "total_credits": 0.0,
+                "total_debits": 700000.0,
+                "transaction_count": 1,
+            },
+            "MUHAFIZ TECHNOLOGY SHAHARUDDIN B SAMSI": {
+                "counterparty_name": "MUHAFIZ TECHNOLOGY SHAHARUDDIN B SAMSI",
+                "total_credits": 0.0,
+                "total_debits": 430000.0,
+                "transaction_count": 2,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"MUHAFIZ TECHNOLOGY SDN BHD"})
+        row = merged["MUHAFIZ TECHNOLOGY SDN BHD"]
+        self.assertEqual(row["total_debits"], 1130000.0)
+        self.assertEqual(row["transaction_count"], 3)
 
     def test_human_names_with_bin_variants_merge_when_tail_is_similar(self):
         groups = {
@@ -216,6 +259,50 @@ class CounterpartyCleaningTests(unittest.TestCase):
         row = next(iter(merged.values()))
         self.assertEqual(row["total_credits"], 10.0)
         self.assertEqual(row["total_debits"], 5.0)
+        self.assertEqual(row["transaction_count"], 2)
+
+    def test_shaharuddin_sams_and_samsi_credit_card_merge_to_longer_name(self):
+        groups = {
+            "SHAHARUDDIN SAMS": {
+                "counterparty_name": "SHAHARUDDIN SAMS",
+                "total_credits": 0.0,
+                "total_debits": 334537.28,
+                "transaction_count": 26,
+            },
+            "SHAHARUDDIN SAMSI CREDIT CARD": {
+                "counterparty_name": "SHAHARUDDIN SAMSI CREDIT CARD",
+                "total_credits": 0.0,
+                "total_debits": 378200.13,
+                "transaction_count": 12,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"SHAHARUDDIN SAMSI"})
+        row = merged["SHAHARUDDIN SAMSI"]
+        self.assertEqual(row["total_debits"], 712737.41)
+        self.assertEqual(row["transaction_count"], 38)
+
+    def test_shaharuddin_abb_prefers_bin_variant(self):
+        groups = {
+            "SHAHARUDDIN ABB": {
+                "counterparty_name": "SHAHARUDDIN ABB",
+                "total_credits": 0.0,
+                "total_debits": 22910.0,
+                "transaction_count": 1,
+            },
+            "SHAHARUDDIN BIN ABB": {
+                "counterparty_name": "SHAHARUDDIN BIN ABB",
+                "total_credits": 0.0,
+                "total_debits": 33000.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"SHAHARUDDIN BIN ABB"})
+        row = merged["SHAHARUDDIN BIN ABB"]
+        self.assertEqual(row["total_debits"], 55910.0)
         self.assertEqual(row["transaction_count"], 2)
 
     def test_build_transactions_by_party_applies_iterative_merge(self):
