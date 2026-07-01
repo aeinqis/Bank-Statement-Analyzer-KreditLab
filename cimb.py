@@ -94,7 +94,7 @@ CIMB_COUNTERPARTY_RULES = [
     ),
     (
         re.compile(
-            r"^IBG CREDIT\s+(?:INTERBANK\s+GIRO\s+){0,2}(?:\S+\s+\S+\s+)?(?P<counterparty>[A-Z][A-Z0-9&()./\- ]+)$",
+            r"^IBG CREDIT\s+(?:INTERBANK\s+GIRO\s+)*(?P<counterparty>[A-Z][A-Z0-9&()./\- ]+)$",
             re.I,
         ),
         None,

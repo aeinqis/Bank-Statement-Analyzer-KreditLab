@@ -7030,6 +7030,7 @@ def is_benign_integrity_finding(finding: dict) -> bool:
 # Counterparty Ledger Functions
 # -----------------------------
 UNKNOWN_COUNTERPARTY_VALUES = {"", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
+IBG_CREDIT_DESCRIPTION_RE = re.compile(r"^\s*IBG\s+CREDIT\b", re.I)
 COUNTERPARTY_NAME_FIELDS = (
     "counterparty_name_clean",
     "counterparty_name",
@@ -7080,6 +7081,11 @@ def _resolve_transaction_counterparty_details(row: pd.Series) -> Tuple[str, bool
     bank = normalize_counterparty_value(row.get("bank"))
     if "CIMB" in bank:
         counterparty = normalize_counterparty_value(extract_cimb_party_name(description))
+        if counterparty:
+            return counterparty, True
+    description_text = normalize_counterparty_value(description)
+    if IBG_CREDIT_DESCRIPTION_RE.match(description_text):
+        counterparty = normalize_counterparty_value(extract_cimb_party_name(description_text))
         if counterparty:
             return counterparty, True
 

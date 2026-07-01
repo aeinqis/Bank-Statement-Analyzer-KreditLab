@@ -35,7 +35,7 @@ COUNTERPARTY_DESCRIPTOR_TOKENS = {
     "STAFF", "SALARY", "OVERTIME", "ADVANCE", "DONATION", "INVOICE",
     "INVOICES", "PAYMENT", "BALANCE", "TOKEN", "AWARD", "TOPUP", "REF",
     "INV", "POLICY", "NO", "ACC", "ACCOUNT", "TRANSFER", "MONTHLY",
-    "INCENTIVE",
+    "INCENTIVE", "IBG", "INTERBANK", "GIRO",
     # Malaysian admin / licensing / stamping purpose words — these describe
     # *why* money moved, not *who* it moved to/from. Stripping them lets
     # the underlying person/company name survive intact for grouping.
@@ -139,6 +139,10 @@ COUNTERPARTY_DATE_RE = re.compile(
 COUNTERPARTY_REF_TOKEN_RE = re.compile(r"^(?:INV|REF|NO|ACC|ACCOUNT)?\d{2,}[A-Z0-9]*$")
 COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
 COUNTERPARTY_SDN_MARKER_TOKENS = {"MTSB", "SB", "SD", "SDN", "SND", "SN"}
+COUNTERPARTY_TRANSFER_RAIL_PREFIX_RE = re.compile(
+    r"^\s*IBG\s+CREDIT\s+(?:INTERBANK\s+GIRO\s+)*",
+    re.I,
+)
 COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS = {
     "CARD", "CASH", "CC", "CCARD", "CLAIM", "CLEANER", "CREDIT",
     "EAST", "COAST", "TRAVEL", "HOUSING",
@@ -159,9 +163,12 @@ COUNTERPARTY_PERSON_MEMO_PREFIX_TOKENS = {
 COUNTERPARTY_PERSON_NAME_START_TOKENS = {
     "ABD", "ABDUL", "AHMAD", "AINA", "AISYAH", "DAYANG", "FATHIN",
     "FATIN", "KHAIRUL", "MOHAMAD", "MOHAMED", "MOHAMMAD", "MOHD",
-    "MUHAMAD", "MUHAMMAD", "NOOR", "NOR", "NUR", "NURUL", "PUAN",
+    "MUHAMAD", "MUHAMMAD", "NOOR", "NOR", "NORAZIYAN", "NUR", "NURUL", "PUAN",
     "SHAHARUDDIN", "SHAUFIAH", "SITI", "WAN",
 }
+COUNTERPARTY_EMBEDDED_NAME_ANCHORS: Tuple[Tuple[Tuple[str, ...], Tuple[Tuple[str, ...], ...]], ...] = (
+    (("NORAZIYAN", "OTH"), (("NORAZIYAN", "OTH"), ("NORAZIYAN", "OTHM"))),
+)
 COUNTERPARTY_MEMO_SUFFIX_LEADING_TOKENS = (
     TRANSACTION_DETAIL_LEADING_TOKENS
     | COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS
@@ -533,6 +540,16 @@ def _strip_person_memo_suffix_tokens(tokens: List[str]) -> List[str]:
     return tokens
 
 
+def _normalise_embedded_counterparty_anchor(tokens: List[str]) -> List[str]:
+    for canonical, variants in COUNTERPARTY_EMBEDDED_NAME_ANCHORS:
+        for variant in variants:
+            variant_len = len(variant)
+            for idx in range(0, len(tokens) - variant_len + 1):
+                if tuple(tokens[idx:idx + variant_len]) == variant:
+                    return list(canonical)
+    return tokens
+
+
 def clean_counterparty_name(raw_name: Any) -> str:
     """Return a reusable display/matching name for noisy counterparty strings.
 
@@ -550,6 +567,7 @@ def clean_counterparty_name(raw_name: Any) -> str:
     raw = raw.replace(".", " ")
     raw = COUNTERPARTY_ALLOWED_PUNCT_RE.sub(" ", raw)
     raw = normalize_company_suffix_core(raw)
+    raw = COUNTERPARTY_TRANSFER_RAIL_PREFIX_RE.sub(" ", raw)
     raw = _truncate_after_sdn_marker(raw)
     raw = _strip_counterparty_bank_names(raw)
     raw = re.sub(r"\s+", " ", raw).strip()
@@ -570,6 +588,7 @@ def clean_counterparty_name(raw_name: Any) -> str:
     while len(tokens) > 2 and len(tokens[-1]) == 1 and tokens[-1].isalpha():
         tokens.pop()
 
+    tokens = _normalise_embedded_counterparty_anchor(tokens)
     tokens = _strip_person_memo_suffix_tokens(tokens)
     tokens = _collapse_adjacent_duplicate_tokens(tokens)
     cleaned = normalize_text(" ".join(tokens)).strip()
@@ -1245,6 +1264,10 @@ def _cp_strip_person_suffix_noise(tokens: List[str]) -> List[str]:
 
 
 def _cp_plain_person_tokens(tokens: List[str]) -> List[str]:
+    anchored = _normalise_embedded_counterparty_anchor(tokens)
+    if anchored != tokens and len(anchored) >= 2:
+        return anchored
+
     plain = _cp_markerless_tokens(_cp_strip_person_suffix_noise(tokens))
     if len(plain) < 2:
         return []

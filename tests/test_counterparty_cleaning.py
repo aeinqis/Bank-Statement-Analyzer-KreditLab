@@ -1,6 +1,6 @@
 import unittest
 
-from cimb import annotate_cimb_counterparties
+from cimb import annotate_cimb_counterparties, extract_cimb_party_name
 from party_utils import (
     _merge_counterparty_groups,
     build_transactions_by_party,
@@ -41,6 +41,11 @@ class CounterpartyCleaningTests(unittest.TestCase):
     def test_truncates_company_name_after_sd_or_sdn_marker(self):
         self.assertEqual(clean_counterparty_name("ALPHA SD TOKEN PAYMENT"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BHD RENTAL JUL"), "ALPHA SDN BHD")
+
+    def test_ibg_credit_counterparty_keeps_company_name(self):
+        desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"
+        self.assertEqual(extract_cimb_party_name(desc), "SOUTHERN CABLE SDN BHD")
+        self.assertEqual(clean_counterparty_name(desc), "SOUTHERN CABLE SDN BHD")
 
     def test_counterparty_cleaning_removes_bank_names(self):
         self.assertEqual(clean_counterparty_name("MAYBANK"), "UNKNOWN")
@@ -304,6 +309,33 @@ class CounterpartyCleaningTests(unittest.TestCase):
         row = merged["SHAHARUDDIN BIN ABB"]
         self.assertEqual(row["total_debits"], 55910.0)
         self.assertEqual(row["transaction_count"], 2)
+
+    def test_noraziyan_oth_noise_variants_merge(self):
+        names = [
+            "ANNUAL DINNER NORAZIYAN OTH",
+            "GOLF NORAZIYAN OTH KC ZUL SPORT SHOP",
+            "MUHD FAHMI NORAZIYAN OTHM",
+            "NORAZIYAN OTH HP SETTLEMENT",
+            "NORAZIYAN OTH PRESTRO",
+            "PERUNTUKAN NORAZIYAN OTHM",
+        ]
+        self.assertEqual([clean_counterparty_name(name) for name in names], ["NORAZIYAN OTH"] * 6)
+
+        groups = {
+            name: {
+                "counterparty_name": name,
+                "total_credits": 0.0,
+                "total_debits": 1.0,
+                "transaction_count": 1,
+            }
+            for name in names
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"NORAZIYAN OTH"})
+        row = merged["NORAZIYAN OTH"]
+        self.assertEqual(row["total_debits"], 6.0)
+        self.assertEqual(row["transaction_count"], 6)
 
     def test_shared_three_token_prefix_ignores_allowed_suffixes(self):
         groups = {
