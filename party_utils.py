@@ -25,11 +25,11 @@ TRANSACTION_DETAIL_SUFFIX_TOKENS = {
     "AC", "BERAM", "CASH", "CLAIM", "DELIVERY", "DET", "EC", "EXCEL",
     "FAREWELL", "GENERAL", "HOUSE", "INSURANCE", "INVOICE", "LABOUR", "PAYMENT",
     "BAJET", "LOAN", "MILEAGE", "PERUNTUKAN", "PETTY", "POLE", "RENTAL", "ROADTAX", "SEWA",
-    "SPONSER", "SPONSOR", "TENDER", "TRIP",
+    "SPONSER", "SPONSOR", "TENDER", "TRIP","OPENING", "LOAN", "TO", "DSSB", "MSSB", "CA",
 }
 TRANSACTION_DETAIL_LEADING_TOKENS = {
     "CLAIM", "EC", "FAREWELL", "GENERAL", "HOUSE", "INSURANCE", "LOAN",
-    "MILEAGE", "PERUNTUKAN", "PETTY", "RENTAL", "ROADTAX", "TENDER",
+    "MILEAGE", "PERUNTUKAN", "PETTY", "RENTAL", "ROADTAX", "TENDER", "OPENING", 
 }
 COUNTERPARTY_DESCRIPTOR_TOKENS = {
     "STAFF", "SALARY", "OVERTIME", "ADVANCE", "DONATION", "INVOICE",
@@ -1087,6 +1087,7 @@ CP_PREFIX_ALLOWED_SUFFIX_TOKENS = (
         "PAYMENT",
         "PETTY",
         "SHARE",
+        "OPENING", "LOAN", "TO", "DSSB", "MSSB", "CA",
     }
 )
 CP_PERSON_SUFFIX_NOISE_TOKENS = {
@@ -1102,7 +1103,33 @@ CP_PERSON_SUFFIX_NOISE_TOKENS = {
     "PETTY",
     "SHARE",
 }
+def _cp_suffix_allowed_for_prefix_merge(tokens: List[str]) -> bool:
+    if not tokens:
+        return True
 
+    cleaned = [
+        t for t in tokens
+        if t not in {"CA"} and not t.isdigit()
+    ]
+
+    if not cleaned:
+        return True
+
+    if all(
+        token in CP_PREFIX_ALLOWED_SUFFIX_TOKENS
+        or token in TRANSACTION_DETAIL_SUFFIX_TOKENS
+        or token in TRANSACTION_DETAIL_LEADING_TOKENS
+        for token in cleaned
+    ):
+        return True
+
+    return _cp_suffix_looks_like_person_connector(cleaned)
+
+def _cp_token_compatible(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    shorter, longer = sorted((a, b), key=len)
+    return len(shorter) >= 1 and longer.startswith(shorter)
 
 def _cp_raw_key(name: Any) -> str:
     cleaned = normalize_text(name).upper()
@@ -1427,7 +1454,8 @@ def _cp_prefix_allowed_suffix_match(
             if not right_parts:
                 continue
             right_anchor, right_suffix = right_parts
-            if left_anchor == right_anchor and _cp_suffix_allowed_for_prefix_merge(right_suffix):
+            if (all(_cp_token_compatible(a, b) for a, b in zip(left_anchor, right_anchor))and _cp_suffix_allowed_for_prefix_merge(right_suffix)
+            ):
                 return left_anchor
     return None
 
