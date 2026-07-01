@@ -305,6 +305,89 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(row["total_debits"], 55910.0)
         self.assertEqual(row["transaction_count"], 2)
 
+    def test_shared_three_token_prefix_ignores_allowed_suffixes(self):
+        groups = {
+            "ALPHA BETA GAMMA CREDIT CARD": {
+                "counterparty_name": "ALPHA BETA GAMMA CREDIT CARD",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "transaction_count": 1,
+            },
+            "ALPHA BETA GAMMA CASH": {
+                "counterparty_name": "ALPHA BETA GAMMA CASH",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"ALPHA BETA GAMMA"})
+        row = merged["ALPHA BETA GAMMA"]
+        self.assertEqual(row["total_credits"], 10.0)
+        self.assertEqual(row["total_debits"], 5.0)
+        self.assertEqual(row["transaction_count"], 2)
+
+    def test_shared_three_token_prefix_prefers_legal_suffix_canonical(self):
+        groups = {
+            "ALPHA BETA GAMMA SDN BHD": {
+                "counterparty_name": "ALPHA BETA GAMMA SDN BHD",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "transaction_count": 1,
+            },
+            "ALPHA BETA GAMMA PAYMENT": {
+                "counterparty_name": "ALPHA BETA GAMMA PAYMENT",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"ALPHA BETA GAMMA SDN BHD"})
+        row = merged["ALPHA BETA GAMMA SDN BHD"]
+        self.assertEqual(row["total_credits"], 10.0)
+        self.assertEqual(row["total_debits"], 5.0)
+
+    def test_shared_three_token_prefix_requires_allowed_suffixes(self):
+        groups = {
+            "ALPHA BETA GAMMA PROJECT": {
+                "counterparty_name": "ALPHA BETA GAMMA PROJECT",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "transaction_count": 1,
+            },
+            "ALPHA BETA GAMMA VENDOR": {
+                "counterparty_name": "ALPHA BETA GAMMA VENDOR",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(len(merged), 2)
+
+    def test_shared_three_token_prefix_skips_protected_buckets(self):
+        groups = {
+            "TRANSFER FEE": {
+                "counterparty_name": "TRANSFER FEE",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "transaction_count": 1,
+            },
+            "TRANSFER FEE CREDIT CARD": {
+                "counterparty_name": "TRANSFER FEE CREDIT CARD",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(len(merged), 2)
+
     def test_build_transactions_by_party_applies_iterative_merge(self):
         import pandas as pd
 

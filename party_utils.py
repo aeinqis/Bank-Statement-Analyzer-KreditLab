@@ -1047,9 +1047,12 @@ _CP_MERGE_PROTECTED = {
     "FD/INTEREST",
     "BANK FEES",
     "BULK SALARY",
+    "CHEQUE",
     "JANM",
     "PLANWORTH GLOBAL",
+    "TRANSFER FEE",
     "UNCATEGORIZED",
+    "UNKNOWN",
 }
 
 
@@ -1454,6 +1457,71 @@ def _cp_choose_prefix_canonical(
     return sorted(prefixed or list(candidates), key=lambda value: (len(value.split()), len(value), value))[0]
 
 
+def _cp_shared_prefix3_parts(tokens: List[str]) -> Optional[Tuple[Tuple[str, str, str], List[str]]]:
+    meaningful_positions = [
+        idx for idx, token in enumerate(tokens)
+        if token
+        and token not in CP_SHARED_TOKEN_EXCLUDE
+        and not token.isdigit()
+    ]
+    if len(meaningful_positions) < 3:
+        return None
+    first_idx, second_idx, third_idx = meaningful_positions[:3]
+    return (
+        (tokens[first_idx], tokens[second_idx], tokens[third_idx]),
+        tokens[third_idx + 1:],
+    )
+
+
+def _cp_shared_prefix3_match(
+    left_variants: List[List[str]],
+    right_variants: List[List[str]],
+) -> Optional[Tuple[str, str, str]]:
+    for left_tokens in left_variants:
+        left_parts = _cp_shared_prefix3_parts(left_tokens)
+        if not left_parts:
+            continue
+        left_anchor, left_suffix = left_parts
+        if not _cp_suffix_allowed_for_prefix_merge(left_suffix):
+            continue
+        for right_tokens in right_variants:
+            right_parts = _cp_shared_prefix3_parts(right_tokens)
+            if not right_parts:
+                continue
+            right_anchor, right_suffix = right_parts
+            if left_anchor == right_anchor and _cp_suffix_allowed_for_prefix_merge(right_suffix):
+                return left_anchor
+    return None
+
+
+def _cp_choose_shared_prefix_canonical(
+    names: List[str],
+    groups: Dict[str, dict],
+    anchor: Tuple[str, str, str],
+) -> str:
+    candidates = {" ".join(anchor)}
+    for name in names:
+        if name not in groups:
+            continue
+        for value in _cp_group_values(name, groups[name]):
+            candidate = clean_counterparty_name(value)
+            if candidate and candidate != "UNKNOWN":
+                candidates.add(candidate)
+
+    legal_candidates = [
+        name for name in candidates
+        if " SDN BHD " in f" {name} " or " BHD " in f" {name} "
+    ]
+    if legal_candidates:
+        return sorted(legal_candidates, key=lambda value: (len(value.split()), len(value), value))[0]
+
+    prefixed = [
+        name for name in candidates
+        if tuple(name.split()[:3]) == anchor
+    ]
+    return sorted(prefixed or list(candidates), key=lambda value: (len(value.split()), len(value), value))[0]
+
+
 def _cp_meaningful_shared_tokens(tokens: List[str]) -> set:
     return {
         token
@@ -1608,7 +1676,7 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
         for _k, variants in by_key.items():
             if len(variants) < 2:
                 continue
-            canonical = _cp_choose_person_canonical(variants, groups)
+            canonical = _cp_choose_person_canonical(variants, groups) or _k
             variants.sort(key=lambda nm: _cp_score(groups[nm]), reverse=True)
             survivor = variants[0]
             for loser in variants[1:]:
@@ -1807,6 +1875,26 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
                 survivor, loser = (a, b) if _cp_score(groups[a]) >= _cp_score(groups[b]) else (b, a)
                 _cp_absorb(groups[survivor], groups[loser])
                 del groups[loser]
+                merged_any = True
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        variant_tokens = {n: _cp_group_token_variants(n, groups[n]) for n in names}
+
+        name_list = list(names)
+        for i, a in enumerate(name_list):
+            if a not in groups:
+                continue
+            for b in name_list[i + 1:]:
+                if b not in groups or a not in groups:
+                    continue
+                anchor3 = _cp_shared_prefix3_match(
+                    variant_tokens.get(a, []),
+                    variant_tokens.get(b, []),
+                )
+                if not anchor3:
+                    continue
+                canonical = _cp_choose_shared_prefix_canonical([a, b], groups, anchor3)
+                _cp_merge_pair(groups, a, b, canonical)
                 merged_any = True
 
         if not merged_any:
