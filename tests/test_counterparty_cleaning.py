@@ -37,6 +37,15 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(clean_counterparty_name("ALPHA SDN BHD"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA BERHAD"), "ALPHA BHD")
 
+    def test_truncates_company_name_after_sd_or_sdn_marker(self):
+        self.assertEqual(clean_counterparty_name("ALPHA SD TOKEN PAYMENT"), "ALPHA SDN BHD")
+        self.assertEqual(clean_counterparty_name("ALPHA SDN BHD RENTAL JUL"), "ALPHA SDN BHD")
+
+    def test_counterparty_cleaning_removes_bank_names(self):
+        self.assertEqual(clean_counterparty_name("MAYBANK"), "UNKNOWN")
+        self.assertEqual(clean_counterparty_name("CIMB BANK AHMAD FIRDAUS"), "AHMAD FIRDAUS")
+        self.assertEqual(clean_counterparty_name("BANK ISLAM MALAYSIA BERHAD"), "UNKNOWN")
+
     def test_ledger_normaliser_strips_statement_holder_tokens(self):
         self.assertEqual(
             normalise_counterparty_for_ledger(
@@ -162,6 +171,52 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(row["total_debits"], 5.0)
         self.assertEqual(row["transaction_count"], 2)
         self.assertEqual(len(row["transactions"]), 2)
+
+    def test_markerless_counterparties_merge_when_two_tokens_match(self):
+        groups = {
+            "ALPHA BETA TRADING": {
+                "counterparty_name": "ALPHA BETA TRADING",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "transaction_count": 1,
+            },
+            "BETA ALPHA SERVICES": {
+                "counterparty_name": "BETA ALPHA SERVICES",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(len(merged), 1)
+        row = next(iter(merged.values()))
+        self.assertEqual(row["total_credits"], 10.0)
+        self.assertEqual(row["total_debits"], 5.0)
+        self.assertEqual(row["transaction_count"], 2)
+
+    def test_human_names_with_bin_variants_merge_when_tail_is_similar(self):
+        groups = {
+            "MOHD AMIN BIN ABDULLAH": {
+                "counterparty_name": "MOHD AMIN BIN ABDULLAH",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "transaction_count": 1,
+            },
+            "MOHD AMIN B ABDULAH": {
+                "counterparty_name": "MOHD AMIN B ABDULAH",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(len(merged), 1)
+        row = next(iter(merged.values()))
+        self.assertEqual(row["total_credits"], 10.0)
+        self.assertEqual(row["total_debits"], 5.0)
+        self.assertEqual(row["transaction_count"], 2)
 
     def test_build_transactions_by_party_applies_iterative_merge(self):
         import pandas as pd

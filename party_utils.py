@@ -56,6 +56,75 @@ COUNTERPARTY_CHANNEL_TOKENS = {
 }
 COUNTERPARTY_PERSON_CONNECTOR_TOKENS = {"BIN", "BINT", "BINTE", "BINTI", "ANAK", "EN"}
 COUNTERPARTY_COMPANY_SUFFIX_TOKENS = {"SDN", "BHD", "BERHAD"}
+COUNTERPARTY_BANK_NAME_PHRASES: Tuple[Tuple[str, ...], ...] = tuple(
+    sorted(
+        {
+            ("AFFIN", "BANK"),
+            ("AGRO", "BANK"),
+            ("AGROBANK",),
+            ("ALLIANCE", "BANK"),
+            ("AMBANK",),
+            ("AM", "BANK"),
+            ("BANK", "ISLAM"),
+            ("BANK", "ISLAM", "MALAYSIA"),
+            ("BANK", "MUAMALAT"),
+            ("BANK", "RAKYAT"),
+            ("BANK", "SIMPANAN", "NASIONAL"),
+            ("CIMB",),
+            ("CIMB", "BANK"),
+            ("CIMB", "ISLAMIC"),
+            ("CITIBANK",),
+            ("HONG", "LEONG", "BANK"),
+            ("HSBC",),
+            ("HSBC", "BANK"),
+            ("MALAYAN", "BANKING"),
+            ("MAYBANK",),
+            ("MAYBANK", "ISLAMIC"),
+            ("MBSB", "BANK"),
+            ("OCBC",),
+            ("OCBC", "BANK"),
+            ("PUBLIC", "BANK"),
+            ("RHB",),
+            ("RHB", "BANK"),
+            ("RHB", "ISLAMIC", "BANK"),
+            ("STANDARD", "CHARTERED", "BANK"),
+            ("UOB",),
+            ("UOB", "BANK"),
+        },
+        key=lambda phrase: (-len(phrase), phrase),
+    )
+)
+COUNTERPARTY_BANK_STANDALONE_TOKENS = {
+    "ABMB",
+    "AFFIN",
+    "AGROBANK",
+    "AMBANK",
+    "AMFB",
+    "BIMB",
+    "BSN",
+    "CIMB",
+    "CITIBANK",
+    "HLB",
+    "HLBB",
+    "HSBC",
+    "MAYBANK",
+    "MBB",
+    "OCBC",
+    "PBB",
+    "RHB",
+    "UOB",
+}
+COUNTERPARTY_BANK_GENERIC_TOKENS = {"BANK", "BANKING"}
+COUNTERPARTY_BANK_LEGAL_TAIL_TOKENS = {
+    "BHD",
+    "BERHAD",
+    "LTD",
+    "LIMITED",
+    "M",
+    "MALAYSIA",
+    "MALAYAN",
+    "PLC",
+}
 COUNTERPARTY_NOISE_TOKENS = (
     COUNTERPARTY_DESCRIPTOR_TOKENS
     | COUNTERPARTY_MONTH_TOKENS
@@ -67,6 +136,7 @@ COUNTERPARTY_DATE_RE = re.compile(
 )
 COUNTERPARTY_REF_TOKEN_RE = re.compile(r"^(?:INV|REF|NO|ACC|ACCOUNT)?\d{2,}[A-Z0-9]*$")
 COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
+COUNTERPARTY_SDN_MARKER_TOKENS = {"SB", "SD", "SDN", "SND", "SN"}
 COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS = {
     "CASH", "CLAIM", "CLEANER", "EAST", "COAST", "TRAVEL", "HOUSING",
     "LOAN", "LAPTOP", "MMU", "FEES", "FEE", "OFFICE", "ELECTRICITY",
@@ -286,13 +356,16 @@ def normalize_company_suffix(name: Any) -> str:
 
         if token_core == "SN" and not tokens:
             token = "SN"
-        elif token_core in {"SN", "SND", "SD", "SDN"}:
+        elif token_core in {"SB", "SN", "SND", "SD", "SDN"}:
             token = "SDN"
         elif token_core in {"BH", "BDH", "B", "BHD"} and any(existing == "SDN" for existing in tokens):
             token = "BHD"
         else:
             token = token_core
         tokens.append(token)
+        if token == "SDN":
+            tokens.append("BHD")
+            return normalize_text(" ".join(tokens)) or "UNKNOWN"
 
     if "SDN" in tokens:
         sdn_index = tokens.index("SDN")
@@ -302,6 +375,69 @@ def normalize_company_suffix(name: Any) -> str:
             tokens = tokens[: sdn_index + 1] + ["BHD"]
 
     return normalize_text(" ".join(tokens)) or "UNKNOWN"
+
+
+def _truncate_after_sdn_marker(name: Any) -> str:
+    cleaned = normalize_text(name).upper()
+    if not cleaned:
+        return ""
+
+    tokens: List[str] = []
+    for token in cleaned.split():
+        token_core = token.strip(" .,-")
+        if not token_core:
+            continue
+        if token_core in COUNTERPARTY_SDN_MARKER_TOKENS:
+            tokens.extend(["SDN", "BHD"])
+            return normalize_text(" ".join(tokens))
+        tokens.append(token_core)
+
+    return normalize_text(" ".join(tokens))
+
+
+def _strip_counterparty_bank_names(name: Any) -> str:
+    cleaned = normalize_text(name).upper()
+    if not cleaned or cleaned == "BANK FEES":
+        return cleaned
+
+    tokens = [token.strip(" .,-()") for token in cleaned.split()]
+    tokens = [token for token in tokens if token]
+    if not tokens:
+        return ""
+
+    stripped: List[str] = []
+    idx = 0
+    while idx < len(tokens):
+        matched_phrase = False
+        for phrase in COUNTERPARTY_BANK_NAME_PHRASES:
+            phrase_len = len(phrase)
+            if tuple(tokens[idx:idx + phrase_len]) != phrase:
+                continue
+            idx += phrase_len
+            while idx < len(tokens) and tokens[idx] in COUNTERPARTY_BANK_LEGAL_TAIL_TOKENS:
+                idx += 1
+            matched_phrase = True
+            break
+        if matched_phrase:
+            continue
+        stripped.append(tokens[idx])
+        idx += 1
+
+    stripped = [
+        token
+        for token in stripped
+        if token not in COUNTERPARTY_BANK_STANDALONE_TOKENS
+        and token not in COUNTERPARTY_BANK_GENERIC_TOKENS
+    ]
+    if not stripped:
+        return ""
+    if all(
+        token in COUNTERPARTY_BANK_LEGAL_TAIL_TOKENS
+        or token in COUNTERPARTY_COMPANY_SUFFIX_TOKENS
+        for token in stripped
+    ):
+        return ""
+    return normalize_text(" ".join(stripped))
 
 
 def _strip_numeric_party_tokens(name: Any) -> str:
@@ -411,6 +547,8 @@ def clean_counterparty_name(raw_name: Any) -> str:
     raw = raw.replace(".", " ")
     raw = COUNTERPARTY_ALLOWED_PUNCT_RE.sub(" ", raw)
     raw = normalize_company_suffix_core(raw)
+    raw = _truncate_after_sdn_marker(raw)
+    raw = _strip_counterparty_bank_names(raw)
     raw = re.sub(r"\s+", " ", raw).strip()
     if not raw:
         return "UNKNOWN"
@@ -530,7 +668,13 @@ def normalise_counterparty_for_ledger(
     description: Any = "",
 ) -> str:
     """Return the canonical counterparty bucket used by the Counterparty Ledger."""
-    cleaned = clean_counterparty_name(raw_name)
+    raw_for_clean = raw_name
+    if own_party:
+        stripped_raw = _strip_own_party_tokens(normalize_text(raw_name), normalize_text(own_party))
+        if normalize_text(stripped_raw).upper() != normalize_text(raw_name).upper():
+            raw_for_clean = stripped_raw
+
+    cleaned = clean_counterparty_name(raw_for_clean)
     normalised = _normalise_counterparty(cleaned)
 
     if own_party:
@@ -549,7 +693,10 @@ def normalise_counterparty_for_ledger(
 
 
 def canonicalize_party_name(name: Any) -> str:
-    cleaned = normalize_company_suffix(_strip_person_transaction_detail_suffix(_strip_numeric_party_tokens(name)))
+    base = _strip_person_transaction_detail_suffix(_strip_numeric_party_tokens(name))
+    base = _truncate_after_sdn_marker(base)
+    base = _strip_counterparty_bank_names(base)
+    cleaned = normalize_company_suffix(base)
     if not cleaned:
         return "UNKNOWN"
 
@@ -907,6 +1054,146 @@ def _cp_tokens(name: str) -> List[str]:
     return _cp_merge_key(name).split()
 
 
+CP_PERSON_MARKER_TOKENS = PERSON_NAME_MARKER_TOKENS | {"BTE"}
+CP_SHARED_TOKEN_EXCLUDE = (
+    COUNTERPARTY_COMPANY_SUFFIX_TOKENS
+    | COUNTERPARTY_NOISE_TOKENS
+    | COUNTERPARTY_BANK_STANDALONE_TOKENS
+    | COUNTERPARTY_BANK_GENERIC_TOKENS
+    | COUNTERPARTY_BANK_LEGAL_TAIL_TOKENS
+    | {"UNKNOWN", "UNIDENTIFIED", "UNCATEGORIZED"}
+)
+
+
+def _cp_raw_key(name: Any) -> str:
+    cleaned = normalize_text(name).upper()
+    if not cleaned:
+        return ""
+    cleaned = cleaned.replace(".", " ")
+    cleaned = COUNTERPARTY_ALLOWED_PUNCT_RE.sub(" ", cleaned)
+    cleaned = _truncate_after_sdn_marker(cleaned)
+    cleaned = _strip_counterparty_bank_names(cleaned)
+    cleaned = re.sub(r"[^A-Z0-9\s]", " ", cleaned)
+    return normalize_text(cleaned)
+
+
+def _cp_group_token_variants(name: str, group: dict) -> List[List[str]]:
+    values: List[Any] = [name, group.get("counterparty_name"), group.get("party")]
+    raw_names = group.get("raw_names")
+    if isinstance(raw_names, (list, set, tuple)):
+        values.extend(raw_names)
+    elif raw_names:
+        values.append(raw_names)
+
+    variants: List[List[str]] = []
+    seen = set()
+    for value in values:
+        raw_key = _cp_raw_key(value)
+        tokens = tuple(raw_key.split())
+        if tokens and tokens not in seen:
+            variants.append(list(tokens))
+            seen.add(tokens)
+
+        clean_tokens = tuple(_cp_tokens(str(value or "")))
+        if clean_tokens and clean_tokens not in seen:
+            variants.append(list(clean_tokens))
+            seen.add(clean_tokens)
+
+    return variants
+
+
+def _cp_person_marker_split(tokens: List[str]) -> Optional[Tuple[List[str], str, List[str]]]:
+    for idx, token in enumerate(tokens):
+        marker = token.strip(" .,-").upper()
+        if marker not in CP_PERSON_MARKER_TOKENS:
+            continue
+        before = [tok for tok in tokens[:idx] if tok not in CP_SHARED_TOKEN_EXCLUDE]
+        after = [tok for tok in tokens[idx + 1:] if tok not in CP_SHARED_TOKEN_EXCLUDE]
+        if before and after:
+            return before, marker, after
+    return None
+
+
+def _cp_has_person_marker(variants: List[List[str]]) -> bool:
+    return any(_cp_person_marker_split(tokens) for tokens in variants)
+
+
+def _cp_person_token_similar(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    shorter, longer = sorted((left, right), key=len)
+    if len(shorter) >= 3 and longer.startswith(shorter):
+        return True
+    return min(len(left), len(right)) >= 4 and SequenceMatcher(None, left, right).ratio() >= 0.84
+
+
+def _cp_person_tail_similar(left: List[str], right: List[str]) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+
+    left_text = " ".join(left)
+    right_text = " ".join(right)
+    if SequenceMatcher(None, left_text, right_text).ratio() >= 0.86:
+        return True
+
+    aligned = list(zip(left, right))
+    if not aligned:
+        return False
+    similar_count = sum(1 for a, b in aligned if _cp_person_token_similar(a, b))
+    if similar_count == len(aligned) and min(len(left), len(right)) == len(aligned):
+        return True
+    return similar_count / max(len(left), len(right)) >= 0.67
+
+
+def _cp_human_marker_groups_similar(
+    left_variants: List[List[str]],
+    right_variants: List[List[str]],
+) -> bool:
+    for left_tokens in left_variants:
+        left_split = _cp_person_marker_split(left_tokens)
+        if not left_split:
+            continue
+        left_before, _left_marker, left_after = left_split
+        for right_tokens in right_variants:
+            right_split = _cp_person_marker_split(right_tokens)
+            if not right_split:
+                continue
+            right_before, _right_marker, right_after = right_split
+            if left_before == right_before and _cp_person_tail_similar(left_after, right_after):
+                return True
+    return False
+
+
+def _cp_meaningful_shared_tokens(tokens: List[str]) -> set:
+    return {
+        token
+        for token in tokens
+        if token
+        and token not in CP_SHARED_TOKEN_EXCLUDE
+        and not token.isdigit()
+    }
+
+
+def _cp_markerless_groups_share_two_tokens(
+    left_variants: List[List[str]],
+    right_variants: List[List[str]],
+) -> bool:
+    if _cp_has_person_marker(left_variants) or _cp_has_person_marker(right_variants):
+        return False
+
+    for left_tokens in left_variants:
+        left_shared = _cp_meaningful_shared_tokens(left_tokens)
+        if len(left_shared) < 2:
+            continue
+        for right_tokens in right_variants:
+            right_shared = _cp_meaningful_shared_tokens(right_tokens)
+            if len(left_shared & right_shared) >= 2:
+                return True
+    return False
+
+
 def _cp_merge_key(name: Any) -> str:
     cleaned = normalise_counterparty_for_ledger(name)
     cleaned = re.sub(r"[^A-Z0-9\s]", " ", cleaned.upper())
@@ -1081,7 +1368,7 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
 
         def _bin_split(tok_list: List[str]) -> Optional[Tuple[List[str], str, List[str]]]:
             for i, t in enumerate(tok_list):
-                if t in ("BIN", "BINTI", "BT", "BTE"):
+                if t in CP_PERSON_MARKER_TOKENS:
                     return tok_list[:i], t, tok_list[i + 1:]
             return None
 
@@ -1139,6 +1426,46 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
                         _cp_absorb(groups[survivor], groups[loser])
                         del groups[loser]
                         merged_any = True
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        variant_tokens = {n: _cp_group_token_variants(n, groups[n]) for n in names}
+
+        name_list = list(names)
+        for i, a in enumerate(name_list):
+            if a not in groups:
+                continue
+            for b in name_list[i + 1:]:
+                if b not in groups or a not in groups:
+                    continue
+                if not _cp_human_marker_groups_similar(
+                    variant_tokens.get(a, []),
+                    variant_tokens.get(b, []),
+                ):
+                    continue
+                survivor, loser = (a, b) if _cp_score(groups[a]) >= _cp_score(groups[b]) else (b, a)
+                _cp_absorb(groups[survivor], groups[loser])
+                del groups[loser]
+                merged_any = True
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        variant_tokens = {n: _cp_group_token_variants(n, groups[n]) for n in names}
+
+        name_list = list(names)
+        for i, a in enumerate(name_list):
+            if a not in groups:
+                continue
+            for b in name_list[i + 1:]:
+                if b not in groups or a not in groups:
+                    continue
+                if not _cp_markerless_groups_share_two_tokens(
+                    variant_tokens.get(a, []),
+                    variant_tokens.get(b, []),
+                ):
+                    continue
+                survivor, loser = (a, b) if _cp_score(groups[a]) >= _cp_score(groups[b]) else (b, a)
+                _cp_absorb(groups[survivor], groups[loser])
+                del groups[loser]
+                merged_any = True
 
         names = [n for n in groups.keys() if not _is_protected(n)]
         keys = {n: _cp_merge_key(n) for n in names}
