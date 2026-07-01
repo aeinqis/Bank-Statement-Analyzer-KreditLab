@@ -100,8 +100,6 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(clean_counterparty_name("& DAYANG SITI RAUDZAH"), "DAYANG SITI RAUDZAH")
         self.assertEqual(clean_counterparty_name("SHAHARUDDIN SAMS HOUSE INSTALMENT"), "SHAHARUDDIN SAMS")
         self.assertEqual(clean_counterparty_name("SHAHARUDDIN SAMS INSTALMENT"), "SHAHARUDDIN SAMS")
-        self.assertEqual(clean_counterparty_name("SHAHARUDDIN SAMSI CREDIT CARD"), "SHAHARUDDIN SAMSI")
-        self.assertEqual(clean_counterparty_name("SHAHARUDDIN BIN SAM CASH BOSS"), "SHAHARUDDIN SAM")
         self.assertEqual(
             clean_counterparty_name("KETUA UNIT KESELAMAT DAYANG SURIATI BINT FAREWELL"),
             "DAYANG SURIATI",
@@ -197,30 +195,6 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(row["total_debits"], 5.0)
         self.assertEqual(row["transaction_count"], 2)
 
-    def test_company_prefix_merges_even_when_other_variant_has_b_marker(self):
-        groups = {
-            "MUHAFIZ TECHNOLOGY MTSB": {
-                "counterparty_name": "MUHAFIZ TECHNOLOGY MTSB",
-                "total_credits": 0.0,
-                "total_debits": 700000.0,
-                "transaction_count": 1,
-                "table": None,
-            },
-            "MUHAFIZ TECHNOLOGY SHAHARUDDIN B SAMSI": {
-                "counterparty_name": "MUHAFIZ TECHNOLOGY SHAHARUDDIN B SAMSI",
-                "total_credits": 0.0,
-                "total_debits": 430000.0,
-                "transaction_count": 2,
-                "table": None,
-            },
-        }
-
-        merged = _merge_counterparty_groups(groups)
-        self.assertEqual(len(merged), 1)
-        row = next(iter(merged.values()))
-        self.assertEqual(row["total_debits"], 1130000.0)
-        self.assertEqual(row["transaction_count"], 3)
-
     def test_human_names_with_bin_variants_merge_when_tail_is_similar(self):
         groups = {
             "MOHD AMIN BIN ABDULLAH": {
@@ -243,37 +217,6 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(row["total_credits"], 10.0)
         self.assertEqual(row["total_debits"], 5.0)
         self.assertEqual(row["transaction_count"], 2)
-
-    def test_shaharuddin_sams_variants_merge_but_abb_stays_separate(self):
-        groups = {
-            "SHAHARUDDIN ABB": {
-                "counterparty_name": "SHAHARUDDIN ABB",
-                "total_credits": 0.0,
-                "total_debits": 22910.0,
-                "transaction_count": 1,
-            },
-            "SHAHARUDDIN SAMS": {
-                "counterparty_name": "SHAHARUDDIN SAMS",
-                "total_credits": 0.0,
-                "total_debits": 334537.28,
-                "transaction_count": 26,
-            },
-            "SHAHARUDDIN SAMSI CREDIT CARD": {
-                "counterparty_name": "SHAHARUDDIN SAMSI CREDIT CARD",
-                "total_credits": 0.0,
-                "total_debits": 378200.13,
-                "transaction_count": 12,
-                "transactions": [
-                    {"description": "TR TO C/A SHAHARUDDIN BIN SAM CASH BOSS"}
-                ],
-            },
-        }
-
-        merged = _merge_counterparty_groups(groups)
-        self.assertEqual(set(merged.keys()), {"SHAHARUDDIN ABB", "SHAHARUDDIN SAMS"})
-        row = merged["SHAHARUDDIN SAMS"]
-        self.assertEqual(row["total_debits"], 712737.41)
-        self.assertEqual(row["transaction_count"], 38)
 
     def test_build_transactions_by_party_applies_iterative_merge(self):
         import pandas as pd

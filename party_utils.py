@@ -54,9 +54,7 @@ COUNTERPARTY_CHANNEL_TOKENS = {
     "MBB", "HLBB", "RHB", "BSN", "PBB", "ABMB", "AMFB", "QTN", "POB",
     "CA", "X", "SST", "CIMB", 
 }
-COUNTERPARTY_PERSON_CONNECTOR_TOKENS = {
-    "B", "BIN", "BINT", "BINTE", "BINTI", "BT", "BTE", "ANAK", "EN"
-}
+COUNTERPARTY_PERSON_CONNECTOR_TOKENS = {"BIN", "BINT", "BINTE", "BINTI", "ANAK", "EN"}
 COUNTERPARTY_COMPANY_SUFFIX_TOKENS = {"SDN", "BHD", "BERHAD"}
 COUNTERPARTY_BANK_NAME_PHRASES: Tuple[Tuple[str, ...], ...] = tuple(
     sorted(
@@ -140,8 +138,7 @@ COUNTERPARTY_REF_TOKEN_RE = re.compile(r"^(?:INV|REF|NO|ACC|ACCOUNT)?\d{2,}[A-Z0
 COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
 COUNTERPARTY_SDN_MARKER_TOKENS = {"SB", "SD", "SDN", "SND", "SN"}
 COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS = {
-    "BOSS", "CARD", "CASH", "CCARD", "CLAIM", "CLEANER", "CREDIT",
-    "DEBIT", "EAST", "COAST", "TRAVEL", "HOUSING",
+    "CASH", "CLAIM", "CLEANER", "EAST", "COAST", "TRAVEL", "HOUSING",
     "LOAN", "LAPTOP", "MMU", "FEES", "FEE", "OFFICE", "ELECTRICITY",
     "REFUND", "CAR", "SERVICE", "THAILAND", "TRIP", "PIKM", "THE",
     "PARK", "RESIDENT", "UNIFORM", "RENT", "RENTAL", "HOUSE", "MEDICAL",
@@ -1066,28 +1063,6 @@ CP_SHARED_TOKEN_EXCLUDE = (
     | COUNTERPARTY_BANK_LEGAL_TAIL_TOKENS
     | {"UNKNOWN", "UNIDENTIFIED", "UNCATEGORIZED"}
 )
-CP_MERGE_NOISE_TOKENS = {
-    "A",
-    "AC",
-    "ACCOUNT",
-    "BOSS",
-    "C",
-    "CA",
-    "CARD",
-    "CASH",
-    "CCARD",
-    "CREDIT",
-    "DEBIT",
-    "FR",
-    "FROM",
-    "IBG",
-    "PAY",
-    "PAYMENT",
-    "PYMT",
-    "TO",
-    "TR",
-    "TRF",
-}
 
 
 def _cp_raw_key(name: Any) -> str:
@@ -1109,29 +1084,6 @@ def _cp_group_token_variants(name: str, group: dict) -> List[List[str]]:
         values.extend(raw_names)
     elif raw_names:
         values.append(raw_names)
-
-    for txn in group.get("transactions", []) or []:
-        if not isinstance(txn, dict):
-            continue
-        values.extend(
-            [
-                txn.get("counterparty_name_raw"),
-                txn.get("counterparty_name_clean"),
-                txn.get("counterparty_name"),
-                txn.get("party_name"),
-                txn.get("counterparty"),
-                txn.get("description"),
-            ]
-        )
-
-    table = group.get("table")
-    if table is not None and hasattr(table, "to_dict"):
-        try:
-            for row in table.to_dict("records"):
-                if isinstance(row, dict):
-                    values.append(row.get("description"))
-        except Exception:
-            pass
 
     variants: List[List[str]] = []
     seen = set()
@@ -1155,14 +1107,8 @@ def _cp_person_marker_split(tokens: List[str]) -> Optional[Tuple[List[str], str,
         marker = token.strip(" .,-").upper()
         if marker not in CP_PERSON_MARKER_TOKENS:
             continue
-        before = [
-            tok for tok in tokens[:idx]
-            if tok not in CP_SHARED_TOKEN_EXCLUDE and tok not in CP_MERGE_NOISE_TOKENS
-        ]
-        after = [
-            tok for tok in tokens[idx + 1:]
-            if tok not in CP_SHARED_TOKEN_EXCLUDE and tok not in CP_MERGE_NOISE_TOKENS
-        ]
+        before = [tok for tok in tokens[:idx] if tok not in CP_SHARED_TOKEN_EXCLUDE]
+        after = [tok for tok in tokens[idx + 1:] if tok not in CP_SHARED_TOKEN_EXCLUDE]
         if before and after:
             return before, marker, after
     return None
@@ -1226,7 +1172,6 @@ def _cp_meaningful_shared_tokens(tokens: List[str]) -> set:
         for token in tokens
         if token
         and token not in CP_SHARED_TOKEN_EXCLUDE
-        and token not in CP_MERGE_NOISE_TOKENS
         and not token.isdigit()
     }
 
@@ -1235,15 +1180,14 @@ def _cp_markerless_groups_share_two_tokens(
     left_variants: List[List[str]],
     right_variants: List[List[str]],
 ) -> bool:
+    if _cp_has_person_marker(left_variants) or _cp_has_person_marker(right_variants):
+        return False
+
     for left_tokens in left_variants:
-        if _cp_person_marker_split(left_tokens):
-            continue
         left_shared = _cp_meaningful_shared_tokens(left_tokens)
         if len(left_shared) < 2:
             continue
         for right_tokens in right_variants:
-            if _cp_person_marker_split(right_tokens):
-                continue
             right_shared = _cp_meaningful_shared_tokens(right_tokens)
             if len(left_shared & right_shared) >= 2:
                 return True
