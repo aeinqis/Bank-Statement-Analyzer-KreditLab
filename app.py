@@ -804,6 +804,7 @@ def generate_interactive_html(data):
     if not large_txns and data.get('transactions'):
         large_txns = build_large_transactions_internal(data.get('transactions', []), fallback_large_threshold)
 
+    data = _sync_related_party_candidates_for_report(data)
     r = data.get('report_info', {})
     accounts = data.get('accounts', [])
     monthly = data.get('monthly_analysis', [])
@@ -4284,7 +4285,234 @@ def normalize_report_data_for_export(data: dict) -> dict:
         large_transactions=normalized.get("large_transactions", []),
         large_threshold=threshold,
     )
+    normalized = _sync_related_party_candidates_for_report(normalized)
     return normalized
+
+
+_RP_EXPORT_PERSON_MARKER_RE = re.compile(r"\b(?:BIN|BINTI|BINT|BINTE|BT|BTE|B\.?|ANAK|A/L|A/P)\b", re.I)
+_RP_EXPORT_PERSON_SHAPE_RE = re.compile(r"^[A-Z]+(?:\s+(?:A/L|A/P|[A-Z]+)){1,3}$")
+_RP_EXPORT_PERSON_BLOCK_RE = re.compile(
+    r"\b(?:SDN|BHD|BERHAD|BANK|BANKING|CREDIT|CARD|CARDS|ENTERPRISE|TRADING|"
+    r"SERVICES?|HOLDINGS?|GROUP|TECHNOLOGY|TECH|LOGISTICS|RESOURCES?|"
+    r"SUPPLY|SUPPLIES|CONSTRUCTION|ENGINEERING|VENTURES?|MARKETING)\b",
+    re.I,
+)
+_RP_EXPORT_BENEFIT_RE = re.compile(
+    r"\b(?:HIRE\s*PURCHASE|CAR\s*LOAN|HOUSING\s*LOAN|PERSONAL\s*LOAN|"
+    r"CREDIT\s*CARD|HP\s*LOAN|PETTY\s+CASH)\b",
+    re.I,
+)
+_RP_EXPORT_CONF_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+
+
+def _rp_name_key(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().upper())
+
+
+def _rp_confirmed_name_set(report_info: dict) -> set:
+    confirmed = set()
+    for rp in report_info.get("related_parties", []) or []:
+        if isinstance(rp, dict):
+            name = rp.get("name") or rp.get("party_name") or ""
+        else:
+            name = rp
+        key = _rp_name_key(name)
+        if key:
+            confirmed.add(key)
+    try:
+        for rp in st.session_state.get("related_parties_override", []) or []:
+            if isinstance(rp, dict):
+                name = rp.get("name") or rp.get("party_name") or ""
+            else:
+                name = rp
+            key = _rp_name_key(name)
+            if key:
+                confirmed.add(key)
+    except Exception:
+        pass
+    return confirmed
+
+
+def _rp_dismissed_name_set() -> set:
+    try:
+        return {
+            _rp_name_key(name)
+            for name in (st.session_state.get("related_party_candidates_dismissed", set()) or set())
+            if _rp_name_key(name)
+        }
+    except Exception:
+        return set()
+
+
+def _rp_candidate_row(candidate: dict) -> dict:
+    return {
+        "name": str(candidate.get("name", "") or "").strip(),
+        "confidence": str(candidate.get("confidence", "MEDIUM") or "MEDIUM").upper(),
+        "score": candidate.get("score"),
+        "evidence": candidate.get("evidence", ""),
+        "total_dr": safe_float(candidate.get("total_dr", 0)),
+        "total_cr": safe_float(candidate.get("total_cr", 0)),
+        "debit_count": int(safe_float(candidate.get("debit_count", 0))),
+        "credit_count": int(safe_float(candidate.get("credit_count", 0))),
+    }
+
+
+def _rp_export_looks_like_person(name: str) -> bool:
+    cleaned = _rp_name_key(name)
+    if not cleaned or any(ch.isdigit() for ch in cleaned):
+        return False
+    if _RP_EXPORT_PERSON_MARKER_RE.search(cleaned):
+        return True
+    if not _RP_EXPORT_PERSON_SHAPE_RE.match(cleaned):
+        return False
+    return not _RP_EXPORT_PERSON_BLOCK_RE.search(cleaned)
+
+
+def _rp_export_has_benefit_memo(cp: dict) -> bool:
+    for txn in cp.get("transactions", []) or []:
+        if not isinstance(txn, dict):
+            continue
+        text = f"{txn.get('description', '')} {txn.get('counterparty_name_raw', '')}"
+        if _RP_EXPORT_BENEFIT_RE.search(text):
+            return True
+    return False
+
+
+def _ledger_candidate_fallback_rows(cp_ledger: dict, confirmed: set, dismissed: set) -> List[dict]:
+    rows = []
+    if not isinstance(cp_ledger, dict):
+        return rows
+
+    noise = {
+        "UNKNOWN", "TRANSFER FEE", "OTHER TRANSFER FEE", "CHEQUE",
+        "CASH DEPOSIT", "CASH WITHDRAWAL", "BANK FEES", "BULK SALARY",
+        "FD/INTEREST", "LOAN REPAYMENT", "LOAN DISBURSEMENT", "KWSP",
+        "SOCSO", "LHDN", "HRDF", "REVERSAL", "RETURNED CHEQUE",
+        "INWARD RETURN", "JANM", "IBG RETURN",
+    }
+
+    for cp in cp_ledger.get("counterparties", []) or []:
+        if not isinstance(cp, dict):
+            continue
+        name = str(cp.get("counterparty_name", "") or "").strip()
+        key = _rp_name_key(name)
+        if not key or key in noise or key in confirmed or key in dismissed:
+            continue
+
+        cr = safe_float(cp.get("total_credits", 0))
+        dr = safe_float(cp.get("total_debits", 0))
+        total = cr + dr
+        if total < 10_000:
+            continue
+
+        is_person = _rp_export_looks_like_person(name)
+        has_circular = cr > 0 and dr > 0
+        has_benefit = is_person and _rp_export_has_benefit_memo(cp)
+        confidence = "LOW"
+        evidence = []
+
+        if is_person:
+            evidence.append("Personal-name shape detected")
+        if has_benefit:
+            confidence = "MEDIUM"
+            evidence.append("Personal benefit memo detected")
+        elif is_person and dr >= 50_000:
+            confidence = "MEDIUM"
+            evidence.append(f"Material outflow to individual RM {dr:,.0f}")
+        if has_circular:
+            confidence = "MEDIUM"
+            evidence.append(f"Circular flow - CR RM {cr:,.0f} / DR RM {dr:,.0f}")
+        if dr > 500_000:
+            confidence = "HIGH" if is_person or has_circular or has_benefit else "MEDIUM"
+            evidence.append(f"High outflow RM {dr:,.0f}")
+
+        if confidence == "LOW":
+            continue
+
+        rows.append({
+            "name": name,
+            "confidence": confidence,
+            "score": None,
+            "evidence": "; ".join(evidence),
+            "total_dr": dr,
+            "total_cr": cr,
+            "debit_count": int(safe_float(cp.get("debit_count", 0))),
+            "credit_count": int(safe_float(cp.get("credit_count", 0))),
+        })
+
+    return rows
+
+
+def _sync_related_party_candidates_for_report(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return data
+
+    report_info = data.setdefault("report_info", {})
+    if not isinstance(report_info, dict):
+        report_info = {}
+        data["report_info"] = report_info
+
+    cp_ledger = data.get("counterparty_ledger", {}) or {}
+    if (not cp_ledger or not cp_ledger.get("counterparties")) and data.get("transactions"):
+        try:
+            cp_ledger = build_track2_counterparty_ledger(data.get("transactions", []))
+            data["counterparty_ledger"] = cp_ledger
+        except Exception:
+            cp_ledger = {}
+
+    canonical_rows = build_canonical_counterparty_ledger_rows(cp_ledger)
+    canonical_ledger = {"counterparties": canonical_rows}
+    confirmed = _rp_confirmed_name_set(report_info)
+    dismissed = _rp_dismissed_name_set()
+
+    existing = [
+        _rp_candidate_row(c)
+        for c in (report_info.get("related_party_candidates", []) or [])
+        if isinstance(c, dict) and _rp_name_key(c.get("name")) not in confirmed | dismissed
+    ]
+
+    try:
+        detected = detect_related_party_candidates(
+            canonical_ledger,
+            confirmed,
+            dismissed,
+            data,
+        )
+    except Exception:
+        detected = []
+
+    fallback = _ledger_candidate_fallback_rows(canonical_ledger, confirmed, dismissed)
+
+    by_name = {}
+    for candidate in existing + [_rp_candidate_row(c) for c in detected if isinstance(c, dict)] + fallback:
+        key = _rp_name_key(candidate.get("name"))
+        if not key or key in confirmed or key in dismissed:
+            continue
+        current = by_name.get(key)
+        if current is None:
+            by_name[key] = candidate
+            continue
+        current_rank = _RP_EXPORT_CONF_ORDER.get(current.get("confidence"), 9)
+        candidate_rank = _RP_EXPORT_CONF_ORDER.get(candidate.get("confidence"), 9)
+        if (
+            candidate_rank < current_rank
+            or (
+                candidate_rank == current_rank
+                and safe_float(candidate.get("total_dr", 0)) > safe_float(current.get("total_dr", 0))
+            )
+        ):
+            by_name[key] = candidate
+
+    candidates = sorted(
+        by_name.values(),
+        key=lambda c: (
+            _RP_EXPORT_CONF_ORDER.get(c.get("confidence"), 9),
+            -safe_float(c.get("total_dr", 0)),
+        ),
+    )
+    report_info["related_party_candidates"] = candidates[:30]
+    report_info["related_party_candidates_total"] = len(candidates)
+    return data
 
 
 def _finalize_shared_report_data(
@@ -4321,6 +4549,7 @@ def _finalize_shared_report_data(
         large_transactions=data.get("large_transactions", []),
         large_threshold=threshold,
     )
+    data = _sync_related_party_candidates_for_report(data)
     return _sync_data_quality_status(data)
 
 
