@@ -7404,6 +7404,40 @@ def _summary_for_flags_track2(
 # C01 = own DR, C02 = own CR, C03 = related DR, C04 = related CR.
 _OWN_RELATED_PRIMARIES: frozenset[str] = frozenset({"C01", "C02", "C03", "C04"})
 _OWN_PARTY_PRIMARIES: frozenset[str] = frozenset({"C01", "C02"})
+_RELATED_PARTY_PRIMARIES: frozenset[str] = frozenset({"C03", "C04"})
+
+
+def _related_party_display_name(party: Any) -> str:
+    if isinstance(party, dict):
+        raw = party.get("name") or party.get("party_name") or ""
+    else:
+        raw = "" if party is None else str(party)
+    return re.sub(r"\s+", " ", str(raw).strip())
+
+
+def _matched_related_party_name(
+    counterparty_name: Any,
+    description: Any,
+    related_parties: list[Any] | None,
+) -> str | None:
+    """Return the confirmed RP name that caused a C03/C04 substring match."""
+    if not related_parties:
+        return None
+
+    cp_upper = str(counterparty_name or "").upper()
+    desc_upper = str(description or "").upper()
+    matches: list[str] = []
+    for party in related_parties:
+        name = _related_party_display_name(party)
+        if not name:
+            continue
+        name_upper = name.upper()
+        if name_upper in cp_upper or name_upper in desc_upper:
+            matches.append(name)
+
+    if not matches:
+        return None
+    return max(matches, key=lambda name: (len(name), name.casefold()))
 
 
 def _row_amount_and_side(row: dict[str, Any]) -> tuple[float, str | None]:
@@ -7426,14 +7460,17 @@ def _row_amount_and_side(row: dict[str, Any]) -> tuple[float, str | None]:
 def _build_own_related_transactions_list_track2(
     classified: list[dict[str, Any]],
     counterparty_lookup: dict[int, str] | None = None,
+    related_parties: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build ``own_related_transactions.transactions[]`` per v6.3.5 schema.
 
     Lists every row whose classification primary is C01/C02/C03/C04.
     Each entry carries the v6.3.5-required keys ``date``, ``description``,
     ``amount``, ``type`` (CREDIT|DEBIT), and ``party_type`` (OWN|RELATED).
-    ``party_name`` is populated from ``counterparty_lookup`` when the
-    row's index has a non-synthetic name; otherwise omitted.
+    ``party_name`` is populated from ``counterparty_lookup`` for own-party
+    rows. Related-party rows are displayed under the canonical confirmed
+    related-party name that matched the counterparty/description, so aliases
+    such as payment-purpose suffixes do not create extra report expanders.
 
     Pure function. Empty list until C01-C04 rungs fire (RP foundation).
     """
@@ -7447,16 +7484,25 @@ def _build_own_related_transactions_list_track2(
         amount, side = _row_amount_and_side(row)
         if side is None:
             continue
+        description = str(row.get("description") or "")
         entry: dict[str, Any] = {
             "date": str(row.get("date") or ""),
-            "description": str(row.get("description") or ""),
+            "description": description,
             "amount": round(amount, 2),
             "type": "CREDIT" if side == "CR" else "DEBIT",
             "party_type": "OWN" if primary in _OWN_PARTY_PRIMARIES else "RELATED",
             "account_number": _coerce_account_no(row),
         }
         party_name = counterparty_lookup.get(idx)
-        if isinstance(party_name, str) and party_name.strip():
+        if primary in _RELATED_PARTY_PRIMARIES:
+            matched_rp = _matched_related_party_name(
+                party_name, description, related_parties
+            )
+            if matched_rp:
+                entry["party_name"] = matched_rp
+            elif isinstance(party_name, str) and party_name.strip():
+                entry["party_name"] = party_name.strip()
+        elif isinstance(party_name, str) and party_name.strip():
             entry["party_name"] = party_name.strip()
         out.append(entry)
     return out
@@ -7948,7 +7994,9 @@ def build_track2_result(
 
     # ── Stage 6b — Slice C Part 2 list builders ────────────────────────────
     own_related_list = _build_own_related_transactions_list_track2(
-        classified, counterparty_lookup=counterparty_lookup
+        classified,
+        counterparty_lookup=counterparty_lookup,
+        related_parties=effective_related_parties,
     )
     loan_lists = _build_loan_transactions_track2(classified)
     # Attach the loan-review net (computed above for Flag 12) alongside the

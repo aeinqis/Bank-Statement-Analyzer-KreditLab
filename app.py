@@ -1000,6 +1000,30 @@ def generate_interactive_html(data):
         rel = rp.get('relationship', '') if isinstance(rp, dict) else ''
         rp_html += f'<span class="rp-tag">{name} <small>({rel})</small></span>'
 
+    def _related_party_display_name(rp):
+        if isinstance(rp, dict):
+            raw_name = rp.get('name') or rp.get('party_name') or ''
+        else:
+            raw_name = str(rp or '')
+        return re.sub(r'\s+', ' ', str(raw_name).strip())
+
+    related_party_names = [
+        name for name in (_related_party_display_name(rp) for rp in related_parties)
+        if name
+    ]
+
+    def _matched_related_party_name(counterparty_name, description):
+        cp_upper = str(counterparty_name or '').upper()
+        desc_upper = str(description or '').upper()
+        matches = []
+        for name in related_party_names:
+            name_upper = name.upper()
+            if name_upper in cp_upper or name_upper in desc_upper:
+                matches.append(name)
+        if not matches:
+            return ''
+        return max(matches, key=lambda value: (len(value), value.casefold()))
+
     # ── Related-party candidates (advisory only; analyst confirms) ──
     # MEDIUM/LOW RP3 near-misses that did NOT auto-confirm and exclude nothing.
     # Surfaced so the analyst sees them instead of hunting the full ledger.
@@ -1491,10 +1515,13 @@ def generate_interactive_html(data):
     for t in own_related.get('transactions', []) or []:
         if not isinstance(t, dict):
             continue
-        party_name = str(t.get('party_name') or 'Unknown Party').strip() or 'Unknown Party'
+        raw_party_name = str(t.get('party_name') or 'Unknown Party').strip() or 'Unknown Party'
         party_type = str(t.get('party_type') or '').strip()
         party_type_upper = party_type.upper()
         badge_type = 'OP' if party_type_upper.startswith('OWN') else 'RP'
+        party_name = raw_party_name
+        if badge_type == 'RP':
+            party_name = _matched_related_party_name(raw_party_name, t.get('description')) or raw_party_name
         key = (party_name.casefold(), badge_type, party_name)
         group = rp_groups.setdefault(
             key,

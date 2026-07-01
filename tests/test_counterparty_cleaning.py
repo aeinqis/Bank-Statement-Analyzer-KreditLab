@@ -1,6 +1,7 @@
 import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
+from kredit_lab_classify_track2 import _build_own_related_transactions_list_track2
 from party_utils import (
     _merge_counterparty_groups,
     build_transactions_by_party,
@@ -469,6 +470,46 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(rows[0]["counterparty_name_raw"], "TRANSFER FEE")
         self.assertEqual(rows[0]["counterparty_name_clean"], "TRANSFER FEE")
         self.assertEqual(rows[0]["party_name"], "TRANSFER FEE")
+
+    def test_own_related_list_groups_related_rows_by_confirmed_names(self):
+        classified = [
+            {
+                "date": "2026-01-01",
+                "description": "TR IBG DAYANG SITI RAUDZAH OFFICE ELECTRICITY",
+                "credit": 0.0,
+                "debit": 3571.65,
+                "classification": {"primary": "C04", "side": "DR"},
+            },
+            {
+                "date": "2026-01-02",
+                "description": "TR IBG SHAHARUDDIN SAMSI CC BOS SHAH",
+                "credit": 0.0,
+                "debit": 18809.31,
+                "classification": {"primary": "C04", "side": "DR"},
+            },
+            {
+                "date": "2026-01-03",
+                "description": "TR IBG CLOSE",
+                "credit": 1052.07,
+                "debit": 0.0,
+                "classification": {"primary": "C01", "side": "CR"},
+            },
+        ]
+        counterparty_lookup = {
+            0: "DAYANG SITI RAUDZAH OFFICE ELECTRICITY",
+            1: "SHAHARUDDIN SAMSI CC BOS SHAH",
+            2: "CLOSE",
+        }
+
+        rows = _build_own_related_transactions_list_track2(
+            classified,
+            counterparty_lookup=counterparty_lookup,
+            related_parties=["DAYANG SITI RAUDZAH", "SHAHARUDDIN SAMS"],
+        )
+
+        self.assertEqual(rows[0]["party_name"], "DAYANG SITI RAUDZAH")
+        self.assertEqual(rows[1]["party_name"], "SHAHARUDDIN SAMS")
+        self.assertEqual(rows[2]["party_name"], "CLOSE")
 
 
 if __name__ == "__main__":
