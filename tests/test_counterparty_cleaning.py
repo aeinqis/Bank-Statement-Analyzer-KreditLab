@@ -325,6 +325,34 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(row["total_debits"], 55910.0)
         self.assertEqual(row["transaction_count"], 2)
 
+    def test_single_person_bucket_recovers_marker_name_from_raw_aliases(self):
+        groups = {
+            "SAMSI IBRAHIM": {
+                "counterparty_name": "SAMSI IBRAHIM",
+                "total_credits": 0.0,
+                "total_debits": 43702.0,
+                "transaction_count": 6,
+                "credit_count": 0,
+                "debit_count": 6,
+                "raw_names": {"SAMSI BIN IBRAHIM"},
+                "transactions": [],
+            },
+            "MARIANA AHMAT": {
+                "counterparty_name": "MARIANA AHMAT",
+                "total_credits": 0.0,
+                "total_debits": 8760.0,
+                "transaction_count": 7,
+                "credit_count": 0,
+                "debit_count": 7,
+                "raw_names": {"MARIANA BINTI AHMAT"},
+                "transactions": [],
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+
+        self.assertEqual(set(merged.keys()), {"SAMSI BIN IBRAHIM", "MARIANA BINTI AHMAT"})
+
     def test_noraziyan_oth_noise_variants_merge(self):
         names = [
             "ANNUAL DINNER NORAZIYAN OTH",

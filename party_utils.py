@@ -1956,6 +1956,15 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
         if not merged_any:
             break
 
+    for name in list(groups.keys()):
+        if name not in groups or _is_protected(name):
+            continue
+        if _has_company_suffix(name):
+            continue
+        canonical = _cp_choose_person_canonical([name], groups)
+        if canonical and canonical != name:
+            _cp_rename_group_key(groups, name, canonical)
+
     return groups
 
 
