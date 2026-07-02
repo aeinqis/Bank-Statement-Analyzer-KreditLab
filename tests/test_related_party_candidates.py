@@ -1,6 +1,7 @@
 import unittest
 
 from kredit_lab_classify_track2 import (
+    _is_excluded_related_party_name,
     advisory_rp_candidates,
     scan_related_party_candidates,
 )
@@ -88,6 +89,51 @@ class RelatedPartyCandidateTests(unittest.TestCase):
         ordered = advisory_rp_candidates(candidates, effective_related_parties=[])
 
         self.assertEqual([c["name"] for c in ordered], ["KHAIRUL OTHMAN", "AHMAD ALI"])
+
+    def test_transfer_fee_and_full_kwsp_name_are_synthetic_not_related_parties(self):
+        ledger = {
+            "counterparties": [
+                {
+                    "counterparty_name": "TRANSFER FEE",
+                    "transaction_count": 4,
+                    "credit_count": 0,
+                    "debit_count": 4,
+                    "total_credits": 0.0,
+                    "total_debits": 20000.0,
+                    "transactions": [
+                        _debit("2025-09-01", "OTHER TRANSFER FEE", 5000.0),
+                        _debit("2025-10-01", "OTHER TRANSFER FEE", 5000.0),
+                        _debit("2025-11-01", "OTHER TRANSFER FEE", 5000.0),
+                        _debit("2025-12-01", "OTHER TRANSFER FEE", 5000.0),
+                    ],
+                },
+                {
+                    "counterparty_name": "KUMPULAN WANG SIMPANAN PEKERJA",
+                    "transaction_count": 4,
+                    "credit_count": 0,
+                    "debit_count": 4,
+                    "total_credits": 0.0,
+                    "total_debits": 40000.0,
+                    "transactions": [
+                        _debit("2025-09-15", "KUMPULAN WANG SIMPANAN PEKERJA", 10000.0),
+                        _debit("2025-10-15", "KUMPULAN WANG SIMPANAN PEKERJA", 10000.0),
+                        _debit("2025-11-15", "KUMPULAN WANG SIMPANAN PEKERJA", 10000.0),
+                        _debit("2025-12-15", "KUMPULAN WANG SIMPANAN PEKERJA", 10000.0),
+                    ],
+                },
+            ]
+        }
+
+        self.assertEqual(scan_related_party_candidates(ledger), [])
+
+    def test_synthetic_names_are_excluded_even_from_related_party_overrides(self):
+        self.assertTrue(_is_excluded_related_party_name({"name": "TRANSFER FEE"}))
+        self.assertTrue(
+            _is_excluded_related_party_name(
+                {"name": "KUMPULAN WANG SIMPANAN PEKERJA"}
+            )
+        )
+        self.assertFalse(_is_excluded_related_party_name({"name": "DAYANG SITI RAUDZAH"}))
 
 
 if __name__ == "__main__":

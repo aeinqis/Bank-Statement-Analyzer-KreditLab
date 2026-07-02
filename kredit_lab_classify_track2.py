@@ -1983,7 +1983,9 @@ _RP_EXCLUDE_NAMES = frozenset({
     "UNCATEGORIZED", "REVERSAL", "RETURNED CHEQUE", "JANM", "APAYLATER",
     "BULK SALARY", "BANK FEES", "FD/INTEREST", "LOAN REPAYMENT",
     "LOAN DISBURSEMENT", "CASH DEPOSIT", "CASH WITHDRAWAL", "INWARD RETURN",
-    "KWSP", "SOCSO", "LHDN", "HRDF",
+    "KWSP", "KUMPULAN WANG SIMPAN PEKERJA", "KUMPULAN WANG SIMPANAN PEKERJA",
+    "SOCSO", "LHDN", "HRDF",
+    "TRANSFER FEE", "OTHER TRANSFER FEE",
     "CHEQUE DEPOSIT", "CHEQUE ISSUE",
 })
 
@@ -6355,9 +6357,13 @@ _SYNTHETIC_COUNTERPARTY_LABELS: frozenset[str] = frozenset(
         "LOAN REPAYMENT",
         "LOAN DISBURSEMENT",
         "KWSP",
+        "KUMPULAN WANG SIMPAN PEKERJA",
+        "KUMPULAN WANG SIMPANAN PEKERJA",
         "SOCSO",
         "LHDN",
         "HRDF",
+        "TRANSFER FEE",
+        "OTHER TRANSFER FEE",
         "REVERSAL",
         "RETURNED CHEQUE",
         "INWARD RETURN",
@@ -7427,6 +7433,13 @@ def _related_party_display_name(party: Any) -> str:
     return re.sub(r"\s+", " ", str(raw).strip())
 
 
+def _is_excluded_related_party_name(party: Any) -> bool:
+    name = _related_party_display_name(party)
+    if not name:
+        return True
+    return _is_synthetic_counterparty_label(name) or name.upper() in _RP_EXCLUDE_NAMES
+
+
 def _matched_related_party_name(
     counterparty_name: Any,
     description: Any,
@@ -7882,19 +7895,23 @@ def build_track2_result(
         seen_upper: set[str] = set()
         merged_rp: list[str] = []
         for name in (related_parties or []):
-            if not name:
+            display_name = _related_party_display_name(name)
+            if not display_name or _is_excluded_related_party_name(name):
                 continue
-            key = name.upper()
+            key = display_name.upper()
             if key in seen_upper:
                 continue
             seen_upper.add(key)
-            merged_rp.append(name)
+            merged_rp.append(display_name)
         for name in auto_rp:
-            key = name.upper()
+            display_name = _related_party_display_name(name)
+            if not display_name or _is_excluded_related_party_name(name):
+                continue
+            key = display_name.upper()
             if key in seen_upper:
                 continue
             seen_upper.add(key)
-            merged_rp.append(name)
+            merged_rp.append(display_name)
         effective_related_parties = merged_rp
     else:
         effective_related_parties = None

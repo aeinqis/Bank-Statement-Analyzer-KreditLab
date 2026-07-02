@@ -18,6 +18,20 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(clean_counterparty_name("KHAIRUL OTHMAN BIN"), "KHAIRUL OTHMAN")
         self.assertEqual(clean_counterparty_name("KHAIRUL OTHMAN BIN STAFF OVERTIME"), "KHAIRUL OTHMAN")
 
+    def test_embedded_khairul_othman_variants_merge(self):
+        names = [
+            "KHAIRUL OTHMAN BIN POB MTSB",
+            "KHAIRUL OTHMAN BIN DEVICE VMS",
+            "HOSPITAL SIBU KHAIRUL OTHMAN BIN PERUNTUKAN BAJET",
+            "PENYERAHAN DEVICE UT KHAIRUL OTHMAN BIN PROJEK AIRBUS",
+            "PETTY CASH KHAIRUL OTHMAN BIN POB MPSB",
+            "GUARDPRO KHAIRUL OTHMAN BIN DEVICE 2 SET",
+            "LOGI CAM AND MEMORY KHAIRUL OTHMAN BIN PROJECT AIRBUS",
+            "KHAIRUL OTHMAN BIN STAFF INCENTIVE",
+        ]
+
+        self.assertEqual([clean_counterparty_name(name) for name in names], ["KHAIRUL OTHMAN"] * len(names))
+
     def test_removes_channel_suffixes_from_abbreviations(self):
         names = ["CTC", "CTC CA", "CTC X", "CTC SST"]
         self.assertEqual([clean_counterparty_name(name) for name in names], ["CTC"] * 4)
