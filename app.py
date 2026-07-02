@@ -1297,7 +1297,8 @@ def generate_interactive_html(data):
     </tr>'''
 
     # ── Top parties with ghost-verb suppression ──
-    party_view = prepare_top_parties_for_report(top_parties)
+    company_name = r.get('company_name', 'Company')
+    party_view = prepare_top_parties_for_report(top_parties, company_name=company_name)
     _payers = party_view['payers']
     _payees = party_view['payees']
     _payers_suppressed = party_view['payers_suppressed']
@@ -3604,7 +3605,7 @@ def _normalize_party_for_report(party: dict, is_payer: bool) -> dict:
     }
 
 
-def prepare_top_parties_for_report(top_parties: dict, limit: int = 10) -> dict:
+def prepare_top_parties_for_report(top_parties: dict, limit: int = 10, company_name: str = "") -> dict:
     """Prepare the exact top-party view rendered by HTML and Excel."""
     if not isinstance(top_parties, dict):
         top_parties = {}
@@ -3623,16 +3624,17 @@ def prepare_top_parties_for_report(top_parties: dict, limit: int = 10) -> dict:
     for idx, party in enumerate(payees, 1):
         party["rank"] = idx
 
-     # Mark OP (Own Party) relationships
-    company_upper = company_name.upper()
-    for party in payers:
-        party_name = party.get('party_name', '').upper()
-        if company_name and (party_name in company_upper or company_upper in party_name):
-            party['is_own_party'] = True
-    for party in payees:
-        party_name = party.get('party_name', '').upper()
-        if company_name and (party_name in company_upper or company_upper in party_name):
-            party['is_own_party'] = True
+    # Mark OP (Own Party) relationships - FIXED: check if company_name is provided
+    if company_name:
+        company_upper = company_name.upper()
+        for party in payers:
+            party_name = party.get('party_name', '').upper()
+            if company_name and (party_name in company_upper or company_upper in party_name):
+                party['is_own_party'] = True
+        for party in payees:
+            party_name = party.get('party_name', '').upper()
+            if company_name and (party_name in company_upper or company_upper in party_name):
+                party['is_own_party'] = True
 
     return {
         "payers": payers,
@@ -5342,7 +5344,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Top Parties
     ws3 = wb.create_sheet("Top Parties")
-    party_view = prepare_top_parties_for_report(top_parties, limit=10)
+    company_name = report_info.get("company_name", "")
+    party_view = prepare_top_parties_for_report(top_parties, limit=10, company_name=company_name)
     payers = party_view["payers"]
     payees = party_view["payees"]
     all_party_rows = list(payers) + list(payees)
