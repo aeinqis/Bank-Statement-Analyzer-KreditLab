@@ -2299,31 +2299,6 @@ def _is_salary_recipient(cp: dict[str, Any]) -> bool:
 def _compute_rp_signals(
     cp: dict[str, Any], gross_dr: float
 ) -> dict[str, Any] | None:
-    """Score one counterparty against the five RP signals. Return None if
-    no signal fires.
-
-    Signals + weights (matches Track 1 verbatim):
-      1. personal_keyword_sweep (weight 2): debit_count ≥ 3 AND ≥ 2 rows
-         contain a token from ``PERSONAL_KEYWORDS_RP4``.
-      2. concentration_dr (weight 2): cp gross DR ≥ 5% of total gross DR.
-      3. monthly_recurrence (weight 1): DR rows span ≥ 3 distinct months.
-      4. bidirectional_flow (weight 2): min(cr_count, dr_count) ≥ 2 —
-         the textbook director loan-account pattern.
-      5. round_amount (weight 1) OR round_amount_sustained (weight 2):
-         ≥ 2 round-DR hits (multiple of 100, ≥ 1000) escalates to the
-         sustained tier when ≥ 5 hits across ≥ 4 months.
-
-    "(possibly multiple parties)" parser stamp forces LOW unless the cp
-    also has bidirectional flow — single-direction ambiguous buckets
-    can't be auto-confirmed without analyst disambiguation, but the
-    back-and-forth itself disambiguates the bidirectional case (RHB Waja
-    ASHRUL precedent).
-
-    Returns a dict with `signals`, `score`, `confidence` (HIGH/MEDIUM/LOW),
-    `ambiguous_multi_party`, `evidence`, `total_dr`, `total_cr`,
-    `debit_count`, `credit_count` — or None if no signal fires at all.
-    Same shape Track 1 emits so downstream consumers see identical data.
-    """
     debit_count = int(cp.get("debit_count", 0) or 0)
     credit_count = int(cp.get("credit_count", 0) or 0)
     total_dr = float(cp.get("total_debits", 0.0) or 0.0)
@@ -2331,14 +2306,15 @@ def _compute_rp_signals(
     txs = cp.get("transactions", []) or []
     cp_name = cp.get("counterparty_name") or ""
 
-    # Parser-stamped multi-party suffix forces LOW (see docstring).
     is_ambiguous_multi_party = (
         "(possibly multiple parties)" in cp_name.lower()
     )
 
     signals: list[tuple[str, int, str]] = []
 
-    # 1. Personal-keyword sweep.
+    # 1. Personal-keyword sweep — lowered gate from >= 3 to >= 2 debit rows
+    #    so thin petty-cash/claim/reimburse counterparties aren't excluded
+    #    before they're even checked.
     if debit_count >= 2:
         personal_hits = sum(
             1 for tx in txs
@@ -2372,11 +2348,7 @@ def _compute_rp_signals(
             "monthly_recurrence", 1, f"DR over {debit_month_count} months",
         ))
 
-    # 4. Bidirectional flow — director loan-account pattern. Requires both
-    # a minimum count on each side AND materiality of the smaller side: a
-    # genuine current account has substantial two-way flow, whereas an
-    # employee / petty-cash custodian shows large one-way disbursements with
-    # a couple of trivial refunds (e.g. RM399 returned against RM22k paid).
+    # 4. Bidirectional flow.
     _bidir_max = max(total_cr, total_dr)
     _bidir_material = (
         _bidir_max > 0
@@ -2391,7 +2363,7 @@ def _compute_rp_signals(
             f"{credit_count}CR / {debit_count}DR",
         ))
 
-    # 5. Round-number advances — two tiers.
+    # 5. Round-number advances — now fires from a single hit (min lowered to 1).
     round_dr_months: set[str] = set()
     round_hits = 0
     for tx in txs:
@@ -2413,14 +2385,11 @@ def _compute_rp_signals(
             f"{round_hits} round DRs over {len(round_dr_months)} months",
         ))
     elif round_hits >= _RP_ROUND_HITS_MIN:
+        label = "round DR" if round_hits == 1 else "round DRs"
         signals.append((
-            "round_amount_advance", 1, f"{round_hits} round DRs",
+            "round_amount_advance", 1, f"{round_hits} {label}",
         ))
 
-    # Director-benefit — company settling a natural person's personal
-    # liability (hire-purchase / car / housing / personal loan / credit
-    # card). A standalone hard anchor: strong related-party evidence even
-    # for an otherwise single-direction bucket.
     if _has_director_benefit(cp):
         signals.append((
             "director_benefit", 2,
@@ -2432,43 +2401,11 @@ def _compute_rp_signals(
 
     score = sum(weight for _, weight, _ in signals)
     has_bidirectional = any(sig == "bidirectional_flow" for sig, _, _ in signals)
-    # An ambiguous first-name bucket disambiguates ONLY on materially
-    # reciprocal two-way flow — not on the thin token refunds that merely
-    # clear the general 0.05 bidirectional gate (those are coincidental
-    # multi-person collisions, not one director's loan account). See
-    # _RP_AMBIGUOUS_DISAMBIG_RATIO.
     _recip_max = max(total_cr, total_dr)
     _recip_ratio = (min(total_cr, total_dr) / _recip_max) if _recip_max > 0 else 0.0
     strong_reciprocal = has_bidirectional and _recip_ratio >= _RP_AMBIGUOUS_DISAMBIG_RATIO
     force_low_ambiguous = is_ambiguous_multi_party and not strong_reciprocal
 
-    # HIGH auto-confirm requires a "hard anchor" — bidirectional flow (the
-    # director loan-account back-and-forth) OR concentration (a materially
-    # large share of total outflow). The soft signals on their own
-    # (monthly_recurrence + round_amount_sustained, or personal_keyword_
-    # sweep) fire on ordinary single-direction operating payments: fixed
-    # monthly rent, recurring sub-contractor retainers, and staff
-    # expense-reimbursement buckets. Without a hard anchor those cap at
-    # MEDIUM (analyst-review) instead of auto-confirming as Affiliates.
-    #
-    # concentration_dr stops counting as a hard anchor for a one-way CONFIRMED
-    # BUSINESS ENTITY. A one-way, high-volume company / financier / firm is a
-    # trade vendor or lender — not an affiliate — and high concentration is the
-    # EXPECTED shape of the company's biggest supplier (e.g. PETRON fuel) or
-    # asset financier (e.g. SCANIA CREDIT hire-purchase). The bank often
-    # truncates the corporate suffix (Maybank's ``*`` cut: ``SCANIA CREDIT
-    # (MALA``, ``PETRON FUEL INTL -F``) so the plain company gate can't catch
-    # them by SDN BHD; the finance / business-noun / public-body token tests
-    # do. Such buckets cap at MEDIUM (advisory panel) instead of auto-
-    # confirming. A genuine one-way corporate affiliate is confirmed by the
-    # analyst, not by concentration.
-    #
-    # Demotion is gated on POSITIVE business-entity evidence — NOT on "fails
-    # the person test" — so a person whose name shape the marker/clean-name
-    # heuristics miss (concatenated Bank Rakyat DATAPOS forms like
-    # ``SITINURHAFIZAHBINTIOTHMAN``; ``@``-joined Chinese names like ``LING SOW
-    # REUM @ LIN``) keeps concentration as an anchor and is not lost. A
-    # counterparty with bidirectional flow is always anchored regardless.
     _concentration_fired = any(sig == "concentration_dr" for sig, _, _ in signals)
     _is_business_entity = bool(
         _looks_like_company(cp_name)
