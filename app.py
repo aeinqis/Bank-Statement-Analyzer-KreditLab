@@ -3564,11 +3564,6 @@ def build_canonical_counterparty_ledger_rows(cp_ledger: dict) -> List[dict]:
         raw_name = str(cp.get("counterparty_name", cp.get("counterparty", "")) or "").strip()
         if raw_name:
             merged["raw_names"].add(raw_name)
-        cp_raw_names = cp.get("raw_names")
-        if isinstance(cp_raw_names, (list, set, tuple)):
-            merged["raw_names"].update(str(name).strip() for name in cp_raw_names if str(name).strip())
-        elif cp_raw_names:
-            merged["raw_names"].add(str(cp_raw_names).strip())
         merged["total_credits"] += safe_float(cp.get("total_credits", cp.get("total_credit", 0)))
         merged["total_debits"] += safe_float(cp.get("total_debits", cp.get("total_debit", 0)))
         merged["credit_count"] += int(safe_float(cp.get("credit_count", cp.get("credit_tx_count", 0))))
@@ -3586,14 +3581,6 @@ def build_canonical_counterparty_ledger_rows(cp_ledger: dict) -> List[dict]:
             if isinstance(txn, dict):
                 txn_copy = dict(txn)
                 txn_copy["counterparty_name_clean"] = clean_name
-                txn_raw_name = str(
-                    txn_copy.get("counterparty_name_raw")
-                    or txn_copy.get("_raw_counterparty")
-                    or txn_copy.get("raw_counterparty")
-                    or ""
-                ).strip()
-                if txn_raw_name:
-                    merged["raw_names"].add(txn_raw_name)
                 merged["transactions"].append(txn_copy)
 
     merged_counterparties = _merge_counterparty_groups(
@@ -4552,13 +4539,7 @@ def build_shared_report_data(
 
     if _TRACK2_AVAILABLE:
         try:
-            raw_cp_ledger = build_track2_counterparty_ledger(transactions)
-            canonical_counterparties = build_canonical_counterparty_ledger_rows(raw_cp_ledger)
-            cp_ledger = {
-                **raw_cp_ledger,
-                "counterparties": canonical_counterparties,
-                "total_counterparties": len(canonical_counterparties),
-            }
+            cp_ledger = build_track2_counterparty_ledger(transactions)
             company_names = list({
                 str(t.get("company_name", "") or "").strip()
                 for t in transactions
@@ -4613,13 +4594,7 @@ def build_shared_report_data(
     report_data["pdf_integrity"] = pdf_integrity
     
     # Build top_parties from CP ledger for legacy fallback too
-    raw_cp_ledger = build_track2_counterparty_ledger(transactions)
-    canonical_counterparties = build_canonical_counterparty_ledger_rows(raw_cp_ledger)
-    cp_ledger = {
-        **raw_cp_ledger,
-        "counterparties": canonical_counterparties,
-        "total_counterparties": len(canonical_counterparties),
-    }
+    cp_ledger = build_track2_counterparty_ledger(transactions)
     report_data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
     report_data["counterparty_ledger"] = cp_ledger
     
@@ -5993,7 +5968,6 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
         "credit_count": 0,
         "debit_count": 0,
         "transactions": [],
-        "raw_names": set(),
         "pattern_matched": 0,
         "special_bucket": 0,
         "raw_fallback": 0,
@@ -6005,12 +5979,9 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
         matched_parser_pattern = bool(tx.get("_counterparty_pattern_matched"))
         if not name:
             name = "UNKNOWN"
-        raw_counterparty = str(tx.get("_raw_counterparty") or tx.get("counterparty_name_raw") or "").strip()
 
         extraction_method = _method_for_name(name, matched_parser_pattern)
         bucket = buckets[name]
-        if raw_counterparty:
-            bucket["raw_names"].add(raw_counterparty)
         credit = float(tx.get("credit") or 0)
         debit = float(tx.get("debit") or 0)
         if credit > 0:
@@ -6025,7 +5996,6 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
                 "amount": round(credit, 2),
                 "type": "CREDIT",
                 "balance": safe_float(tx.get("balance", 0)),
-                "counterparty_name_raw": raw_counterparty,
                 "extraction_method": extraction_method,
             })
         if debit > 0:
@@ -6040,7 +6010,6 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
                 "amount": round(debit, 2),
                 "type": "DEBIT",
                 "balance": safe_float(tx.get("balance", 0)),
-                "counterparty_name_raw": raw_counterparty,
                 "extraction_method": extraction_method,
             })
 
@@ -6061,7 +6030,6 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
             "pattern_matched": b["pattern_matched"],
             "special_bucket": b["special_bucket"],
             "raw_fallback": b["raw_fallback"],
-            "raw_names": sorted(name for name in b["raw_names"] if name),
             "transactions": b["transactions"],
         })
 
