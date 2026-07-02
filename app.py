@@ -810,10 +810,7 @@ def generate_interactive_html(data):
     monthly = data.get('monthly_analysis', [])
     consol = data.get('consolidated', {})
 
-    if not top_parties:
-        cp_ledger = data.get('counterparty_ledger', {})
-        company_name = r.get('company_name', 'Company')
-        top_parties = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+ 
 
     large_credits = data.get('large_credits', [])
     own_related = data.get('own_related_transactions', {})
