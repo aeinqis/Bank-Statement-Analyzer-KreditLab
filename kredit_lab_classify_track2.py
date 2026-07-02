@@ -2125,6 +2125,105 @@ _ADVISORY_RP_MIN_DR = 3000.0   # drop micro-payments (tutors paid RM168 etc.)
 _ADVISORY_RP_MAX_ROWS = 40  # cap; renderer notes "top N of M"
 
 
+def _rp_number(value: Any) -> float:
+    """Parse ledger numeric values across export variants."""
+    if value is None:
+        return 0.0
+    if isinstance(value, str):
+        text = value.strip().upper().replace("RM", "").replace(",", "")
+        if text.startswith("(") and text.endswith(")"):
+            text = f"-{text[1:-1]}"
+        value = text
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rp_first_number(row: dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        if key in row and row.get(key) not in (None, ""):
+            return _rp_number(row.get(key))
+    return 0.0
+
+
+def _rp_counterparty_name(cp: dict[str, Any]) -> str:
+    return str(
+        cp.get("counterparty_name")
+        or cp.get("party_name")
+        or cp.get("counterparty")
+        or cp.get("name")
+        or ""
+    ).strip()
+
+
+def _rp_tx_side(tx: dict[str, Any]) -> str:
+    raw = str(
+        tx.get("type")
+        or tx.get("transaction_type")
+        or tx.get("side")
+        or tx.get("dr_cr")
+        or ""
+    ).upper().strip()
+    if raw in {"DEBIT", "DR"} or "DEBIT" in raw or raw.endswith(" DR"):
+        return "DEBIT"
+    if raw in {"CREDIT", "CR"} or "CREDIT" in raw or raw.endswith(" CR"):
+        return "CREDIT"
+
+    debit = _rp_first_number(tx, "debit", "debit_amount", "dr", "dr_amount")
+    credit = _rp_first_number(tx, "credit", "credit_amount", "cr", "cr_amount")
+    if debit > 0:
+        return "DEBIT"
+    if credit > 0:
+        return "CREDIT"
+
+    amount = _rp_number(tx.get("amount"))
+    if amount < 0:
+        return "DEBIT"
+    return "CREDIT" if amount > 0 else ""
+
+
+def _rp_tx_amount(tx: dict[str, Any], side: str) -> float:
+    if side == "DEBIT":
+        debit = _rp_first_number(tx, "debit", "debit_amount", "dr", "dr_amount")
+        if debit:
+            return abs(debit)
+    elif side == "CREDIT":
+        credit = _rp_first_number(tx, "credit", "credit_amount", "cr", "cr_amount")
+        if credit:
+            return abs(credit)
+    return abs(_rp_number(tx.get("amount")))
+
+
+def _rp_tx_month(tx: dict[str, Any]) -> str:
+    date_text = str(
+        tx.get("date")
+        or tx.get("transaction_date")
+        or tx.get("posting_date")
+        or ""
+    ).strip()
+    year_first = re.search(r"\b(\d{4})[-/](\d{1,2})\b", date_text)
+    if year_first:
+        return f"{year_first.group(1)}-{int(year_first.group(2)):02d}"
+    day_first = re.search(r"\b\d{1,2}[-/](\d{1,2})[-/](\d{2,4})\b", date_text)
+    if day_first:
+        year = day_first.group(2)
+        if len(year) == 2:
+            year = f"20{year}"
+        return f"{year}-{int(day_first.group(1)):02d}"
+    return ""
+
+
+def _rp_is_round_debit_amount(amount: float) -> bool:
+    if amount < _RP_ROUND_AMOUNT_FLOOR:
+        return False
+    remainder = amount % _RP_ROUND_AMOUNT_MULTIPLE
+    return (
+        abs(remainder) <= 0.005
+        or abs(remainder - _RP_ROUND_AMOUNT_MULTIPLE) <= 0.005
+    )
+
+
 def advisory_rp_candidates(
     rp_candidates: list[dict[str, Any]],
     effective_related_parties: list[str] | None,
@@ -2221,11 +2320,11 @@ def _has_director_benefit(cp: dict[str, Any]) -> bool:
     and ``KUAN WEI YEE`` (Chinese names never carry the marker), whose company
     settles their HOUSING LOAN / CREDIT CARD.
     """
-    name = cp.get("counterparty_name") or ""
+    name = _rp_counterparty_name(cp)
     if not (has_natural_person_marker(name) or _looks_like_personal_name(name)):
         return False
     for tx in cp.get("transactions", []) or []:
-        if tx.get("type") != "DEBIT":
+        if _rp_tx_side(tx) != "DEBIT":
             continue
         if _DIRECTOR_BENEFIT_RE.search(str(tx.get("description") or "")):
             return True
@@ -2282,9 +2381,9 @@ def _is_salary_recipient(cp: dict[str, Any]) -> bool:
     sal_amt = 0.0
     sal_rows = 0
     for tx in txs:
-        if tx.get("type") != "DEBIT":
+        if _rp_tx_side(tx) != "DEBIT":
             continue
-        amt = float(tx.get("amount") or 0.0)
+        amt = _rp_tx_amount(tx, "DEBIT")
         dr_amt += amt
         desc = str(tx.get("description") or "")
         if (
@@ -2299,12 +2398,30 @@ def _is_salary_recipient(cp: dict[str, Any]) -> bool:
 def _compute_rp_signals(
     cp: dict[str, Any], gross_dr: float
 ) -> dict[str, Any] | None:
-    debit_count = int(cp.get("debit_count", 0) or 0)
-    credit_count = int(cp.get("credit_count", 0) or 0)
-    total_dr = float(cp.get("total_debits", 0.0) or 0.0)
-    total_cr = float(cp.get("total_credits", 0.0) or 0.0)
+    debit_count = int(_rp_first_number(cp, "debit_count", "debit_tx_count", "dr_count"))
+    credit_count = int(_rp_first_number(cp, "credit_count", "credit_tx_count", "cr_count"))
+    total_dr = abs(_rp_first_number(cp, "total_debits", "total_debit", "debits", "dr_total"))
+    total_cr = abs(_rp_first_number(cp, "total_credits", "total_credit", "credits", "cr_total"))
     txs = cp.get("transactions", []) or []
-    cp_name = cp.get("counterparty_name") or ""
+    cp_name = _rp_counterparty_name(cp)
+
+    if txs and (debit_count == 0 or credit_count == 0 or total_dr == 0 or total_cr == 0):
+        derived_dr_count = 0
+        derived_cr_count = 0
+        derived_dr = 0.0
+        derived_cr = 0.0
+        for tx in txs:
+            side = _rp_tx_side(tx)
+            if side == "DEBIT":
+                derived_dr_count += 1
+                derived_dr += _rp_tx_amount(tx, side)
+            elif side == "CREDIT":
+                derived_cr_count += 1
+                derived_cr += _rp_tx_amount(tx, side)
+        debit_count = debit_count or derived_dr_count
+        credit_count = credit_count or derived_cr_count
+        total_dr = total_dr or derived_dr
+        total_cr = total_cr or derived_cr
 
     is_ambiguous_multi_party = (
         "(possibly multiple parties)" in cp_name.lower()
@@ -2318,7 +2435,7 @@ def _compute_rp_signals(
     if debit_count >= 2:
         personal_hits = sum(
             1 for tx in txs
-            if any(
+            if _rp_tx_side(tx) == "DEBIT" and any(
                 kw in (tx.get("description") or "").upper()
                 for kw in PERSONAL_KEYWORDS_RP4
             )
@@ -2338,8 +2455,8 @@ def _compute_rp_signals(
 
     # 3. Monthly recurrence: DR rows span ≥ 3 distinct calendar months.
     dr_months = {
-        (tx.get("date") or "")[:7]
-        for tx in txs if tx.get("type") == "DEBIT"
+        _rp_tx_month(tx)
+        for tx in txs if _rp_tx_side(tx) == "DEBIT"
     }
     dr_months.discard("")
     debit_month_count = len(dr_months)
@@ -2367,13 +2484,13 @@ def _compute_rp_signals(
     round_dr_months: set[str] = set()
     round_hits = 0
     for tx in txs:
-        if tx.get("type") != "DEBIT":
+        if _rp_tx_side(tx) != "DEBIT":
             continue
-        amt = float(tx.get("amount") or 0.0)
-        if amt < _RP_ROUND_AMOUNT_FLOOR or amt % _RP_ROUND_AMOUNT_MULTIPLE != 0:
+        amt = _rp_tx_amount(tx, "DEBIT")
+        if not _rp_is_round_debit_amount(amt):
             continue
         round_hits += 1
-        m = (tx.get("date") or "")[:7]
+        m = _rp_tx_month(tx)
         if m:
             round_dr_months.add(m)
     if (
@@ -2473,12 +2590,20 @@ def scan_related_party_candidates(
         return []
     cps = counterparty_ledger.get("counterparties", []) or []
     gross_dr = sum(
-        float(cp.get("total_debits", 0.0) or 0.0) for cp in cps
+        abs(_rp_first_number(cp, "total_debits", "total_debit", "debits", "dr_total"))
+        for cp in cps
     )
+    if gross_dr <= 0:
+        gross_dr = sum(
+            _rp_tx_amount(tx, "DEBIT")
+            for cp in cps
+            for tx in (cp.get("transactions", []) or [])
+            if _rp_tx_side(tx) == "DEBIT"
+        )
 
     candidates: list[dict[str, Any]] = []
     for cp in cps:
-        name = cp.get("counterparty_name") or ""
+        name = _rp_counterparty_name(cp)
         if not name:
             continue
         upper = name.upper()

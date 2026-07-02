@@ -16,7 +16,97 @@ def _debit(date, description, amount):
     }
 
 
+def _debit_alias(date, description, amount):
+    return {
+        "date": date,
+        "description": description,
+        "amount": -amount,
+        "transaction_type": "DR",
+    }
+
+
+def _debit_numeric_only(date, description, amount):
+    return {
+        "transaction_date": date,
+        "description": description,
+        "debit": amount,
+    }
+
+
 class RelatedPartyCandidateTests(unittest.TestCase):
+    def test_samsi_ibrahim_round_debits_upgrade_recurrence_to_medium(self):
+        samsi = {
+            "party_name": "SAMSI IBRAHIM",
+            "transaction_count": 6,
+            "debit_tx_count": 6,
+            "credit_tx_count": 0,
+            "total_credit": 0.0,
+            "total_debit": 43702.0,
+            "transactions": [
+                _debit_alias("10/09/2025", "TR TO SAMSI IBRAHIM PROJECT FLOAT", 10000.0),
+                _debit_alias("11/10/2025", "TR TO SAMSI IBRAHIM SITE ADVANCE", 5234.0),
+                _debit_alias("12/11/2025", "TR TO SAMSI IBRAHIM", 8702.0),
+                _debit_alias("13/12/2025", "TR TO SAMSI IBRAHIM", 5000.0),
+                _debit_alias("14/01/2026", "TR TO SAMSI IBRAHIM", 6741.0),
+                _debit_alias("15/02/2026", "TR TO SAMSI IBRAHIM", 8025.0),
+            ],
+        }
+        gross_dr_anchor = {
+            "counterparty_name": "BETA TRADING SDN BHD",
+            "total_debit": 1_000_000.0,
+            "transactions": [],
+        }
+
+        candidates = scan_related_party_candidates(
+            {"counterparties": [samsi, gross_dr_anchor]}
+        )
+        candidate = next(c for c in candidates if c["name"] == "SAMSI IBRAHIM")
+
+        self.assertEqual(candidate["confidence"], "MEDIUM")
+        self.assertIn("monthly_recurrence", candidate["signals"])
+        self.assertIn("round_amount_advance", candidate["signals"])
+        self.assertIn("DR over 6 months", candidate["evidence"])
+        self.assertIn("2 round DRs", candidate["evidence"])
+
+    def test_mariana_ahmat_surfaces_from_alias_totals_and_personal_keywords(self):
+        mariana = {
+            "counterparty": "MARIANA AHMAT",
+            "transaction_count": 7,
+            "debit_tx_count": 7,
+            "credit_tx_count": 0,
+            "total_credit": 0.0,
+            "total_debit": 9100.0,
+            "transactions": [
+                _debit_numeric_only("2025-09-05", "TR TO MARIANA AHMAT PETTY CASH", 1200.0),
+                _debit_numeric_only("2025-09-26", "TR TO MARIANA AHMAT CLAIM", 800.0),
+                _debit_numeric_only("2025-10-07", "TR TO MARIANA AHMAT REIMBURSE", 1500.0),
+                _debit_numeric_only("2025-11-08", "TR TO MARIANA AHMAT MEDICAL", 700.0),
+                _debit_numeric_only("2025-12-09", "TR TO MARIANA AHMAT BONUS", 1800.0),
+                _debit_numeric_only("2026-01-10", "TR TO MARIANA AHMAT CLAIM", 1400.0),
+                _debit_numeric_only("2026-01-20", "TR TO MARIANA AHMAT PETTY", 1700.0),
+            ],
+        }
+        gross_dr_anchor = {
+            "counterparty_name": "BETA TRADING SDN BHD",
+            "total_debit": 1_000_000.0,
+            "transactions": [],
+        }
+
+        candidates = scan_related_party_candidates(
+            {"counterparties": [mariana, gross_dr_anchor]}
+        )
+        candidate = next(c for c in candidates if c["name"] == "MARIANA AHMAT")
+
+        self.assertEqual(candidate["confidence"], "MEDIUM")
+        self.assertIn("personal_keyword_sweep", candidate["signals"])
+        self.assertIn("monthly_recurrence", candidate["signals"])
+        self.assertIn("7 personal-kw rows", candidate["evidence"])
+        self.assertIn("DR over 5 months", candidate["evidence"])
+        self.assertEqual(
+            advisory_rp_candidates(candidates, effective_related_parties=[])[0]["name"],
+            "MARIANA AHMAT",
+        )
+
     def test_khairul_othman_surfaces_on_three_plus_debit_months(self):
         khairul = {
             "counterparty_name": "KHAIRUL OTHMAN",
