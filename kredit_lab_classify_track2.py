@@ -2131,8 +2131,9 @@ def advisory_rp_candidates(
     """Filter the raw MEDIUM/LOW RP3 candidates down to a trustworthy
     person-only advisory list: individuals (marker or clean name shape), not
     already confirmed, not the statement holder's own company, not a public
-    body / firm, and materially active. Sorted by debit value descending.
-    Caller caps the display."""
+    body / firm, and materially active. Recurring DR-month candidates are
+    prioritised for display before lower-recurrence candidates so the explicit
+    3+ debit-month signal stays visible. Caller caps the display."""
     eff = {str(r).upper() for r in (effective_related_parties or [])}
     own_roots = [
         _company_root(c) for c in (company_names or []) if c and len(_company_root(c)) >= 5
@@ -2154,7 +2155,16 @@ def advisory_rp_candidates(
         if float(c.get("total_dr", 0) or 0) < _ADVISORY_RP_MIN_DR:
             continue
         out.append(c)
-    out.sort(key=lambda c: -float(c.get("total_dr", 0) or 0))
+    confidence_order = {"MEDIUM": 0, "LOW": 1}
+    out.sort(
+        key=lambda c: (
+            0 if "monthly_recurrence" in (c.get("signals") or []) else 1,
+            -int(c.get("debit_month_count") or 0),
+            confidence_order.get(str(c.get("confidence") or "").upper(), 9),
+            -float(c.get("total_dr", 0) or 0),
+            str(c.get("name") or "").casefold(),
+        )
+    )
     return out
 
 # A "clean personal-name shape": 2–4 whitespace tokens, letters only (plus the
@@ -2351,9 +2361,10 @@ def _compute_rp_signals(
         for tx in txs if tx.get("type") == "DEBIT"
     }
     dr_months.discard("")
-    if len(dr_months) >= _RP_RECURRENCE_MIN_MONTHS:
+    debit_month_count = len(dr_months)
+    if debit_month_count >= _RP_RECURRENCE_MIN_MONTHS:
         signals.append((
-            "monthly_recurrence", 1, f"DR over {len(dr_months)} months",
+            "monthly_recurrence", 1, f"DR over {debit_month_count} months",
         ))
 
     # 4. Bidirectional flow — director loan-account pattern. Requires both
@@ -2489,6 +2500,7 @@ def _compute_rp_signals(
         "total_cr": round(total_cr, 2),
         "debit_count": debit_count,
         "credit_count": credit_count,
+        "debit_month_count": debit_month_count,
     }
 
 
@@ -8065,6 +8077,7 @@ def build_track2_result(
                 "total_cr": c.get("total_cr", 0.0),
                 "debit_count": c.get("debit_count", 0),
                 "credit_count": c.get("credit_count", 0),
+                "debit_month_count": c.get("debit_month_count", 0),
             }
             for c in _advisory_rp[:_ADVISORY_RP_MAX_ROWS]
         ],

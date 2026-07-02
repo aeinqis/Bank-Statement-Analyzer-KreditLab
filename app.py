@@ -88,6 +88,7 @@ try:
         # Counterparty ledger functions
         scan_related_party_candidates,
         auto_confirmed_related_parties,
+        advisory_rp_candidates,
         dedup_counterparty_entries,
         
         # Monthly aggregator
@@ -1047,7 +1048,7 @@ def generate_interactive_html(data):
         _total = r.get('related_party_candidates_total', len(rp_candidates)) or len(rp_candidates)
         _shown = len(rp_candidates)
         _cap_note = (
-            f' Showing the {_shown} largest by debit value of {_total} flagged individuals.'
+            f' Showing {_shown} of {_total} flagged individuals, prioritising recurring debit-month signals.'
             if _total > _shown else ''
         )
         rp_candidates_html = (
@@ -7572,10 +7573,10 @@ def detect_related_party_candidates(
     shared_report_data: dict = None,
 ) -> list:
     """
-    Produce a ranked candidate list from three sources (highest priority first):
-    1. Track 2 scan_related_party_candidates (if in shared_report_data)
-    2. Person-name heuristic (BIN / BINTI in counterparty name)
-    3. High-debit counterparties above a volume threshold
+    Produce a ranked candidate list from Track 2 related-party signals only.
+
+    This intentionally avoids UI-only rules such as circular flow or high
+    outflow thresholds, so the manager matches the Track 2 engine.
     """
     _NOISE = {
         "UNKNOWN", "TRANSFER FEE", "OTHER TRANSFER FEE", "CHEQUE",
@@ -7584,9 +7585,8 @@ def detect_related_party_candidates(
         "SOCSO", "LHDN", "HRDF", "REVERSAL", "RETURNED CHEQUE",
         "INWARD RETURN", "JANM", "IBG RETURN",
     }
-    _PERSON_RE = re.compile(r"\b(?:BIN|BINTI|BT|B\.?\s*BINTI|ANAK)\b", re.I)
-
     candidates_by_name: dict = {}
+    t2_cands = []
 
     # ── Source 1: Track 2 candidates ──
     if isinstance(shared_report_data, dict):
@@ -7608,60 +7608,35 @@ def detect_related_party_candidates(
                 "source": "track2",
             }
 
-    # ── Sources 2 & 3: counterparty ledger heuristics ──
-    for cp in (cp_ledger or {}).get("counterparties", []) if isinstance(cp_ledger, dict) else []:
-        raw_name = str(cp.get("counterparty_name", "") or "").strip()
-        name_upper = raw_name.upper()
-        if (
-            not raw_name
-            or name_upper in confirmed_names
-            or name_upper in dismissed
-            or name_upper in _NOISE
-            or name_upper in candidates_by_name  # already added by Track 2
-        ):
-            continue
+    # Track 2 fallback when report_info has not been built yet.
+    if not candidates_by_name and isinstance(cp_ledger, dict) and _TRACK2_AVAILABLE:
+        try:
+            for c in advisory_rp_candidates(
+                scan_related_party_candidates(cp_ledger),
+                list(confirmed_names or []),
+            ):
+                if not isinstance(c, dict):
+                    continue
+                display_name = str(c.get("name", "") or "").strip()
+                name = display_name.upper()
+                if not name or name in confirmed_names or name in dismissed or name in _NOISE:
+                    continue
+                candidates_by_name[name] = {
+                    "name": display_name,
+                    "confidence": str(c.get("confidence", "MEDIUM")).upper(),
+                    "evidence": c.get("evidence", "Flagged by Track 2 engine"),
+                    "total_cr": safe_float(c.get("total_cr", 0)),
+                    "total_dr": safe_float(c.get("total_dr", 0)),
+                    "source": "track2",
+                }
+        except Exception:
+            pass
 
-        cr = safe_float(cp.get("total_credits", 0))
-        dr = safe_float(cp.get("total_debits", 0))
-        total = cr + dr
-        if total < 10_000:
-            continue
-
-        is_person = bool(_PERSON_RE.search(raw_name))
-        has_circular = cr > 0 and dr > 0  # money flowing both ways
-
-        confidence = "LOW"
-        evidence_parts = []
-
-        if is_person:
-            confidence = "MEDIUM"
-            evidence_parts.append("Person name detected (Malay naming marker)")
-        if has_circular:
-            confidence = "MEDIUM"
-            evidence_parts.append(f"Circular flow — CR RM {cr:,.0f} / DR RM {dr:,.0f}")
-        if dr > 500_000:
-            confidence = "HIGH" if is_person or has_circular else "MEDIUM"
-            evidence_parts.append(f"High outflow RM {dr:,.0f}")
-
-        if confidence == "LOW" and not evidence_parts:
-            continue  # skip pure-noise LOW entries
-
-        candidates_by_name[name_upper] = {
-            "name": raw_name,
-            "confidence": confidence,
-            "evidence": "; ".join(evidence_parts) or "High transaction volume",
-            "total_cr": cr,
-            "total_dr": dr,
-            "source": "heuristic",
-        }
-
-    # Sort: HIGH → MEDIUM → LOW, then by total debit desc
     order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
     return sorted(
         candidates_by_name.values(),
         key=lambda x: (order.get(x["confidence"], 3), -x["total_dr"]),
     )[:30]
-
 
 def render_related_party_manager(
     cp_ledger: dict = None,
