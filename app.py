@@ -1303,6 +1303,17 @@ def generate_interactive_html(data):
 
     # ── Top parties with ghost-verb suppression ──
     company_name = r.get('company_name', 'Company')
+
+    # Get top_parties from data, or build from counterparty_ledger if needed
+    top_parties = data.get('top_parties', {})
+    if not top_parties or not _has_top_party_rows(top_parties):
+        cp_ledger = data.get('counterparty_ledger', {})
+        if cp_ledger and cp_ledger.get('counterparties'):
+            top_parties = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+            # Store it back so subsequent code can use it
+            data['top_parties'] = top_parties
+
+    # Now pass company_name to prepare_top_parties_for_report
     party_view = prepare_top_parties_for_report(top_parties, company_name=company_name)
     _payers = party_view['payers']
     _payees = party_view['payees']
@@ -3674,7 +3685,7 @@ def prepare_top_parties_for_report(top_parties: dict, limit: int = 10, company_n
     for idx, party in enumerate(payees, 1):
         party["rank"] = idx
 
-    # Mark OP (Own Party) relationships - IMPROVED matching
+    # Mark OP (Own Party) relationships - only if company_name is provided
     if company_name:
         company_upper = company_name.upper()
         # Clean the company name for better matching
