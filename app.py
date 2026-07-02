@@ -827,6 +827,21 @@ def generate_interactive_html(data):
     flags_data = data.get('flags', {})
     obs = normalize_observations(data.get('observations', {}))
     parsing = data.get('parsing_metadata', {})
+    company_name = r.get('company_name', 'Company')
+
+    # Prepare top parties before feature detection; later rendering depends on it.
+    top_parties = data.get('top_parties', {})
+    if not top_parties or not _has_top_party_rows(top_parties):
+        cp_ledger = data.get('counterparty_ledger', {})
+        if cp_ledger and cp_ledger.get('counterparties'):
+            top_parties = _top_parties_from_counterparty_ledger(
+                cp_ledger,
+                limit=10,
+                company_name=company_name,
+            )
+            data['top_parties'] = top_parties
+    if not isinstance(top_parties, dict):
+        top_parties = {}
 
     # Version detection
     schema_v = r.get('schema_version', '')
@@ -1299,17 +1314,6 @@ def generate_interactive_html(data):
     </tr>'''
 
     # ── Top parties with ghost-verb suppression ──
-    company_name = r.get('company_name', 'Company')
-
-    # Get top_parties from data, or build from counterparty_ledger if needed
-    top_parties = data.get('top_parties', {})
-    if not top_parties or not _has_top_party_rows(top_parties):
-        cp_ledger = data.get('counterparty_ledger', {})
-        if cp_ledger and cp_ledger.get('counterparties'):
-            top_parties = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
-            # Store it back so subsequent code can use it
-            data['top_parties'] = top_parties
-
     # Now pass company_name to prepare_top_parties_for_report
     party_view = prepare_top_parties_for_report(top_parties, company_name=company_name)
     _payers = party_view['payers']
