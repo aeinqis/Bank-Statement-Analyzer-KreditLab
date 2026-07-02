@@ -2122,7 +2122,7 @@ _BUSINESS_NOUN_RE = re.compile(
 
 # Advisory RP panel tuning — keep it a SHORT, material, person-only review list.
 _ADVISORY_RP_MIN_DR = 3000.0   # drop micro-payments (tutors paid RM168 etc.)
-_ADVISORY_RP_MAX_ROWS = 25     # cap; renderer notes "top N of M"
+_ADVISORY_RP_MAX_ROWS = 40  # cap; renderer notes "top N of M"
 
 
 def advisory_rp_candidates(
@@ -2133,9 +2133,11 @@ def advisory_rp_candidates(
     """Filter the raw MEDIUM/LOW RP3 candidates down to a trustworthy
     person-only advisory list: individuals (marker or clean name shape), not
     already confirmed, not the statement holder's own company, not a public
-    body / firm, and materially active. Recurring DR-month candidates are
-    prioritised for display before lower-recurrence candidates so the explicit
-    3+ debit-month signal stays visible. Caller caps the display."""
+    body / firm, and materially active. Candidates carrying a recurring
+    DR-month signal OR a personal-keyword sweep (petty cash, claims,
+    reimbursements, etc.) are prioritised for display before lower-signal
+    candidates so both explicit signals stay visible under the display cap.
+    """
     eff = {str(r).upper() for r in (effective_related_parties or [])}
     own_roots = [
         _company_root(c) for c in (company_names or []) if c and len(_company_root(c)) >= 5
@@ -2158,9 +2160,10 @@ def advisory_rp_candidates(
             continue
         out.append(c)
     confidence_order = {"MEDIUM": 0, "LOW": 1}
+    _PRIORITY_SIGNALS = {"monthly_recurrence", "personal_keyword_sweep"}
     out.sort(
         key=lambda c: (
-            0 if "monthly_recurrence" in (c.get("signals") or []) else 1,
+            0 if any(s in (c.get("signals") or []) for s in _PRIORITY_SIGNALS) else 1,
             -int(c.get("debit_month_count") or 0),
             confidence_order.get(str(c.get("confidence") or "").upper(), 9),
             -float(c.get("total_dr", 0) or 0),
@@ -2336,7 +2339,7 @@ def _compute_rp_signals(
     signals: list[tuple[str, int, str]] = []
 
     # 1. Personal-keyword sweep.
-    if debit_count >= 3:
+    if debit_count >= 2:
         personal_hits = sum(
             1 for tx in txs
             if any(
