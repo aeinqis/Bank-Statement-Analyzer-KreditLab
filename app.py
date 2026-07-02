@@ -1297,8 +1297,8 @@ def generate_interactive_html(data):
     </tr>'''
 
     # ── Top parties with ghost-verb suppression ──
-    company = r.get('company_name', 'Company')
-    party_view = prepare_top_parties_for_report(top_parties, company_name=company)
+    company_name = r.get('company_name', 'Company')
+    party_view = prepare_top_parties_for_report(top_parties, company_name=company_name)
     _payers = party_view['payers']
     _payees = party_view['payees']
     _payers_suppressed = party_view['payers_suppressed']
@@ -1386,35 +1386,57 @@ def generate_interactive_html(data):
     payer_rows = ""
     for p in _payers:
         party_name = p.get('party_name', '')
-        is_related = p.get('is_related_party', False)
-        is_own = p.get('is_own_party', False)
+        party_upper = party_name.upper() if party_name else ''
         
+        # Check if this is a Related Party
+        is_related = False
+        for rp in related_parties:
+            rp_name = _related_party_display_name(rp)
+            if rp_name and rp_name.upper() in party_upper:
+                is_related = True
+                break
+        
+        # Determine badge type
         badge = ''
         if is_related:
             badge = '<span class="rp-badge">RP</span>'
-        elif is_own:
-            badge = '<span class="op-badge">OP</span>'
-            
-            mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--green)')
-            payer_rows += f'''<tr>
-                <td>{p.get('rank')}</td>
-                <td>{party_name} {badge}{mb_html}</td>
-                <td class="mono r credit">RM {p.get('total_amount',0):,.2f}</td>
-                <td class="mono r">{p.get('transaction_count',0)}</td>
-            </tr>'''
+        else:
+            # Check if this party matches the company name (Own Party)
+            company_upper = company.upper() if company else ''
+            if company_upper and (party_upper in company_upper or company_upper in party_upper):
+                badge = '<span class="op-badge">OP</span>'
+        
+        mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--green)')
+        payer_rows += f'''<tr>
+            <td>{p.get('rank')}</td>
+            <td>{party_name} {badge}{mb_html}</td>
+            <td class="mono r credit">RM {p.get('total_amount',0):,.2f}</td>
+            <td class="mono r">{p.get('transaction_count',0)}</td>
+        </tr>'''
 
     # Updated payee_rows using related_parties list
     payee_rows = ""
     for p in _payees:
         party_name = p.get('party_name', '')
-        is_related = p.get('is_related_party', False)
-        is_own = p.get('is_own_party', False)
+        party_upper = party_name.upper() if party_name else ''
         
+        # Check if this is a Related Party
+        is_related = False
+        for rp in related_parties:
+            rp_name = _related_party_display_name(rp)
+            if rp_name and rp_name.upper() in party_upper:
+                is_related = True
+                break
+        
+        # Determine badge type
         badge = ''
         if is_related:
             badge = '<span class="rp-badge">RP</span>'
-        elif is_own:
-            badge = '<span class="op-badge">OP</span>'
+        else:
+            # Check if this party matches the company name (Own Party)
+            company_upper = company.upper() if company else ''
+            if company_upper and (party_upper in company_upper or company_upper in party_upper):
+                badge = '<span class="op-badge">OP</span>'
         
         mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--red)')
         payee_rows += f'''<tr>
