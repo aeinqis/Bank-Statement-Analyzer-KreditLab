@@ -1381,24 +1381,66 @@ def generate_interactive_html(data):
             f'<div style="display:flex;gap:2px;font-size:0.65rem;color:var(--text-muted);margin-top:2px">{labels}</div>'
         )
 
+    # Updated payer_rows using related_parties list
     payer_rows = ""
     for p in _payers:
-        rp_badge = '<span class="rp-badge">RP</span>' if p.get('is_related_party') else ''
+        party_name = p.get('party_name', '')
+        party_upper = party_name.upper() if party_name else ''
+        
+        # Check if this is a Related Party
+        is_related = False
+        for rp in related_parties:
+            rp_name = _related_party_display_name(rp)
+            if rp_name and rp_name.upper() in party_upper:
+                is_related = True
+                break
+        
+        # Determine badge type
+        badge = ''
+        if is_related:
+            badge = '<span class="rp-badge">RP</span>'
+        else:
+            # Check if this party matches the company name (Own Party)
+            company_upper = company.upper() if company else ''
+            if company_upper and (party_upper in company_upper or company_upper in party_upper):
+                badge = '<span class="op-badge">OP</span>'
+        
         mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--green)')
         payer_rows += f'''<tr>
             <td>{p.get('rank')}</td>
-            <td>{p.get('party_name','')} {rp_badge}{mb_html}</td>
+            <td>{party_name} {badge}{mb_html}</td>
             <td class="mono r credit">RM {p.get('total_amount',0):,.2f}</td>
             <td class="mono r">{p.get('transaction_count',0)}</td>
         </tr>'''
 
+    # Updated payee_rows using related_parties list
     payee_rows = ""
     for p in _payees:
-        rp_badge = '<span class="rp-badge">RP</span>' if p.get('is_related_party') else ''
+        party_name = p.get('party_name', '')
+        party_upper = party_name.upper() if party_name else ''
+        
+        # Check if this is a Related Party
+        is_related = False
+        for rp in related_parties:
+            rp_name = _related_party_display_name(rp)
+            if rp_name and rp_name.upper() in party_upper:
+                is_related = True
+                break
+        
+        # Determine badge type
+        badge = ''
+        if is_related:
+            badge = '<span class="rp-badge">RP</span>'
+        else:
+            # Check if this party matches the company name (Own Party)
+            company_upper = company.upper() if company else ''
+            if company_upper and (party_upper in company_upper or company_upper in party_upper):
+                badge = '<span class="op-badge">OP</span>'
+        
         mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--red)')
         payee_rows += f'''<tr>
             <td>{p.get('rank')}</td>
-            <td>{p.get('party_name','')} {rp_badge}{mb_html}</td>
+            <td>{party_name} {badge}{mb_html}</td>
             <td class="mono r debit">RM {p.get('total_amount',0):,.2f}</td>
             <td class="mono r">{p.get('transaction_count',0)}</td>
         </tr>'''
@@ -3580,6 +3622,17 @@ def prepare_top_parties_for_report(top_parties: dict, limit: int = 10) -> dict:
         party["rank"] = idx
     for idx, party in enumerate(payees, 1):
         party["rank"] = idx
+
+     # Mark OP (Own Party) relationships
+    company_upper = company_name.upper()
+    for party in payers:
+        party_name = party.get('party_name', '').upper()
+        if company_name and (party_name in company_upper or company_upper in party_name):
+            party['is_own_party'] = True
+    for party in payees:
+        party_name = party.get('party_name', '').upper()
+        if company_name and (party_name in company_upper or company_upper in party_name):
+            party['is_own_party'] = True
 
     return {
         "payers": payers,
