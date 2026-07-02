@@ -1382,7 +1382,7 @@ def generate_interactive_html(data):
             f'<div style="display:flex;gap:2px;font-size:0.65rem;color:var(--text-muted);margin-top:2px">{labels}</div>'
         )
 
-    # Updated payer_rows using related_parties list
+    # Updated payer_rows using related_parties list and is_own_party flag
     payer_rows = ""
     for p in _payers:
         party_name = p.get('party_name', '')
@@ -1396,15 +1396,12 @@ def generate_interactive_html(data):
                 is_related = True
                 break
         
-        # Determine badge type
+        # Determine badge type - use the is_own_party flag from prepare_top_parties_for_report
         badge = ''
         if is_related:
             badge = '<span class="rp-badge">RP</span>'
-        else:
-            # Check if this party matches the company name (Own Party)
-            company_upper = company.upper() if company else ''
-            if company_upper and (party_upper in company_upper or company_upper in party_upper):
-                badge = '<span class="op-badge">OP</span>'
+        elif p.get('is_own_party', False):
+            badge = '<span class="op-badge">OP</span>'
         
         mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--green)')
         payer_rows += f'''<tr>
@@ -1414,7 +1411,7 @@ def generate_interactive_html(data):
             <td class="mono r">{p.get('transaction_count',0)}</td>
         </tr>'''
 
-    # Updated payee_rows using related_parties list
+    # Updated payee_rows using related_parties list and is_own_party flag
     payee_rows = ""
     for p in _payees:
         party_name = p.get('party_name', '')
@@ -1428,15 +1425,12 @@ def generate_interactive_html(data):
                 is_related = True
                 break
         
-        # Determine badge type
+        # Determine badge type - use the is_own_party flag from prepare_top_parties_for_report
         badge = ''
         if is_related:
             badge = '<span class="rp-badge">RP</span>'
-        else:
-            # Check if this party matches the company name (Own Party)
-            company_upper = company.upper() if company else ''
-            if company_upper and (party_upper in company_upper or company_upper in party_upper):
-                badge = '<span class="op-badge">OP</span>'
+        elif p.get('is_own_party', False):
+            badge = '<span class="op-badge">OP</span>'
         
         mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--red)')
         payee_rows += f'''<tr>
