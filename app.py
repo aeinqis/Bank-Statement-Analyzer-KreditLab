@@ -1297,8 +1297,8 @@ def generate_interactive_html(data):
     </tr>'''
 
     # ── Top parties with ghost-verb suppression ──
-    company_name = r.get('company_name', 'Company')
-    party_view = prepare_top_parties_for_report(top_parties, company_name=company_name)
+    company = r.get('company_name', 'Company')
+    party_view = prepare_top_parties_for_report(top_parties, company_name=company)
     _payers = party_view['payers']
     _payees = party_view['payees']
     _payers_suppressed = party_view['payers_suppressed']
@@ -1386,57 +1386,35 @@ def generate_interactive_html(data):
     payer_rows = ""
     for p in _payers:
         party_name = p.get('party_name', '')
-        party_upper = party_name.upper() if party_name else ''
+        is_related = p.get('is_related_party', False)
+        is_own = p.get('is_own_party', False)
         
-        # Check if this is a Related Party
-        is_related = False
-        for rp in related_parties:
-            rp_name = _related_party_display_name(rp)
-            if rp_name and rp_name.upper() in party_upper:
-                is_related = True
-                break
-        
-        # Determine badge type
         badge = ''
         if is_related:
             badge = '<span class="rp-badge">RP</span>'
-        else:
-            # Check if this party matches the company name (Own Party)
-            company_upper = company.upper() if company else ''
-            if company_upper and (party_upper in company_upper or company_upper in party_upper):
-                badge = '<span class="op-badge">OP</span>'
-        
-        mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--green)')
-        payer_rows += f'''<tr>
-            <td>{p.get('rank')}</td>
-            <td>{party_name} {badge}{mb_html}</td>
-            <td class="mono r credit">RM {p.get('total_amount',0):,.2f}</td>
-            <td class="mono r">{p.get('transaction_count',0)}</td>
-        </tr>'''
+        elif is_own:
+            badge = '<span class="op-badge">OP</span>'
+            
+            mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--green)')
+            payer_rows += f'''<tr>
+                <td>{p.get('rank')}</td>
+                <td>{party_name} {badge}{mb_html}</td>
+                <td class="mono r credit">RM {p.get('total_amount',0):,.2f}</td>
+                <td class="mono r">{p.get('transaction_count',0)}</td>
+            </tr>'''
 
     # Updated payee_rows using related_parties list
     payee_rows = ""
     for p in _payees:
         party_name = p.get('party_name', '')
-        party_upper = party_name.upper() if party_name else ''
+        is_related = p.get('is_related_party', False)
+        is_own = p.get('is_own_party', False)
         
-        # Check if this is a Related Party
-        is_related = False
-        for rp in related_parties:
-            rp_name = _related_party_display_name(rp)
-            if rp_name and rp_name.upper() in party_upper:
-                is_related = True
-                break
-        
-        # Determine badge type
         badge = ''
         if is_related:
             badge = '<span class="rp-badge">RP</span>'
-        else:
-            # Check if this party matches the company name (Own Party)
-            company_upper = company.upper() if company else ''
-            if company_upper and (party_upper in company_upper or company_upper in party_upper):
-                badge = '<span class="op-badge">OP</span>'
+        elif is_own:
+            badge = '<span class="op-badge">OP</span>'
         
         mb_html = _render_monthly_bars(p.get('monthly_breakdown'), 'var(--red)')
         payee_rows += f'''<tr>
@@ -3624,16 +3602,67 @@ def prepare_top_parties_for_report(top_parties: dict, limit: int = 10, company_n
     for idx, party in enumerate(payees, 1):
         party["rank"] = idx
 
-    # Mark OP (Own Party) relationships - FIXED: check if company_name is provided
+    # Mark OP (Own Party) relationships - IMPROVED matching
     if company_name:
         company_upper = company_name.upper()
+        # Clean the company name for better matching
+        company_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', company_upper).strip()
+        company_core = re.sub(r'\s+', ' ', company_clean).strip()
+        
         for party in payers:
             party_name = party.get('party_name', '').upper()
-            if company_name and (party_name in company_upper or company_upper in party_name):
+            party_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', party_name).strip()
+            party_core = re.sub(r'\s+', ' ', party_clean).strip()
+            
+            # Check multiple matching strategies
+            is_own = False
+            if company_upper and party_name:
+                # 1. Direct match (full string)
+                if party_name == company_upper:
+                    is_own = True
+                # 2. Company name contains party name OR party name contains company name
+                elif party_name in company_upper or company_upper in party_name:
+                    is_own = True
+                # 3. Core name match (without SDN BHD etc.)
+                elif company_core and party_core and (party_core in company_core or company_core in party_core):
+                    is_own = True
+                # 4. First few words match (e.g., "MUHAFIZ SECURITY" matches "MUHAFIZ SECURITY SDN BHD")
+                elif company_core and party_core:
+                    company_words = company_core.split()
+                    party_words = party_core.split()
+                    if len(company_words) >= 2 and len(party_words) >= 2:
+                        if company_words[0] == party_words[0] and company_words[1] == party_words[1]:
+                            is_own = True
+            
+            if is_own:
                 party['is_own_party'] = True
+                
         for party in payees:
             party_name = party.get('party_name', '').upper()
-            if company_name and (party_name in company_upper or company_upper in party_name):
+            party_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', party_name).strip()
+            party_core = re.sub(r'\s+', ' ', party_clean).strip()
+            
+            # Check multiple matching strategies
+            is_own = False
+            if company_upper and party_name:
+                # 1. Direct match (full string)
+                if party_name == company_upper:
+                    is_own = True
+                # 2. Company name contains party name OR party name contains company name
+                elif party_name in company_upper or company_upper in party_name:
+                    is_own = True
+                # 3. Core name match (without SDN BHD etc.)
+                elif company_core and party_core and (party_core in company_core or company_core in party_core):
+                    is_own = True
+                # 4. First few words match (e.g., "MUHAFIZ SECURITY" matches "MUHAFIZ SECURITY SDN BHD")
+                elif company_core and party_core:
+                    company_words = company_core.split()
+                    party_words = party_core.split()
+                    if len(company_words) >= 2 and len(party_words) >= 2:
+                        if company_words[0] == party_words[0] and company_words[1] == party_words[1]:
+                            is_own = True
+            
+            if is_own:
                 party['is_own_party'] = True
 
     return {
@@ -3642,7 +3671,6 @@ def prepare_top_parties_for_report(top_parties: dict, limit: int = 10, company_n
         "payers_suppressed": payers_suppressed,
         "payees_suppressed": payees_suppressed,
     }
-
 
 def build_round_transactions(transactions: List[dict], round_thresholds: List[float] | None = None) -> List[dict]:
     """Build the same signed round-number transaction rows shown in Railway."""
