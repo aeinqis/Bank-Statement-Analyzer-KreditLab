@@ -4370,8 +4370,12 @@ def build_report_data_from_analysis(
 
     adapted_data = adapt_to_v6(data)
     adapted_data['transactions'] = transactions
-    adapted_data['top_parties'] = _top_parties_from_transaction_analysis(transaction_analysis)
     
+    # Build top_parties from CP ledger for consistency with Railway UI
+    cp_ledger = transaction_analysis.get('counterparty_ledger', {}) or build_track2_counterparty_ledger(transactions)
+    company_name = st.session_state.get('company_name_override', '') or (transactions[0].get('company_name', '') if transactions else '')
+    adapted_data['top_parties'] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+        
     # IMPORTANT: Build large transactions directly from transactions with correct threshold
     adapted_data['large_transactions'] = build_large_transactions(transactions, threshold)
     adapted_data['large_credits'] = transaction_analysis.get('high_value_credits', [])
@@ -4432,7 +4436,8 @@ def normalize_report_data_for_export(data: dict) -> dict:
     
     # ALWAYS build top_parties from CP ledger for consistency with Railway UI
     cp_ledger = source.get("counterparty_ledger", {})
-    source["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
+    company_name = source.get("report_info", {}).get("company_name", "")
+    source["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
 
     if "monthly_analysis" not in source and "transactions" in source:
         normalized = adapt_to_v6(source)
@@ -4578,8 +4583,10 @@ def build_shared_report_data(
             )
             data.setdefault("counterparty_ledger", cp_ledger)
             
-            # CRITICAL FIX: Build top_parties from the CP ledger
-            data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
+            # CRITICAL FIX: Build top_parties from the CP ledger with company name
+            # Get company name from override or first transaction
+            company_name = override or (company_names[0] if company_names else '')
+            data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
             
             return _finalize_shared_report_data(
                 data,
@@ -4588,6 +4595,7 @@ def build_shared_report_data(
                 threshold,
                 pdf_integrity,
             )
+        
         except Exception as _track2_err:
             import traceback
             print(f"[Track2] ERROR in build_track2_result: {_track2_err}")
@@ -4608,9 +4616,13 @@ def build_shared_report_data(
     
     # Build top_parties from CP ledger for legacy fallback too
     cp_ledger = build_track2_counterparty_ledger(transactions)
-    report_data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
+    # Get company name from session state or transactions
+    company_name = st.session_state.get("company_name_override", "") or (
+        transactions[0].get("company_name", "") if transactions else ""
+    )
+    report_data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
     report_data["counterparty_ledger"] = cp_ledger
-    
+        
     return _finalize_shared_report_data(
         report_data,
         transactions,
@@ -4618,6 +4630,7 @@ def build_shared_report_data(
         threshold,
         pdf_integrity,
     )
+
 
 
 def _excel_safe_value(value):
