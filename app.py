@@ -3432,110 +3432,45 @@ def _ledger_monthly_breakdown(transactions: List[dict], side: str) -> List[dict]
 
 
 def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: int = 10, company_name: str = "") -> dict:
-    if not isinstance(counterparty_ledger, dict):
-        return {"top_payers": [], "top_payees": []}
+    rows = build_canonical_counterparty_ledger_rows(counterparty_ledger)
 
     payers = []
     payees = []
-    for cp in counterparty_ledger.get("counterparties", []) or []:
-        if not isinstance(cp, dict):
-            continue
-        name = (
-            cp.get("counterparty_name")
-            or cp.get("party_name")
-            or cp.get("name")
-            or ""
-        )
-        name = str(name).strip()
-        if not name:
-            continue
 
-        transactions = cp.get("transactions") or []
-        related_raw = cp.get("is_related_party", cp.get("related_party", False))
-        is_related = bool(related_raw) and str(related_raw).strip().lower() not in {"false", "no", "0"}
+    for cp in rows:
+        name = cp.get("counterparty_name", "")
+        transactions = cp.get("transactions", [])
 
-        credit_amount = safe_float(cp.get("total_credits", cp.get("total_credit", 0)))
-        debit_amount = safe_float(cp.get("total_debits", cp.get("total_debit", 0)))
-        credit_count = int(safe_float(cp.get("credit_count", cp.get("credit_tx_count", 0))))
-        debit_count = int(safe_float(cp.get("debit_count", cp.get("debit_tx_count", 0))))
+        credit_amount = safe_float(cp.get("total_credits", 0))
+        debit_amount = safe_float(cp.get("total_debits", 0))
+        credit_count = int(safe_float(cp.get("credit_count", 0)))
+        debit_count = int(safe_float(cp.get("debit_count", 0)))
 
         if credit_amount > 0:
-            monthly = _ledger_monthly_breakdown(transactions, "CREDIT")
             payers.append({
                 "party_name": name,
                 "total_amount": round(credit_amount, 2),
-                "transaction_count": credit_count or sum(m.get("count", 0) for m in monthly),
-                "is_related_party": is_related,
-                "monthly_breakdown": monthly,
+                "transaction_count": credit_count,
+                "is_related_party": cp.get("is_related_party", False),
+                "monthly_breakdown": _ledger_monthly_breakdown(transactions, "CREDIT"),
             })
+
         if debit_amount > 0:
-            monthly = _ledger_monthly_breakdown(transactions, "DEBIT")
             payees.append({
                 "party_name": name,
                 "total_amount": round(debit_amount, 2),
-                "transaction_count": debit_count or sum(m.get("count", 0) for m in monthly),
-                "is_related_party": is_related,
-                "monthly_breakdown": monthly,
+                "transaction_count": debit_count,
+                "is_related_party": cp.get("is_related_party", False),
+                "monthly_breakdown": _ledger_monthly_breakdown(transactions, "DEBIT"),
             })
 
-    payers.sort(key=lambda party: party.get("total_amount", 0), reverse=True)
-    payees.sort(key=lambda party: party.get("total_amount", 0), reverse=True)
-    
-    # Add OP badge detection
-    if company_name:
-        company_upper = company_name.upper()
-        company_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', company_upper).strip()
-        company_core = re.sub(r'\s+', ' ', company_clean).strip()
-        
-        for party in payers[:limit]:
-            party_name = party.get('party_name', '').upper()
-            party_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', party_name).strip()
-            party_core = re.sub(r'\s+', ' ', party_clean).strip()
-            
-            is_own = False
-            if company_upper and party_name:
-                if party_name == company_upper or party_name in company_upper or company_upper in party_name:
-                    is_own = True
-                elif company_core and party_core and (party_core in company_core or company_core in party_core):
-                    is_own = True
-                elif company_core and party_core:
-                    company_words = company_core.split()
-                    party_words = party_core.split()
-                    if len(company_words) >= 2 and len(party_words) >= 2:
-                        if company_words[0] == party_words[0] and company_words[1] == party_words[1]:
-                            is_own = True
-            
-            if is_own:
-                party['is_own_party'] = True
-                party['is_related_party'] = False  # OP overrides RP
-        
-        for party in payees[:limit]:
-            party_name = party.get('party_name', '').upper()
-            party_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', party_name).strip()
-            party_core = re.sub(r'\s+', ' ', party_clean).strip()
-            
-            is_own = False
-            if company_upper and party_name:
-                if party_name == company_upper or party_name in company_upper or company_upper in party_name:
-                    is_own = True
-                elif company_core and party_core and (party_core in company_core or company_core in party_core):
-                    is_own = True
-                elif company_core and party_core:
-                    company_words = company_core.split()
-                    party_words = party_core.split()
-                    if len(company_words) >= 2 and len(party_words) >= 2:
-                        if company_words[0] == party_words[0] and company_words[1] == party_words[1]:
-                            is_own = True
-            
-            if is_own:
-                party['is_own_party'] = True
-                party['is_related_party'] = False  # OP overrides RP
+    payers = sorted(payers, key=lambda x: x["total_amount"], reverse=True)[:limit]
+    payees = sorted(payees, key=lambda x: x["total_amount"], reverse=True)[:limit]
 
     return {
-        "top_payers": [{**party, "rank": idx} for idx, party in enumerate(payers[:limit], 1)],
-        "top_payees": [{**party, "rank": idx} for idx, party in enumerate(payees[:limit], 1)],
+        "top_payers": [{**p, "rank": i} for i, p in enumerate(payers, 1)],
+        "top_payees": [{**p, "rank": i} for i, p in enumerate(payees, 1)],
     }
-
 
 def build_canonical_counterparty_ledger_rows(cp_ledger: dict) -> List[dict]:
     """Return the shared counterparty ledger view used by UI, HTML, and Excel."""
@@ -4435,9 +4370,11 @@ def normalize_report_data_for_export(data: dict) -> dict:
         source["counterparty_ledger"] = build_track2_counterparty_ledger(source.get("transactions", []))
     
     # ALWAYS build top_parties from CP ledger for consistency with Railway UI
-    cp_ledger = source.get("counterparty_ledger", {})
-    company_name = source.get("report_info", {}).get("company_name", "")
-    source["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+    cp_ledger = data.get("counterparty_ledger") or build_track2_counterparty_ledger(data.get("transactions", []))
+    company_name = data.get("report_info", {}).get("company_name", "")
+
+    data["counterparty_ledger"]["counterparties"] = build_canonical_counterparty_ledger_rows(cp_ledger)
+    data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
 
     if "monthly_analysis" not in source and "transactions" in source:
         normalized = adapt_to_v6(source)
@@ -4557,15 +4494,8 @@ def build_shared_report_data(
 
     if _TRACK2_AVAILABLE:
         try:
-            cp_ledger = build_track2_counterparty_ledger(transactions)
-            company_names = list({
-                str(t.get("company_name", "") or "").strip()
-                for t in transactions
-                if isinstance(t, dict) and t.get("company_name")
-            })
-            override = (st.session_state.get("company_name_override") or "").strip()
-            if override and override not in company_names:
-                company_names.insert(0, override)
+            cp_ledger = data.get("counterparty_ledger") or build_track2_counterparty_ledger(data.get("transactions", []))
+            company_name = data.get("report_info", {}).get("company_name", "")
 
             determinations = st.session_state.get("account_type_determinations") or []
             account_meta = account_meta_from_determinations(determinations)
@@ -4615,14 +4545,12 @@ def build_shared_report_data(
     report_data["pdf_integrity"] = pdf_integrity
     
     # Build top_parties from CP ledger for legacy fallback too
-    cp_ledger = build_track2_counterparty_ledger(transactions)
-    # Get company name from session state or transactions
-    company_name = st.session_state.get("company_name_override", "") or (
-        transactions[0].get("company_name", "") if transactions else ""
-    )
-    report_data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
-    report_data["counterparty_ledger"] = cp_ledger
-        
+    cp_ledger = data.get("counterparty_ledger") or build_track2_counterparty_ledger(data.get("transactions", []))
+    company_name = data.get("report_info", {}).get("company_name", "")
+
+    data["counterparty_ledger"]["counterparties"] = build_canonical_counterparty_ledger_rows(cp_ledger)
+    data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+            
     return _finalize_shared_report_data(
         report_data,
         transactions,
@@ -5120,14 +5048,11 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         loans = {"transactions": loans, "disbursements": [], "repayments": []}
     flags = report_data.get("flags", {}) or {}
 
-    cp_ledger = report_data.get("counterparty_ledger", {})
-    if not cp_ledger or not cp_ledger.get("counterparties"):
-        cp_ledger = build_track2_counterparty_ledger(report_data.get("transactions", []))
-        report_data["counterparty_ledger"] = cp_ledger
-    
-    # Build top_parties from CP ledger
-    top_parties = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
-    report_data["top_parties"] = top_parties
+    cp_ledger = data.get("counterparty_ledger") or build_track2_counterparty_ledger(data.get("transactions", []))
+    company_name = data.get("report_info", {}).get("company_name", "")
+
+    data["counterparty_ledger"]["counterparties"] = build_canonical_counterparty_ledger_rows(cp_ledger)
+    data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
 
     parsing = report_data.get("parsing_metadata", {}) or {}
     pdf_integrity = report_data.get("pdf_integrity", {}) or {}
