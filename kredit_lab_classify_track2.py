@@ -1945,7 +1945,7 @@ _RP_BIDIRECTIONAL_MIN_RATIO = 0.05     # min(total_cr,total_dr)/max(...) — mat
 _RP_AMBIGUOUS_DISAMBIG_RATIO = 0.20
 _RP_ROUND_AMOUNT_FLOOR = 1000.0
 _RP_ROUND_AMOUNT_MULTIPLE = 100.0
-_RP_ROUND_HITS_MIN = 2
+_RP_ROUND_HITS_MIN = 1
 # Sustained round-amount director-draw pattern: ≥5 round DRs across
 # ≥4 calendar months upgrades the round-amount signal from weight 1 → 2.
 # Captures revolving director advances while leaving the weak
@@ -2125,6 +2125,22 @@ _ADVISORY_RP_MIN_DR = 3000.0   # drop micro-payments (tutors paid RM168 etc.)
 _ADVISORY_RP_MAX_ROWS = 40  # cap; renderer notes "top N of M"
 
 
+_RP_DEBIT_AMOUNT_KEYS = (
+    "debit", "debit_amount", "debit_amt", "amount_debit",
+    "dr", "dr_amount", "dr_amt", "withdrawal", "withdrawals",
+    "withdrawal_amount", "outflow", "money_out", "paid_out",
+)
+_RP_CREDIT_AMOUNT_KEYS = (
+    "credit", "credit_amount", "credit_amt", "amount_credit",
+    "cr", "cr_amount", "cr_amt", "deposit", "deposits",
+    "deposit_amount", "inflow", "money_in", "paid_in",
+)
+_RP_SIGNED_AMOUNT_KEYS = (
+    "amount", "transaction_amount", "txn_amount", "signed_amount",
+    "signed_amount_value",
+)
+
+
 def _rp_number(value: Any) -> float:
     """Parse ledger numeric values across export variants."""
     if value is None:
@@ -2133,6 +2149,9 @@ def _rp_number(value: Any) -> float:
         text = value.strip().upper().replace("RM", "").replace(",", "")
         if text.startswith("(") and text.endswith(")"):
             text = f"-{text[1:-1]}"
+        text = re.sub(r"\b(?:DR|CR|DEBIT|CREDIT)\b", "", text).strip()
+        if text.endswith("-") and not text.startswith("-"):
+            text = f"-{text[:-1]}"
         value = text
     try:
         return float(value)
@@ -2140,10 +2159,23 @@ def _rp_number(value: Any) -> float:
         return 0.0
 
 
-def _rp_first_number(row: dict[str, Any], *keys: str) -> float:
+def _rp_value(row: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in row and row.get(key) not in (None, ""):
-            return _rp_number(row.get(key))
+            return row.get(key)
+
+    lowered = {str(k).lower(): v for k, v in row.items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _rp_first_number(row: dict[str, Any], *keys: str) -> float:
+    value = _rp_value(row, *keys)
+    if value not in (None, ""):
+        return _rp_number(value)
     return 0.0
 
 
@@ -2159,25 +2191,25 @@ def _rp_counterparty_name(cp: dict[str, Any]) -> str:
 
 def _rp_tx_side(tx: dict[str, Any]) -> str:
     raw = str(
-        tx.get("type")
-        or tx.get("transaction_type")
-        or tx.get("side")
-        or tx.get("dr_cr")
+        _rp_value(
+            tx, "type", "transaction_type", "txn_type", "entry_type",
+            "side", "dr_cr", "direction", "transaction_indicator",
+        )
         or ""
     ).upper().strip()
-    if raw in {"DEBIT", "DR"} or "DEBIT" in raw or raw.endswith(" DR"):
+    if raw in {"DEBIT", "DR", "D", "WITHDRAWAL", "WITHDRAWALS", "OUT", "OUTFLOW"} or "DEBIT" in raw or raw.endswith(" DR"):
         return "DEBIT"
-    if raw in {"CREDIT", "CR"} or "CREDIT" in raw or raw.endswith(" CR"):
+    if raw in {"CREDIT", "CR", "C", "DEPOSIT", "DEPOSITS", "IN", "INFLOW"} or "CREDIT" in raw or raw.endswith(" CR"):
         return "CREDIT"
 
-    debit = _rp_first_number(tx, "debit", "debit_amount", "dr", "dr_amount")
-    credit = _rp_first_number(tx, "credit", "credit_amount", "cr", "cr_amount")
+    debit = _rp_first_number(tx, *_RP_DEBIT_AMOUNT_KEYS)
+    credit = _rp_first_number(tx, *_RP_CREDIT_AMOUNT_KEYS)
     if debit > 0:
         return "DEBIT"
     if credit > 0:
         return "CREDIT"
 
-    amount = _rp_number(tx.get("amount"))
+    amount = _rp_first_number(tx, *_RP_SIGNED_AMOUNT_KEYS)
     if amount < 0:
         return "DEBIT"
     return "CREDIT" if amount > 0 else ""
@@ -2185,14 +2217,14 @@ def _rp_tx_side(tx: dict[str, Any]) -> str:
 
 def _rp_tx_amount(tx: dict[str, Any], side: str) -> float:
     if side == "DEBIT":
-        debit = _rp_first_number(tx, "debit", "debit_amount", "dr", "dr_amount")
+        debit = _rp_first_number(tx, *_RP_DEBIT_AMOUNT_KEYS)
         if debit:
             return abs(debit)
     elif side == "CREDIT":
-        credit = _rp_first_number(tx, "credit", "credit_amount", "cr", "cr_amount")
+        credit = _rp_first_number(tx, *_RP_CREDIT_AMOUNT_KEYS)
         if credit:
             return abs(credit)
-    return abs(_rp_number(tx.get("amount")))
+    return abs(_rp_first_number(tx, *_RP_SIGNED_AMOUNT_KEYS))
 
 
 def _rp_tx_month(tx: dict[str, Any]) -> str:

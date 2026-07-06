@@ -33,6 +33,15 @@ def _debit_numeric_only(date, description, amount):
     }
 
 
+def _debit_withdrawal(date, description, amount):
+    return {
+        "transaction_date": date,
+        "description": description,
+        "type": "DR",
+        "withdrawal": f"RM {amount:,.2f}",
+    }
+
+
 class RelatedPartyCandidateTests(unittest.TestCase):
     def test_samsi_ibrahim_round_debits_upgrade_recurrence_to_medium(self):
         samsi = {
@@ -64,6 +73,39 @@ class RelatedPartyCandidateTests(unittest.TestCase):
 
         self.assertEqual(candidate["confidence"], "MEDIUM")
         self.assertIn("monthly_recurrence", candidate["signals"])
+        self.assertIn("round_amount_advance", candidate["signals"])
+        self.assertIn("DR over 6 months", candidate["evidence"])
+        self.assertIn("2 round DRs", candidate["evidence"])
+
+    def test_round_debits_detect_from_withdrawal_amount_aliases(self):
+        samsi = {
+            "party_name": "SAMSI IBRAHIM",
+            "transaction_count": 6,
+            "debit_tx_count": 6,
+            "credit_tx_count": 0,
+            "total_credit": 0.0,
+            "total_debit": 43702.0,
+            "transactions": [
+                _debit_withdrawal("2025-09-10", "TR TO SAMSI IBRAHIM PROJECT FLOAT", 10000.0),
+                _debit_withdrawal("2025-10-11", "TR TO SAMSI IBRAHIM SITE ADVANCE", 5234.0),
+                _debit_withdrawal("2025-11-12", "TR TO SAMSI IBRAHIM", 8702.0),
+                _debit_withdrawal("2025-12-13", "TR TO SAMSI IBRAHIM", 5000.0),
+                _debit_withdrawal("2026-01-14", "TR TO SAMSI IBRAHIM", 6741.0),
+                _debit_withdrawal("2026-02-15", "TR TO SAMSI IBRAHIM", 8025.0),
+            ],
+        }
+        gross_dr_anchor = {
+            "counterparty_name": "BETA TRADING SDN BHD",
+            "total_debit": 1_000_000.0,
+            "transactions": [],
+        }
+
+        candidates = scan_related_party_candidates(
+            {"counterparties": [samsi, gross_dr_anchor]}
+        )
+        candidate = next(c for c in candidates if c["name"] == "SAMSI IBRAHIM")
+
+        self.assertEqual(candidate["confidence"], "MEDIUM")
         self.assertIn("round_amount_advance", candidate["signals"])
         self.assertIn("DR over 6 months", candidate["evidence"])
         self.assertIn("2 round DRs", candidate["evidence"])
