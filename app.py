@@ -1573,10 +1573,16 @@ def generate_interactive_html(data):
         raw_party_name = str(t.get('party_name') or 'Unknown Party').strip() or 'Unknown Party'
         party_type = str(t.get('party_type') or '').strip()
         party_type_upper = party_type.upper()
-        badge_type = 'OP' if party_type_upper.startswith('OWN') else 'RP'
-        party_name = raw_party_name
-        if badge_type == 'RP':
+        
+        # Determine badge type: OWN or RELATED
+        if party_type_upper.startswith('OWN'):
+            badge_type = 'OP'
+            # For OWN party, use a consistent name
+            party_name = 'Own Party (Self)'
+        else:
+            badge_type = 'RP'
             party_name = _matched_related_party_name(raw_party_name, t.get('description')) or raw_party_name
+        
         key = (party_name.casefold(), badge_type, party_name)
         group = rp_groups.setdefault(
             key,
@@ -1601,8 +1607,15 @@ def generate_interactive_html(data):
             group['debit_count'] += 1
         group['transactions'].append(t)
 
+    # Sort groups: OP first, then RP by name
+    def _group_sort_key(g):
+        # OP groups come first, then RP groups sorted by name
+        if g['badge_type'] == 'OP':
+            return (0, g['party_name'].casefold())
+        return (1, g['party_name'].casefold())
+    
     rp_party_rows = ""
-    for idx, group in enumerate(sorted(rp_groups.values(), key=lambda g: (g['party_name'].casefold(), g['badge_type']))):
+    for idx, group in enumerate(sorted(rp_groups.values(), key=_group_sort_key)):
         badge_cls = 'op-badge' if group['badge_type'] == 'OP' else 'rp-badge'
         detail_rows = ""
         for t in group['transactions']:
