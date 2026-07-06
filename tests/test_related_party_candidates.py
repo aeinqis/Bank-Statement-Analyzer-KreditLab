@@ -3,6 +3,7 @@ import unittest
 from kredit_lab_classify_track2 import (
     _is_excluded_related_party_name,
     advisory_rp_candidates,
+    dedup_counterparty_entries,
     scan_related_party_candidates,
 )
 
@@ -107,6 +108,43 @@ class RelatedPartyCandidateTests(unittest.TestCase):
 
         self.assertEqual(candidate["confidence"], "MEDIUM")
         self.assertIn("round_amount_advance", candidate["signals"])
+        self.assertIn("DR over 6 months", candidate["evidence"])
+        self.assertIn("2 round DRs", candidate["evidence"])
+
+    def test_fragmented_samsi_purpose_buckets_merge_before_round_scoring(self):
+        entries = [
+            {
+                "counterparty_name": name,
+                "transaction_count": 1,
+                "debit_count": 1,
+                "credit_count": 0,
+                "total_credits": 0.0,
+                "total_debits": amount,
+                "transactions": [
+                    _debit(date, f"TR TO C/A {name}", amount),
+                ],
+            }
+            for date, name, amount in [
+                ("2025-09-02", "SAMSI IBRAHIM HP", 2058.0),
+                ("2025-10-07", "SAMSI IBRAHIM", 4481.0),
+                ("2025-11-07", "SAMSI IBRAHIM", 1950.0),
+                ("2025-12-14", "SAMSI IBRAHIM", 6741.0),
+                ("2026-01-30", "SAMSI IBRAHIM PETTY CASH", 1000.0),
+                ("2026-02-19", "SAMSI IBRAHIM DIRECTOR", 5000.0),
+            ]
+        ]
+        gross_dr_anchor = {
+            "counterparty_name": "BETA TRADING SDN BHD",
+            "total_debits": 1_000_000.0,
+            "transactions": [],
+        }
+
+        candidates = scan_related_party_candidates(
+            {"counterparties": dedup_counterparty_entries(entries) + [gross_dr_anchor]}
+        )
+        candidate = next(c for c in candidates if c["name"] == "SAMSI IBRAHIM")
+
+        self.assertEqual(candidate["confidence"], "MEDIUM")
         self.assertIn("DR over 6 months", candidate["evidence"])
         self.assertIn("2 round DRs", candidate["evidence"])
 

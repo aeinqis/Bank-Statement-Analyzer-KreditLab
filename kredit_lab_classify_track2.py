@@ -1945,7 +1945,7 @@ _RP_BIDIRECTIONAL_MIN_RATIO = 0.05     # min(total_cr,total_dr)/max(...) — mat
 _RP_AMBIGUOUS_DISAMBIG_RATIO = 0.20
 _RP_ROUND_AMOUNT_FLOOR = 1000.0
 _RP_ROUND_AMOUNT_MULTIPLE = 100.0
-_RP_ROUND_HITS_MIN = 1
+_RP_ROUND_HITS_MIN = 2
 # Sustained round-amount director-draw pattern: ≥5 round DRs across
 # ≥4 calendar months upgrades the round-amount signal from weight 1 → 2.
 # Captures revolving director advances while leaving the weak
@@ -2125,6 +2125,13 @@ _ADVISORY_RP_MIN_DR = 3000.0   # drop micro-payments (tutors paid RM168 etc.)
 _ADVISORY_RP_MAX_ROWS = 40  # cap; renderer notes "top N of M"
 
 
+_RP_PERSON_PURPOSE_SUFFIX_RE = re.compile(
+    r"\s+(?:HP(?:\s+MONTHLY)?|PETTY\s+CASH|DIRECTOR(?:\s+FEE)?|"
+    r"MONTHLY\s+INSTAL(?:MENT)?|INSTALMENT|INSTALLMENT|CLAIM|"
+    r"REIMBURSE(?:MENT)?|MEDICAL|BONUS|ALLOWANCE|ADVANCE)\b.*$",
+    re.IGNORECASE,
+)
+
 _RP_DEBIT_AMOUNT_KEYS = (
     "debit", "debit_amount", "debit_amt", "amount_debit",
     "dr", "dr_amount", "dr_amt", "withdrawal", "withdrawals",
@@ -2157,6 +2164,15 @@ def _rp_number(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _strip_rp_person_purpose_suffix(name: str) -> str:
+    candidate = _RP_PERSON_PURPOSE_SUFFIX_RE.sub("", name).strip()
+    if not candidate or candidate == name:
+        return name
+    if has_natural_person_marker(candidate) or _looks_like_personal_name(candidate):
+        return candidate
+    return name
 
 
 def _rp_value(row: dict[str, Any], *keys: str) -> Any:
@@ -2513,6 +2529,7 @@ def _compute_rp_signals(
         ))
 
     # 5. Round-number advances — now fires from a single hit (min lowered to 1).
+    # The current gate is _RP_ROUND_HITS_MIN == 2.
     round_dr_months: set[str] = set()
     round_hits = 0
     for tx in txs:
@@ -5061,6 +5078,8 @@ def clean_counterparty_name(name: Any) -> Any:
     credit_xfer = _strip_credit_transfer_prefix(stripped)
     if credit_xfer is not None:
         return credit_xfer
+
+    stripped = _strip_rp_person_purpose_suffix(stripped)
 
     # Pattern A: digit-noise strip on known special buckets.
     upper = stripped.upper()

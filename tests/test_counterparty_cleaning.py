@@ -17,6 +17,9 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(clean_counterparty_name("DAVID ANAK RICHARD STAFF OVERTIME"), "DAVID RICHARD")
         self.assertEqual(clean_counterparty_name("KHAIRUL OTHMAN BIN"), "KHAIRUL OTHMAN")
         self.assertEqual(clean_counterparty_name("KHAIRUL OTHMAN BIN STAFF OVERTIME"), "KHAIRUL OTHMAN")
+        self.assertEqual(clean_counterparty_name("SAMSI BIN IBRAHIM HP MONTHLY"), "SAMSI IBRAHIM")
+        self.assertEqual(clean_counterparty_name("SAMSI BIN IBRAHIM PETTY CASH"), "SAMSI IBRAHIM")
+        self.assertEqual(clean_counterparty_name("SAMSI BIN IBRAHIM DIRECTOR FEE"), "SAMSI IBRAHIM")
 
     def test_embedded_khairul_othman_variants_merge(self):
         names = [
@@ -61,6 +64,16 @@ class CounterpartyCleaningTests(unittest.TestCase):
         desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"
         self.assertEqual(extract_cimb_party_name(desc), "SOUTHERN CABLE SDN BHD")
         self.assertEqual(clean_counterparty_name(desc), "SOUTHERN CABLE SDN BHD")
+
+    def test_cimb_person_purpose_suffixes_strip_to_person_name(self):
+        self.assertEqual(
+            extract_cimb_party_name("TR TO C/A SAMSI BIN IBRAHIM HP MONTHLY"),
+            "SAMSI BIN IBRAHIM",
+        )
+        self.assertEqual(
+            extract_cimb_party_name("TR TO C/A SAMSI BIN IBRAHIM DIRECTOR FEE"),
+            "SAMSI BIN IBRAHIM",
+        )
 
     def test_counterparty_cleaning_removes_bank_names(self):
         self.assertEqual(clean_counterparty_name("MAYBANK"), "UNKNOWN")
