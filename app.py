@@ -1567,10 +1567,6 @@ def generate_interactive_html(data):
         'related_party_dr': int(rp_summary.get('related_party_dr_count') or 0) or _count_txn('RELATED', 'DEBIT'),
     }
     rp_groups = {}
-    
-    # Get the company name from the report info
-    company_name_display = company_name or r.get('company_name', 'Own Party')
-    
     for t in own_related.get('transactions', []) or []:
         if not isinstance(t, dict):
             continue
@@ -1581,22 +1577,8 @@ def generate_interactive_html(data):
         # Determine badge type: OWN or RELATED
         if party_type_upper.startswith('OWN'):
             badge_type = 'OP'
-            # Use the actual company name for OWN party transactions
-            # Try to get from the transaction's company_name field, fallback to report info
-            txn_company = t.get('company_name', '') or company_name_display
-            if txn_company:
-                party_name = str(txn_company).strip()
-            else:
-                # Try to extract from description if company_name not available
-                desc = str(t.get('description', ''))
-                # Look for common patterns like "MUHAFIZ SECURITY SDN BHD"
-                # This is a fallback - ideally company_name is available
-                import re
-                company_match = re.search(r'([A-Z][A-Z\s&]+(?:SDN\s+BHD|BHD|S\.?B\.?H\.?D\.?|INC|CORP|LTD|PTE\s+LTD)?)', desc.upper())
-                if company_match:
-                    party_name = company_match.group(1).strip()
-                else:
-                    party_name = 'Own Party (Self)'
+            # For OWN party, use a consistent name
+            party_name = 'Own Party (Self)'
         else:
             badge_type = 'RP'
             party_name = _matched_related_party_name(raw_party_name, t.get('description')) or raw_party_name
