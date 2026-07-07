@@ -5691,7 +5691,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     row += 1
 
     # Set widths for basic summary columns
-    basic_widths = [14, 18, 20, 18, 18, 16, 16, 16, 16, 12, 12]
+    basic_widths = [14, 18, 20, 22, 16, 16, 16, 16, 16, 12, 12]
     for idx, width in enumerate(basic_widths, 1):
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
@@ -5735,7 +5735,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     row += 1
 
     # Set widths for exclusion columns - make Loan Disbursement wider
-    excl_widths = [14, 16, 16, 18, 18, 16, 22, 16]  # "Loan Disbursement Cr" needs wider
+    excl_widths = [14, 18, 18, 18, 18, 18, 22, 18]  # "Loan Disbursement Cr" needs wider
     for idx, width in enumerate(excl_widths, 1):
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
