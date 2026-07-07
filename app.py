@@ -5688,8 +5688,9 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Related Parties headers - ONLY columns A-E (No., Name, Relationship, Total Credits, Total Debits, Transactions)
     # Note: We're using columns A-F (6 columns)
-    rp_headers = ["No.", "Name", "Relationship", "Total Credits", "Total Debits", "Transactions"]
+    rp_headers = ["No.", "Relationship", "Name", "Total Credits", "Total Debits", "Transactions"]
     write_headers(ws5, row, rp_headers, header_fill_orange)
+    ws5.cell(row=row_idx, column=1).number_format = "0"
 
     # Set custom column widths for Related Parties section (narrower)
     ws5.column_dimensions["A"].width = 6   # No.
