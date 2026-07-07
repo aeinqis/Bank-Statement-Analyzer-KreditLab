@@ -5259,8 +5259,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     observations = normalize_observations(report_data.get("observations", {}) or {})
 
     # ── Backfill consolidated totals from monthly_analysis when Track 2 keys are absent ──
-    # The HTML uses build_track2_result which computes these directly; the Excel path
-    # uses build_report_data_from_analysis which omits them. Sum/min/max from monthly rows.
     def _sum_monthly(key):
         return round(sum(safe_float(m.get(key, 0)) for m in monthly_analysis), 2)
 
@@ -5676,20 +5674,38 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         debit_cols={4}
     )
 
-    # Counterparty
+    # Counterparty - MODIFIED: Combined with Related Parties content
     ws5 = wb.create_sheet("Counterparty")
     ws5.cell(row=1, column=1, value="COUNTERPARTY TRANSACTIONS").font = title_font
-    ws5.cell(row=3, column=1, value="Summary").font = bold_font
-    row = 4
-    summary = own_related.get("summary", {}) or {}
-    for label, amount_key, pct_key, is_credit_side in [
-        ("Own Party Credits", "own_party_cr", "own_party_cr_pct", True),
-        ("Own Party Debits", "own_party_dr", "own_party_dr_pct", False),
-        ("Related Party Credits", "related_party_cr", "related_party_cr_pct", True),
-        ("Related Party Debits", "related_party_dr", "related_party_dr_pct", False),
-    ]:
-        write_values(ws5, row, [label, summary.get(amount_key), f"{safe_float(summary.get(pct_key, 0)):.1f}%" if summary.get(pct_key) is not None else ""], number_cols={2}, credit_cols={2} if is_credit_side else set(), debit_cols={2} if not is_credit_side else set())
+    
+    # --- START: Related Parties content inserted here ---
+    row = 3
+    ws5.cell(row=row, column=1, value="RELATED PARTIES").font = bold_font
+    row += 1
+    rp_headers = ["Name", "Relationship", "Total Credits", "Total Debits", "Transactions"]
+    write_headers(ws5, row, rp_headers, header_fill_orange)
+    
+    cp_by_name = {str(cp.get("counterparty_name", "")).strip().upper(): cp for cp in cp_sorted if cp.get("counterparty_name")}
+    rp_row_start = row + 1
+    for rp_idx, rp in enumerate(report_info.get("related_parties", []) or [], 0):
+        row = rp_row_start + rp_idx
+        name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
+        relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
+        match = cp_by_name.get(name.strip().upper(), {})
+        values = [name, relationship, match.get("total_credits"), match.get("total_debits"), match.get("transaction_count")]
+        write_values(ws5, row, values, number_cols={3, 4}, credit_cols={3}, debit_cols={4})
+    
+    # If no related parties, show a note
+    if not report_info.get("related_parties", []):
+        row = rp_row_start
+        ws5.cell(row=row, column=1, value="No related parties defined.")
+        style_data_cell(ws5, row, 1)
         row += 1
+    
+    row += 2
+    # --- END: Related Parties content ---
+    
+    ws5.cell(row=row, column=1, value="COUNTERPARTY SUMMARY").font = bold_font
     row += 1
     counterparty_headers = ["No.", "Date", "Description", "Amount", "Party Type", "Party Name"]
     write_headers(ws5, row, counterparty_headers, header_fill_orange)
@@ -5731,19 +5747,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             write_values(ws5b, row, values, number_cols={3}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type != "CREDIT" else set())
     auto_width(ws5b)
 
-    # Related Parties
-    ws5c = wb.create_sheet("Related Parties")
-    ws5c.cell(row=1, column=1, value="KNOWN RELATED PARTIES").font = title_font
-    rp_headers = ["Name", "Relationship", "Total Credits", "Total Debits", "Transactions"]
-    write_headers(ws5c, 3, rp_headers, header_fill_orange)
-    cp_by_name = {str(cp.get("counterparty_name", "")).strip().upper(): cp for cp in cp_sorted if cp.get("counterparty_name")}
-    for row_idx, rp in enumerate(report_info.get("related_parties", []) or [], 4):
-        name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
-        relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
-        match = cp_by_name.get(name.strip().upper(), {})
-        values = [name, relationship, match.get("total_credits"), match.get("total_debits"), match.get("transaction_count")]
-        write_values(ws5c, row_idx, values, number_cols={3, 4}, credit_cols={3}, debit_cols={4})
-    auto_width(ws5c)
+    # NOTE: Related Parties sheet (ws5c) has been REMOVED as content is now in Counterparty sheet
 
     # Unclassified
     ws5d = wb.create_sheet("Unclassified")
@@ -5790,11 +5794,9 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         row += 2
     ws5f.column_dimensions["A"].width = 100
 
-    # Facilities
-    # Facilities — matches the HTML Facilities tab exactly
+    # Facilities - MODIFIED: Summary table header now ORANGE
     ws6 = wb.create_sheet("Facilities")
 
-    # Inline helpers matching _is_real_facility / _facility_amount from HTML report
     def _fac_amount(t):
         try:
             return float(t.get("amount") or 0)
@@ -5804,20 +5806,19 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     def _is_real_fac(t, expected_category):
         return isinstance(t, dict) and t.get("category") == expected_category and _fac_amount(t) > 0
 
-    # Filter same as HTML tab
     loan_disb = [t for t in (loans.get("disbursements") or []) if _is_real_fac(t, "loan_disbursement")]
     loan_repay = [t for t in (loans.get("repayments") or []) if _is_real_fac(t, "loan_repayment")]
     loan_disb_total = round(sum(_fac_amount(t) for t in loan_disb), 2)
     loan_repay_total = round(sum(_fac_amount(t) for t in loan_repay), 2)
 
-    # Summary stats (mirrors HTML summary cards)
     ws6.cell(row=1, column=1, value="FACILITIES").font = title_font
     summary_headers = ["Total Disbursements (RM)", "Total Repayments (RM)", "Disbursement Txns", "Repayment Txns"]
-    write_headers(ws6, 3, summary_headers, header_fill_green)
+    
+    # MODIFIED: Use ORANGE header fill for the summary table
+    write_headers(ws6, 3, summary_headers, header_fill_orange)
     write_values(ws6, 4, [loan_disb_total, loan_repay_total, len(loan_disb), len(loan_repay)],
                  number_cols={1, 2}, credit_cols={1}, debit_cols={2})
 
-    # 4-column layout (same as HTML: Date, Description, Amount, Category — NO Balance)
     facility_headers = ["No.", "Date", "Description", "Amount", "Category"]
     row = 6
     ws6.cell(row=row, column=1, value="DISBURSEMENTS (Credits)").font = bold_font
