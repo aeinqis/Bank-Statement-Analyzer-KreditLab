@@ -5712,9 +5712,14 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ]
         write_values(ws2, idx, values, number_cols={4, 5, 6, 7, 8, 9}, 
                     credit_cols={6, 8}, debit_cols={7, 9})
-        # Center align count columns
-        for col in [10, 11]:
+        
+        # Center align ALL columns for data rows
+        for col in range(1, 12):
             ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Format count columns as integers
+        for count_col in [10, 11]:
+            ws2.cell(row=idx, column=count_col).number_format = "0"
 
     row = idx + 2
 
@@ -5729,8 +5734,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     write_headers(ws2, row, exclusion_headers, header_fill_orange)
     row += 1
 
-    # Set widths for exclusion columns
-    excl_widths = [14, 16, 16, 16, 16, 16, 16, 16]
+    # Set widths for exclusion columns - make Loan Disbursement wider
+    excl_widths = [14, 16, 16, 16, 16, 16, 22, 16]  # "Loan Disbursement Cr" needs wider
     for idx, width in enumerate(excl_widths, 1):
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
@@ -5748,6 +5753,10 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ]
         write_values(ws2, idx, values, number_cols={2, 3, 4, 5, 6, 7, 8}, 
                     credit_cols={2, 4, 6, 7, 8}, debit_cols={3, 5})
+        
+        # Center align ALL columns for data rows
+        for col in range(1, 9):
+            ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     row = idx + 2
 
@@ -5782,9 +5791,14 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ]
         write_values(ws2, idx, values, number_cols={2, 3, 4, 5, 6, 7, 8, 9}, 
                     credit_cols={3, 5, 7}, debit_cols={9})
-        # Center align count columns
-        for col in [2, 4, 6, 8]:
+        
+        # Center align ALL columns for data rows
+        for col in range(1, 10):
             ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Format count columns as integers
+        for count_col in [2, 4, 6, 8]:
+            ws2.cell(row=idx, column=count_col).number_format = "0"
 
     row = idx + 2
 
@@ -5796,11 +5810,11 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     statutory_headers = ["Month", "Salary Paid", "EPF", "SOCSO", "Tax", "HRDF", 
                         "Loan Repayment Dr", "High Value Cr", "Round Figure Cr"]
-    write_headers(ws2, row, statutory_headers, header_fill_purple)  # You may need to define this color
+    write_headers(ws2, row, statutory_headers, header_fill_purple)
     row += 1
 
-    # Set widths for statutory columns
-    stat_widths = [14, 16, 16, 16, 16, 16, 16, 16, 16]
+    # Set widths for statutory columns - make Loan Repayment wider
+    stat_widths = [14, 16, 16, 16, 16, 16, 22, 16, 16]  # "Loan Repayment Dr" needs wider
     for idx, width in enumerate(stat_widths, 1):
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
@@ -5819,6 +5833,10 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ]
         write_values(ws2, idx, values, number_cols={2, 3, 4, 5, 6, 7, 8, 9}, 
                     credit_cols={6, 8, 9}, debit_cols={3, 4, 5, 7})
+        
+        # Center align ALL columns for data rows
+        for col in range(1, 10):
+            ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     row = idx + 2
 
@@ -5848,8 +5866,14 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                 item.get("returned_cheques_outward_amount")
             ]
             write_values(ws2, idx, values, number_cols={2, 3, 4, 5}, debit_cols={3, 5})
-            for col in [2, 4]:
+            
+            # Center align ALL columns for data rows
+            for col in range(1, 6):
                 ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Format count columns as integers
+            for count_col in [2, 4]:
+                ws2.cell(row=idx, column=count_col).number_format = "0"
         
         row = idx + 2
 
@@ -5860,7 +5884,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     row += 1
 
     eod_headers = ["Month", "EOD Lowest", "EOD Highest", "EOD Average"]
-    write_headers(ws2, row, eod_headers, header_fill_blue)  # You may need to define this color
+    write_headers(ws2, row, eod_headers, header_fill_blue)
     row += 1
 
     # Set widths for EOD columns
@@ -5876,6 +5900,10 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             item.get("eod_average")
         ]
         write_values(ws2, idx, values, number_cols={2, 3, 4})
+        
+        # Center align ALL columns for data rows
+        for col in range(1, 5):
+            ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     row = idx + 2
 
@@ -5906,8 +5934,16 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             ]
             write_values(ws2, idx, values, number_cols={2, 3, 4, 5}, 
                         credit_cols={3}, debit_cols={5})
-            for col in [2, 4]:
+            
+            # Center align ALL columns for data rows
+            for col in range(1, 7):
                 ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Format count columns as integers
+            for count_col in [2, 4]:
+                ws2.cell(row=idx, column=count_col).number_format = "0"
+            
+            # Left align FX Currencies for readability
             ws2.cell(row=idx, column=6).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         
         row = idx + 2
@@ -5939,15 +5975,20 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                 effective_recon["missing_credits"] if effective_recon else 0
             ]
             write_values(ws2, idx, values, number_cols={3, 4, 5, 6})
-            ws2.cell(row=idx, column=2).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Center align ALL columns for data rows
+            for col in range(1, 7):
+                ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Format count columns as integers
+            for count_col in [4]:
+                ws2.cell(row=idx, column=count_col).number_format = "0"
+            
             if effective_recon and effective_recon["status"] == "FAIL":
                 for col in range(1, len(values) + 1):
                     ws2.cell(row=idx, column=col).fill = fail_fill
         
         row = idx + 2
-
-    # Freeze the first column (Month) and first two rows
-    ws2.freeze_panes = "B3"
 
     # Remove auto_width to maintain manual column widths
     # auto_width(ws2, min_width=12)
