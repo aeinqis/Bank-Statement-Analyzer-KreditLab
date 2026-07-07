@@ -1059,10 +1059,68 @@ def generate_interactive_html(data):
                 return name
         return 'Own Party (Self)'
 
+    def _advisory_related_party_candidates_for_report():
+        by_name = {}
+        confirmed_upper = {name.upper() for name in related_party_names}
+        order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
+
+        def add_candidate(candidate):
+            if not isinstance(candidate, dict):
+                return
+            display_name = re.sub(r'\s+', ' ', str(candidate.get('name') or '').strip())
+            key = display_name.upper()
+            if not key or key in confirmed_upper:
+                return
+
+            current = {
+                'name': display_name,
+                'confidence': str(candidate.get('confidence', 'MEDIUM') or 'MEDIUM').upper(),
+                'evidence': candidate.get('evidence', 'Flagged by Track 2 engine'),
+                'total_cr': safe_float(candidate.get('total_cr', 0)),
+                'total_dr': safe_float(candidate.get('total_dr', 0)),
+                'score': candidate.get('score'),
+                'debit_count': candidate.get('debit_count', 0),
+                'credit_count': candidate.get('credit_count', 0),
+                'debit_month_count': candidate.get('debit_month_count', 0),
+            }
+            existing = by_name.get(key)
+            if (
+                existing is None
+                or order.get(current['confidence'], 9) < order.get(existing.get('confidence'), 9)
+                or current['total_dr'] > safe_float(existing.get('total_dr', 0))
+            ):
+                by_name[key] = current
+
+        for candidate in r.get('related_party_candidates', []) or []:
+            add_candidate(candidate)
+
+        if _TRACK2_AVAILABLE:
+            cp_ledger_for_candidates = data.get('counterparty_ledger')
+            if isinstance(cp_ledger_for_candidates, dict):
+                try:
+                    live_candidates = advisory_rp_candidates(
+                        scan_related_party_candidates(cp_ledger_for_candidates),
+                        related_party_names,
+                        [company],
+                    )
+                    for candidate in live_candidates:
+                        add_candidate(candidate)
+                except Exception:
+                    pass
+
+        return sorted(
+            by_name.values(),
+            key=lambda item: (
+                order.get(str(item.get('confidence', '')).upper(), 9),
+                -safe_float(item.get('total_dr', 0)),
+                str(item.get('name', '')).casefold(),
+            ),
+        )
+
     # ── Related-party candidates (advisory only; analyst confirms) ──
     # MEDIUM/LOW RP3 near-misses that did NOT auto-confirm and exclude nothing.
     # Surfaced so the analyst sees them instead of hunting the full ledger.
-    rp_candidates = r.get('related_party_candidates', []) or []
+    rp_candidates = _advisory_related_party_candidates_for_report()
     rp_candidates_html = ""
     if rp_candidates:
         _cand_rows = ""
@@ -7879,8 +7937,10 @@ def detect_related_party_candidates(
                 "source": "track2",
             }
 
-    # Track 2 fallback when report_info has not been built yet.
-    if not candidates_by_name and isinstance(cp_ledger, dict) and _TRACK2_AVAILABLE:
+    # Always supplement cached report candidates with a live ledger scan. A
+    # report_info candidate list can be stale or capped, while the manager
+    # should reflect the currently visible counterparty ledger.
+    if isinstance(cp_ledger, dict) and _TRACK2_AVAILABLE:
         try:
             for c in advisory_rp_candidates(
                 scan_related_party_candidates(cp_ledger),

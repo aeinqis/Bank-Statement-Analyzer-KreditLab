@@ -187,6 +187,47 @@ class RelatedPartyCandidateTests(unittest.TestCase):
             "MARIANA AHMAT",
         )
 
+    def test_mariana_ahmat_screenshot_pattern_surfaces_as_possible_related_party(self):
+        mariana = {
+            "counterparty_name": "MARIANA AHMAT",
+            "transaction_count": 9,
+            "credit_count": 0,
+            "debit_count": 9,
+            "total_credits": 0.0,
+            "total_debits": 8760.0,
+            "transactions": [
+                _debit("2025-09-24", "TR TO SAVINGS MARIANA BINTI AHMAT Petty Cash PO Rahman", 200.0),
+                _debit("2025-09-25", "TR TO SAVINGS ACC NO 210316929501 MARIANA BINTI AHMAT SESCO ELECTRICITY", 960.0),
+                _debit("2025-11-03", "TR TO SAVINGS STAFF OUTSTATION TO MARIANA BINTI AHMAT PETTY CASH", 500.0),
+                _debit("2025-11-13", "TR TO SAVINGS MARIANA BINTI AHMAT PETTY CASH", 400.0),
+                _debit("2025-11-20", "TR TO SAVINGS MARIANA BINTI AHMAT Travel Agent Golf", 5400.0),
+                _debit("2025-12-02", "TR TO SAVINGS MARIANA BINTI AHMAT PETTY CASH", 200.0),
+                _debit("2025-12-19", "TR TO SAVINGS MARIANA BINTI AHMAT STAFF BONUS", 500.0),
+                _debit("2026-01-28", "TR TO SAVINGS MARIANA BINTI AHMAT PETTY CASH", 300.0),
+                _debit("2026-02-24", "TR TO SAVINGS MARIANA BINTI AHMAT PETTY CASH", 300.0),
+            ],
+        }
+        gross_dr_anchor = {
+            "counterparty_name": "BETA TRADING SDN BHD",
+            "total_debits": 1_000_000.0,
+            "transactions": [],
+        }
+
+        candidates = scan_related_party_candidates(
+            {"counterparties": [mariana, gross_dr_anchor]}
+        )
+        candidate = next(c for c in candidates if c["name"] == "MARIANA AHMAT")
+
+        self.assertEqual(candidate["confidence"], "MEDIUM")
+        self.assertIn("personal_keyword_sweep", candidate["signals"])
+        self.assertIn("monthly_recurrence", candidate["signals"])
+        self.assertIn("7 personal-kw rows", candidate["evidence"])
+        self.assertIn("DR over 5 months", candidate["evidence"])
+        self.assertEqual(
+            advisory_rp_candidates(candidates, effective_related_parties=[])[0]["name"],
+            "MARIANA AHMAT",
+        )
+
     def test_personal_keyword_sweep_reads_description_and_counterparty_fields(self):
         ahmad = {
             "counterparty_name": "AHMAD ALI",
