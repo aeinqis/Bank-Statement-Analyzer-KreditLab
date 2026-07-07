@@ -831,15 +831,16 @@ def generate_interactive_html(data):
 
     # Prepare top parties before feature detection; later rendering depends on it.
     top_parties = data.get('top_parties', {})
-    if not top_parties or not _has_top_party_rows(top_parties):
-        cp_ledger = data.get('counterparty_ledger', {})
-        if cp_ledger and cp_ledger.get('counterparties'):
-            top_parties = _top_parties_from_counterparty_ledger(
-                cp_ledger,
-                limit=10,
-                company_name=company_name,
-            )
-            data['top_parties'] = top_parties
+    cp_ledger_for_top = data.get('counterparty_ledger', {})
+    if isinstance(cp_ledger_for_top, dict) and cp_ledger_for_top.get('counterparties'):
+        top_parties = _top_parties_from_counterparty_ledger(
+            cp_ledger_for_top,
+            limit=None,
+            company_name=company_name,
+        )
+        data['top_parties'] = top_parties
+    elif not top_parties or not _has_top_party_rows(top_parties):
+        top_parties = {"top_payers": [], "top_payees": []}
     if not isinstance(top_parties, dict):
         top_parties = {}
 
@@ -3505,13 +3506,13 @@ def _ledger_monthly_breakdown(transactions: List[dict], side: str) -> List[dict]
     ]
 
 
-def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: int = 10, company_name: str = "") -> dict:
+def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: Optional[int] = 10, company_name: str = "") -> dict:
     if not isinstance(counterparty_ledger, dict):
         return {"top_payers": [], "top_payees": []}
 
     payers = []
     payees = []
-    for cp in counterparty_ledger.get("counterparties", []) or []:
+    for cp in build_canonical_counterparty_ledger_rows(counterparty_ledger):
         if not isinstance(cp, dict):
             continue
         name = (
@@ -3561,7 +3562,7 @@ def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: int 
         company_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', company_upper).strip()
         company_core = re.sub(r'\s+', ' ', company_clean).strip()
         
-        for party in payers[:limit]:
+        for party in payers:
             party_name = party.get('party_name', '').upper()
             party_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', party_name).strip()
             party_core = re.sub(r'\s+', ' ', party_clean).strip()
@@ -3583,7 +3584,7 @@ def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: int 
                 party['is_own_party'] = True
                 party['is_related_party'] = False  # OP overrides RP
         
-        for party in payees[:limit]:
+        for party in payees:
             party_name = party.get('party_name', '').upper()
             party_clean = re.sub(r'\s+(SDN|BHD|PTE|LTD|INC|CORP|COMPANY|CO)\s*\.?\s*$', '', party_name).strip()
             party_core = re.sub(r'\s+', ' ', party_clean).strip()
@@ -3605,9 +3606,12 @@ def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: int 
                 party['is_own_party'] = True
                 party['is_related_party'] = False  # OP overrides RP
 
+    top_limit = limit if isinstance(limit, int) and limit > 0 else None
+    top_payers = payers[:top_limit] if top_limit else payers
+    top_payees = payees[:top_limit] if top_limit else payees
     return {
-        "top_payers": [{**party, "rank": idx} for idx, party in enumerate(payers[:limit], 1)],
-        "top_payees": [{**party, "rank": idx} for idx, party in enumerate(payees[:limit], 1)],
+        "top_payers": [{**party, "rank": idx} for idx, party in enumerate(top_payers, 1)],
+        "top_payees": [{**party, "rank": idx} for idx, party in enumerate(top_payees, 1)],
     }
 
 
@@ -3842,6 +3846,26 @@ def prepare_top_parties_for_report(top_parties: dict, limit: int = 10, company_n
         "payers_suppressed": payers_suppressed,
         "payees_suppressed": payees_suppressed,
     }
+
+
+def build_top_party_view_from_counterparty_ledger(
+    cp_ledger: dict,
+    *,
+    limit: int = 10,
+    company_name: str = "",
+) -> dict:
+    """Return the shared Top Parties view used by Streamlit, HTML, and Excel."""
+    top_parties = _top_parties_from_counterparty_ledger(
+        cp_ledger,
+        limit=None,
+        company_name=company_name,
+    )
+    return prepare_top_parties_for_report(
+        top_parties,
+        limit=limit,
+        company_name=company_name,
+    )
+
 
 def build_round_transactions(transactions: List[dict], round_thresholds: List[float] | None = None) -> List[dict]:
     """Build the same signed round-number transaction rows shown in Railway."""
@@ -4448,7 +4472,7 @@ def build_report_data_from_analysis(
     # Build top_parties from CP ledger for consistency with Railway UI
     cp_ledger = transaction_analysis.get('counterparty_ledger', {}) or build_track2_counterparty_ledger(transactions)
     company_name = st.session_state.get('company_name_override', '') or (transactions[0].get('company_name', '') if transactions else '')
-    adapted_data['top_parties'] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+    adapted_data['top_parties'] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None, company_name=company_name)
         
     # IMPORTANT: Build large transactions directly from transactions with correct threshold
     adapted_data['large_transactions'] = build_large_transactions(transactions, threshold)
@@ -4511,7 +4535,7 @@ def normalize_report_data_for_export(data: dict) -> dict:
     # ALWAYS build top_parties from CP ledger for consistency with Railway UI
     cp_ledger = source.get("counterparty_ledger", {})
     company_name = source.get("report_info", {}).get("company_name", "")
-    source["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+    source["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None, company_name=company_name)
 
     if "monthly_analysis" not in source and "transactions" in source:
         normalized = adapt_to_v6(source)
@@ -4544,7 +4568,7 @@ def normalize_report_data_for_export(data: dict) -> dict:
      # Ensure top_parties is from CP ledger
     if not _has_top_party_rows(normalized.get("top_parties")):
         cp_ledger = normalized.get("counterparty_ledger", {})
-        normalized["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
+        normalized["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None)
 
     threshold = safe_float(
         normalized.get("consolidated", {}).get("high_value_threshold")
@@ -4660,7 +4684,7 @@ def build_shared_report_data(
             # CRITICAL FIX: Build top_parties from the CP ledger with company name
             # Get company name from override or first transaction
             company_name = override or (company_names[0] if company_names else '')
-            data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+            data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None, company_name=company_name)
             
             return _finalize_shared_report_data(
                 data,
@@ -4694,7 +4718,7 @@ def build_shared_report_data(
     company_name = st.session_state.get("company_name_override", "") or (
         transactions[0].get("company_name", "") if transactions else ""
     )
-    report_data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=10, company_name=company_name)
+    report_data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None, company_name=company_name)
     report_data["counterparty_ledger"] = cp_ledger
         
     return _finalize_shared_report_data(
@@ -5198,21 +5222,29 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     if not cp_ledger or not cp_ledger.get("counterparties"):
         cp_ledger = build_track2_counterparty_ledger(report_data.get("transactions", []))
         report_data["counterparty_ledger"] = cp_ledger
+    report_info = report_data.get("report_info", {}) or {}
     
     # Build top_parties from CP ledger
-    top_parties = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
+    top_parties = _top_parties_from_counterparty_ledger(
+        cp_ledger,
+        limit=None,
+        company_name=report_info.get("company_name", ""),
+    )
     report_data["top_parties"] = top_parties
 
     parsing = report_data.get("parsing_metadata", {}) or {}
     pdf_integrity = report_data.get("pdf_integrity", {}) or {}
     consolidated = report_data.get("consolidated", {}) or {}
     monthly_analysis = report_data.get("monthly_analysis", []) or []
-    report_info = report_data.get("report_info", {}) or {}
     accounts = report_data.get("accounts", []) or []
     top_parties = report_data.get("top_parties", {}) or {}
 
     if not _has_top_party_rows(top_parties):
-        ledger_top_parties = _top_parties_from_counterparty_ledger(cp_ledger, limit=10)
+        ledger_top_parties = _top_parties_from_counterparty_ledger(
+            cp_ledger,
+            limit=None,
+            company_name=report_info.get("company_name", ""),
+        )
         if _has_top_party_rows(ledger_top_parties):
             top_parties = ledger_top_parties
             report_data["top_parties"] = top_parties
@@ -7748,6 +7780,19 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     # Build the same canonical counterparty summary used by HTML and Excel.
     display_cp_ledger = build_track2_counterparty_ledger(prepared_df.to_dict("records"))
     canonical_cp_rows = build_canonical_counterparty_ledger_rows(display_cp_ledger)
+    company_name_for_top = (st.session_state.get("company_name_override") or "").strip()
+    if not company_name_for_top and "company_name" in prepared_df.columns:
+        company_names = [
+            str(value).strip()
+            for value in prepared_df["company_name"].dropna().tolist()
+            if str(value).strip()
+        ]
+        company_name_for_top = company_names[0] if company_names else ""
+    top_party_view = build_top_party_view_from_counterparty_ledger(
+        display_cp_ledger,
+        limit=10,
+        company_name=company_name_for_top,
+    )
     counterparty_summary = pd.DataFrame(
         [
             {
@@ -7778,19 +7823,19 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
         )
         st.caption("Edit counterparty_name_clean or mapping values, then upload the JSON back here to regroup the ledger and matching transactions.")
     
-    def build_top_counterparty_table(amount_column: str, count_column: str) -> pd.DataFrame:
-        top_df = counterparty_summary[
-            counterparty_summary[amount_column].fillna(0) > 0
-        ].copy()
-        if top_df.empty:
+    def build_top_counterparty_table(side: str) -> pd.DataFrame:
+        rows = top_party_view["payers" if side == "credit" else "payees"]
+        if not rows:
             return pd.DataFrame(columns=["Counterparty", "Total Txn", "Total Amnt of Txn"])
 
-        top_df = top_df.sort_values(amount_column, ascending=False).head(10)
         return pd.DataFrame(
             {
-                "Counterparty": top_df["counterparty_name"],
-                "Total Txn": top_df[count_column].astype(int),
-                "Total Amnt of Txn": top_df[amount_column].apply(lambda x: f"RM {x:,.2f}"),
+                "Counterparty": [row.get("party_name", "") for row in rows],
+                "Total Txn": [int(safe_float(row.get("transaction_count", 0))) for row in rows],
+                "Total Amnt of Txn": [
+                    f"RM {safe_float(row.get('total_amount', 0)):,.2f}"
+                    for row in rows
+                ],
             }
         )
 
@@ -7883,14 +7928,14 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     with credit_col:
         st.markdown("#### Top 10 Credit Counterparties")
         st.dataframe(
-            build_top_counterparty_table("total_credits", "credit_count"),
+            build_top_counterparty_table("credit"),
             use_container_width=True,
             hide_index=True,
         )
     with debit_col:
         st.markdown("#### Top 10 Debit Counterparties")
         st.dataframe(
-            build_top_counterparty_table("total_debits", "debit_count"),
+            build_top_counterparty_table("debit"),
             use_container_width=True,
             hide_index=True,
         )
