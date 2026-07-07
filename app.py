@@ -1083,14 +1083,40 @@ def generate_interactive_html(data):
                 'debit_count': candidate.get('debit_count', 0),
                 'credit_count': candidate.get('credit_count', 0),
                 'debit_month_count': candidate.get('debit_month_count', 0),
+                'signals': candidate.get('signals', []),
             }
             existing = by_name.get(key)
-            if (
-                existing is None
-                or order.get(current['confidence'], 9) < order.get(existing.get('confidence'), 9)
-                or current['total_dr'] > safe_float(existing.get('total_dr', 0))
-            ):
-                by_name[key] = current
+            if existing is not None:
+                previous_total_dr = safe_float(existing.get('total_dr', 0))
+                merged_signals = list(existing.get('signals') or [])
+                for signal in current.get('signals') or []:
+                    if signal not in merged_signals:
+                        merged_signals.append(signal)
+                existing['signals'] = merged_signals
+                existing['total_cr'] = max(safe_float(existing.get('total_cr', 0)), current['total_cr'])
+                existing['total_dr'] = max(safe_float(existing.get('total_dr', 0)), current['total_dr'])
+                existing['debit_count'] = max(
+                    int(safe_float(existing.get('debit_count', 0))),
+                    int(safe_float(current.get('debit_count', 0))),
+                )
+                existing['credit_count'] = max(
+                    int(safe_float(existing.get('credit_count', 0))),
+                    int(safe_float(current.get('credit_count', 0))),
+                )
+                existing['debit_month_count'] = max(
+                    int(safe_float(existing.get('debit_month_count', 0))),
+                    int(safe_float(current.get('debit_month_count', 0))),
+                )
+                if (
+                    order.get(current['confidence'], 9) < order.get(existing.get('confidence'), 9)
+                    or current['total_dr'] > previous_total_dr
+                ):
+                    existing['confidence'] = current['confidence']
+                    existing['evidence'] = current['evidence']
+                    existing['score'] = current.get('score')
+                return
+
+            by_name[key] = current
 
         for candidate in r.get('related_party_candidates', []) or []:
             add_candidate(candidate)
@@ -1109,9 +1135,12 @@ def generate_interactive_html(data):
                 except Exception:
                     pass
 
+        priority_signals = {'monthly_recurrence', 'personal_keyword_sweep'}
         return sorted(
             by_name.values(),
             key=lambda item: (
+                0 if any(sig in (item.get('signals') or []) for sig in priority_signals) else 1,
+                -int(safe_float(item.get('debit_month_count', 0))),
                 order.get(str(item.get('confidence', '')).upper(), 9),
                 -safe_float(item.get('total_dr', 0)),
                 str(item.get('name', '')).casefold(),
@@ -6336,6 +6365,21 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
         if raw_counterparty:
             entry["counterparty_name_raw"] = raw_counterparty
             entry["raw_counterparty"] = raw_counterparty
+
+        for detail_key in (
+            "transaction_details",
+            "transaction_detail",
+            "details",
+            "detail",
+            "narration",
+            "memo",
+            "remarks",
+            "reference",
+            "particulars",
+        ):
+            detail_value = _clean_optional_text(tx.get(detail_key))
+            if detail_value:
+                entry[detail_key] = detail_value
         return entry
 
     extraction_stats = {
@@ -8199,6 +8243,8 @@ def detect_related_party_candidates(
                 "evidence": c.get("evidence", "Flagged by Track 2 engine"),
                 "total_cr": safe_float(c.get("total_cr", 0)),
                 "total_dr": safe_float(c.get("total_dr", 0)),
+                "signals": c.get("signals", []),
+                "debit_month_count": int(safe_float(c.get("debit_month_count", 0))),
                 "source": "track2",
             }
 
@@ -8223,16 +8269,25 @@ def detect_related_party_candidates(
                     "evidence": c.get("evidence", "Flagged by Track 2 engine"),
                     "total_cr": safe_float(c.get("total_cr", 0)),
                     "total_dr": safe_float(c.get("total_dr", 0)),
+                    "signals": c.get("signals", []),
+                    "debit_month_count": int(safe_float(c.get("debit_month_count", 0))),
                     "source": "track2",
                 }
         except Exception:
             pass
 
     order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    priority_signals = {"monthly_recurrence", "personal_keyword_sweep"}
     return sorted(
         candidates_by_name.values(),
-        key=lambda x: (order.get(x["confidence"], 3), -x["total_dr"]),
-    )[:30]
+        key=lambda x: (
+            0 if any(sig in (x.get("signals") or []) for sig in priority_signals) else 1,
+            -int(x.get("debit_month_count") or 0),
+            order.get(x["confidence"], 3),
+            -x["total_dr"],
+            str(x.get("name", "")).casefold(),
+        ),
+    )[:40]
 
 def render_related_party_manager(
     cp_ledger: dict = None,
