@@ -5411,6 +5411,9 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     header_fill_green = PatternFill(start_color="196F3D", end_color="196F3D", fill_type="solid")
     header_fill_red = PatternFill(start_color="922B21", end_color="922B21", fill_type="solid")
     header_fill_orange = PatternFill(start_color="B9770E", end_color="B9770E", fill_type="solid")
+    # Add these color definitions near the other header fills
+    header_fill_purple = PatternFill(start_color="6C3483", end_color="6C3483", fill_type="solid")
+    header_fill_blue = PatternFill(start_color="1A5276", end_color="1A5276", fill_type="solid")
     alt_row_fill = PatternFill(start_color="F2F3F4", end_color="F2F3F4", fill_type="solid")
     fail_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     credit_font = Font(name="Calibri", color="196F3D")
@@ -5672,57 +5675,282 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Cash Flow
     ws2 = wb.create_sheet("Cash Flow")
-    cash_headers = [
-        "Month", "Bank", "Account No", "Gross Credits", "Gross Debits", "Net Credits", "Net Debits",
-        "Credit Count", "Debit Count", "Own Party Cr", "Own Party Dr", "Related Party Cr", "Related Party Dr",
-        "Reversal Cr", "Loan Disbursement Cr", "FD Interest Cr", "Round Figure Cr", "High Value Cr",
-        "Cash Dep Count", "Cash Dep Amt", "Cash Wdl Count", "Cash Wdl Amt", "Chq Dep Count", "Chq Dep Amt",
-        "Chq Issue Count", "Chq Issue Amt", "Loan Repayment Dr", "Salary Paid", "EPF", "SOCSO", "Tax", "HRDF",
-        "Ret Chq In Count", "Ret Chq In Amt", "Ret Chq Out Count", "Ret Chq Out Amt",
-        "EOD Lowest", "EOD Highest", "EOD Average", "Opening Balance", "Closing Balance",
-    ]
-    if is_v620:
-        cash_headers += ["FX Cr Count", "FX Cr Amount", "FX Dr Count", "FX Dr Amount", "FX Currencies"]
-    if has_recon:
-        cash_headers += ["Recon Status", "Recon Delta", "Gaps", "Missing Debits", "Missing Credits", "Data Quality Note"]
-    write_headers(ws2, 1, cash_headers)
-    cash_num_cols = set(range(4, 42)) - {8, 9, 19, 21, 23, 25, 33, 35}
-    if is_v620:
-        cash_num_cols.update({43, 45})
-    for idx, item in enumerate(monthly_analysis, 2):
-        effective_recon = _effective_reconciliation_values(item, recon_lookup) if has_recon else None
+    ws2.cell(row=1, column=1, value="CASH FLOW STATEMENT").font = title_font
+    row = 3
+
+    # ============================================================
+    # SECTION 1: BASIC TRANSACTION SUMMARY
+    # ============================================================
+    ws2.cell(row=row, column=1, value="TRANSACTION SUMMARY").font = bold_font
+    row += 1
+
+    basic_headers = ["Month", "Bank", "Account No", "Opening Balance", "Closing Balance", 
+                    "Gross Credits", "Gross Debits", "Net Credits", "Net Debits", 
+                    "Credit Count", "Debit Count"]
+    write_headers(ws2, row, basic_headers, header_fill)
+    row += 1
+
+    # Set widths for basic summary columns
+    basic_widths = [14, 18, 20, 16, 16, 16, 16, 16, 16, 12, 12]
+    for idx, width in enumerate(basic_widths, 1):
+        ws2.column_dimensions[get_column_letter(idx)].width = width
+
+    # Write basic data
+    for idx, item in enumerate(monthly_analysis, row):
         values = [
-            item.get("month"), item.get("bank_name", ""), item.get("account_number", ""),
-            item.get("gross_credits"), item.get("gross_debits"), item.get("net_credits"), item.get("net_debits"),
-            item.get("credit_count"), item.get("debit_count"), item.get("own_party_cr"), item.get("own_party_dr"),
-            item.get("related_party_cr"), item.get("related_party_dr"), item.get("reversal_cr"),
-            item.get("loan_disbursement_cr"), item.get("fd_interest_cr"), item.get("round_figure_cr"),
-            item.get("high_value_cr"), item.get("cash_deposits_count"), item.get("cash_deposits_amount"),
-            item.get("cash_withdrawals_count"), item.get("cash_withdrawals_amount"), item.get("cheque_deposits_count"),
-            item.get("cheque_deposits_amount"), item.get("cheque_issues_count"), item.get("cheque_issues_amount"),
-            item.get("loan_repayment_dr"), item.get("salary_paid"), item.get("statutory_epf"), item.get("statutory_socso"),
-            item.get("statutory_tax"), item.get("statutory_hrdf"), item.get("returned_cheques_inward_count"),
-            item.get("returned_cheques_inward_amount"), item.get("returned_cheques_outward_count"),
-            item.get("returned_cheques_outward_amount"), item.get("eod_lowest"), item.get("eod_highest"),
-            item.get("eod_average"), item.get("opening_balance"), item.get("closing_balance"),
+            item.get("month"), 
+            item.get("bank_name", ""), 
+            item.get("account_number", ""),
+            item.get("opening_balance"), 
+            item.get("closing_balance"),
+            item.get("gross_credits"), 
+            item.get("gross_debits"), 
+            item.get("net_credits"), 
+            item.get("net_debits"),
+            item.get("credit_count"), 
+            item.get("debit_count")
         ]
-        if is_v620:
-            values += [
-                item.get("fx_credit_count", 0), item.get("fx_credit_amount", 0),
-                item.get("fx_debit_count", 0), item.get("fx_debit_amount", 0),
-                ", ".join(item.get("fx_currencies", []) or []),
+        write_values(ws2, idx, values, number_cols={4, 5, 6, 7, 8, 9}, 
+                    credit_cols={6, 8}, debit_cols={7, 9})
+        # Center align count columns
+        for col in [10, 11]:
+            ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    row = idx + 2
+
+    # ============================================================
+    # SECTION 2: EXCLUSIONS (What's removed from Gross)
+    # ============================================================
+    ws2.cell(row=row, column=1, value="EXCLUSIONS FROM NET FIGURES").font = bold_font
+    row += 1
+
+    exclusion_headers = ["Month", "Own Party Cr", "Own Party Dr", "Related Party Cr", "Related Party Dr", 
+                        "Reversal Cr", "Loan Disbursement Cr", "FD Interest Cr"]
+    write_headers(ws2, row, exclusion_headers, header_fill_orange)
+    row += 1
+
+    # Set widths for exclusion columns
+    excl_widths = [14, 16, 16, 16, 16, 16, 16, 16]
+    for idx, width in enumerate(excl_widths, 1):
+        ws2.column_dimensions[get_column_letter(idx)].width = width
+
+    # Write exclusion data
+    for idx, item in enumerate(monthly_analysis, row):
+        values = [
+            item.get("month"),
+            item.get("own_party_cr"), 
+            item.get("own_party_dr"),
+            item.get("related_party_cr"), 
+            item.get("related_party_dr"),
+            item.get("reversal_cr"),
+            item.get("loan_disbursement_cr"), 
+            item.get("fd_interest_cr")
+        ]
+        write_values(ws2, idx, values, number_cols={2, 3, 4, 5, 6, 7, 8}, 
+                    credit_cols={2, 4, 6, 7, 8}, debit_cols={3, 5})
+
+    row = idx + 2
+
+    # ============================================================
+    # SECTION 3: CASH & CHEQUE ACTIVITY
+    # ============================================================
+    ws2.cell(row=row, column=1, value="CASH & CHEQUE ACTIVITY").font = bold_font
+    row += 1
+
+    cash_headers = ["Month", "Cash Dep Count", "Cash Dep Amt", "Cash Wdl Count", "Cash Wdl Amt",
+                    "Chq Dep Count", "Chq Dep Amt", "Chq Issue Count", "Chq Issue Amt"]
+    write_headers(ws2, row, cash_headers, header_fill_green)
+    row += 1
+
+    # Set widths for cash/cheque columns
+    cash_widths = [14, 14, 16, 14, 16, 14, 16, 14, 16]
+    for idx, width in enumerate(cash_widths, 1):
+        ws2.column_dimensions[get_column_letter(idx)].width = width
+
+    # Write cash/cheque data
+    for idx, item in enumerate(monthly_analysis, row):
+        values = [
+            item.get("month"),
+            item.get("cash_deposits_count"), 
+            item.get("cash_deposits_amount"),
+            item.get("cash_withdrawals_count"), 
+            item.get("cash_withdrawals_amount"),
+            item.get("cheque_deposits_count"), 
+            item.get("cheque_deposits_amount"),
+            item.get("cheque_issues_count"), 
+            item.get("cheque_issues_amount")
+        ]
+        write_values(ws2, idx, values, number_cols={2, 3, 4, 5, 6, 7, 8, 9}, 
+                    credit_cols={3, 5, 7}, debit_cols={9})
+        # Center align count columns
+        for col in [2, 4, 6, 8]:
+            ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    row = idx + 2
+
+    # ============================================================
+    # SECTION 4: STATUTORY PAYMENTS
+    # ============================================================
+    ws2.cell(row=row, column=1, value="STATUTORY PAYMENTS").font = bold_font
+    row += 1
+
+    statutory_headers = ["Month", "Salary Paid", "EPF", "SOCSO", "Tax", "HRDF", 
+                        "Loan Repayment Dr", "High Value Cr", "Round Figure Cr"]
+    write_headers(ws2, row, statutory_headers, header_fill_purple)  # You may need to define this color
+    row += 1
+
+    # Set widths for statutory columns
+    stat_widths = [14, 16, 16, 16, 16, 16, 16, 16, 16]
+    for idx, width in enumerate(stat_widths, 1):
+        ws2.column_dimensions[get_column_letter(idx)].width = width
+
+    # Write statutory data
+    for idx, item in enumerate(monthly_analysis, row):
+        values = [
+            item.get("month"),
+            item.get("salary_paid"), 
+            item.get("statutory_epf"), 
+            item.get("statutory_socso"),
+            item.get("statutory_tax"), 
+            item.get("statutory_hrdf"),
+            item.get("loan_repayment_dr"), 
+            item.get("high_value_cr"),
+            item.get("round_figure_cr")
+        ]
+        write_values(ws2, idx, values, number_cols={2, 3, 4, 5, 6, 7, 8, 9}, 
+                    credit_cols={6, 8, 9}, debit_cols={3, 4, 5, 7})
+
+    row = idx + 2
+
+    # ============================================================
+    # SECTION 5: RETURNED CHEQUES
+    # ============================================================
+    if any(item.get("returned_cheques_inward_count") or item.get("returned_cheques_outward_count") 
+        for item in monthly_analysis):
+        ws2.cell(row=row, column=1, value="RETURNED CHEQUES").font = bold_font
+        row += 1
+        
+        return_headers = ["Month", "Ret Chq In Count", "Ret Chq In Amt", "Ret Chq Out Count", "Ret Chq Out Amt"]
+        write_headers(ws2, row, return_headers, header_fill_red)
+        row += 1
+        
+        # Set widths for returned cheques columns
+        ret_widths = [14, 16, 16, 16, 16]
+        for idx, width in enumerate(ret_widths, 1):
+            ws2.column_dimensions[get_column_letter(idx)].width = width
+        
+        for idx, item in enumerate(monthly_analysis, row):
+            values = [
+                item.get("month"),
+                item.get("returned_cheques_inward_count"), 
+                item.get("returned_cheques_inward_amount"),
+                item.get("returned_cheques_outward_count"), 
+                item.get("returned_cheques_outward_amount")
             ]
-        if has_recon:
-            values += [
-                effective_recon["status"], effective_recon["delta"],
-                effective_recon["gaps"], effective_recon["missing_debits"],
-                effective_recon["missing_credits"], effective_recon["note"],
+            write_values(ws2, idx, values, number_cols={2, 3, 4, 5}, debit_cols={3, 5})
+            for col in [2, 4]:
+                ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        row = idx + 2
+
+    # ============================================================
+    # SECTION 6: EOD BALANCE ANALYSIS
+    # ============================================================
+    ws2.cell(row=row, column=1, value="EOD BALANCE ANALYSIS").font = bold_font
+    row += 1
+
+    eod_headers = ["Month", "EOD Lowest", "EOD Highest", "EOD Average"]
+    write_headers(ws2, row, eod_headers, header_fill_blue)  # You may need to define this color
+    row += 1
+
+    # Set widths for EOD columns
+    eod_widths = [14, 16, 16, 16]
+    for idx, width in enumerate(eod_widths, 1):
+        ws2.column_dimensions[get_column_letter(idx)].width = width
+
+    for idx, item in enumerate(monthly_analysis, row):
+        values = [
+            item.get("month"),
+            item.get("eod_lowest"), 
+            item.get("eod_highest"),
+            item.get("eod_average")
+        ]
+        write_values(ws2, idx, values, number_cols={2, 3, 4})
+
+    row = idx + 2
+
+    # ============================================================
+    # SECTION 7: FX / REMITTANCE (if available)
+    # ============================================================
+    if is_v620:
+        ws2.cell(row=row, column=1, value="FX / REMITTANCE").font = bold_font
+        row += 1
+        
+        fx_headers = ["Month", "FX Cr Count", "FX Cr Amount", "FX Dr Count", "FX Dr Amount", "FX Currencies"]
+        write_headers(ws2, row, fx_headers, header_fill_purple)
+        row += 1
+        
+        # Set widths for FX columns
+        fx_widths = [14, 14, 16, 14, 16, 30]
+        for idx, width in enumerate(fx_widths, 1):
+            ws2.column_dimensions[get_column_letter(idx)].width = width
+        
+        for idx, item in enumerate(monthly_analysis, row):
+            values = [
+                item.get("month"),
+                item.get("fx_credit_count", 0), 
+                item.get("fx_credit_amount", 0),
+                item.get("fx_debit_count", 0), 
+                item.get("fx_debit_amount", 0),
+                ", ".join(item.get("fx_currencies", []) or [])
             ]
-        write_values(ws2, idx, values, number_cols=cash_num_cols)
-        if effective_recon and effective_recon["status"] == "FAIL":
-            for col in range(1, len(values) + 1):
-                ws2.cell(row=idx, column=col).fill = fail_fill
-    auto_width(ws2, min_width=12)
+            write_values(ws2, idx, values, number_cols={2, 3, 4, 5}, 
+                        credit_cols={3}, debit_cols={5})
+            for col in [2, 4]:
+                ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            ws2.cell(row=idx, column=6).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        
+        row = idx + 2
+
+    # ============================================================
+    # SECTION 8: RECONCILIATION STATUS (if available)
+    # ============================================================
+    if has_recon:
+        ws2.cell(row=row, column=1, value="RECONCILIATION STATUS").font = bold_font
+        row += 1
+        
+        recon_headers = ["Month", "Recon Status", "Recon Delta", "Gaps", "Missing Debits", "Missing Credits"]
+        write_headers(ws2, row, recon_headers, header_fill_orange)
+        row += 1
+        
+        # Set widths for reconciliation columns
+        recon_widths = [14, 14, 16, 12, 16, 16]
+        for idx, width in enumerate(recon_widths, 1):
+            ws2.column_dimensions[get_column_letter(idx)].width = width
+        
+        for idx, item in enumerate(monthly_analysis, row):
+            effective_recon = _effective_reconciliation_values(item, recon_lookup) if has_recon else None
+            values = [
+                item.get("month"),
+                effective_recon["status"] if effective_recon else "",
+                effective_recon["delta"] if effective_recon else 0,
+                effective_recon["gaps"] if effective_recon else 0,
+                effective_recon["missing_debits"] if effective_recon else 0,
+                effective_recon["missing_credits"] if effective_recon else 0
+            ]
+            write_values(ws2, idx, values, number_cols={3, 4, 5, 6})
+            ws2.cell(row=idx, column=2).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            if effective_recon and effective_recon["status"] == "FAIL":
+                for col in range(1, len(values) + 1):
+                    ws2.cell(row=idx, column=col).fill = fail_fill
+        
+        row = idx + 2
+
+    # Freeze the first column (Month) and first two rows
+    ws2.freeze_panes = "B3"
+
+    # Remove auto_width to maintain manual column widths
+    # auto_width(ws2, min_width=12)
 
     # Top Parties
     ws3 = wb.create_sheet("Top Parties")
