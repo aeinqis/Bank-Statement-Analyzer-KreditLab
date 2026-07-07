@@ -5680,6 +5680,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Counterparty - MODIFIED: Combined with Related Parties content
     ws5 = wb.create_sheet("Counterparty")
     ws5.cell(row=1, column=1, value="COUNTERPARTY TRANSACTIONS").font = title_font
+    ws5.cell(row=row_idx, column=1).number_format = "0"
 
     # --- START: Related Parties content inserted here ---
     row = 3
@@ -5690,7 +5691,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Note: We're using columns A-F (6 columns)
     rp_headers = ["No.", "Relationship", "Name", "Total Credits", "Total Debits", "Transactions"]
     write_headers(ws5, row, rp_headers, header_fill_orange)
-    ws5.cell(row=row_idx, column=1).number_format = "0"
+
 
     # Set custom column widths for Related Parties section (narrower)
     ws5.column_dimensions["A"].width = 6   # No.
@@ -5707,14 +5708,14 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     if related_parties:
         for rp_idx, rp in enumerate(related_parties):
             row = rp_row_start + rp_idx
-            name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
             relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
+            name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
             match = cp_by_name.get(name.strip().upper(), {})
             # Now 6 values instead of 5 (added No. at beginning)
             values = [
                 rp_idx + 1,  # No. column
-                name, 
-                relationship, 
+                relationship,
+                name,
                 match.get("total_credits"), 
                 match.get("total_debits"), 
                 match.get("transaction_count")
