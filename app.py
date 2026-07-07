@@ -4174,6 +4174,71 @@ def _sync_data_quality_status(data: dict) -> dict:
     return data
 
 
+def _build_reconciliation_lookup(parsing_metadata: dict) -> dict:
+    checks = (
+        parsing_metadata.get("account_month_checks", [])
+        if isinstance(parsing_metadata, dict)
+        else []
+    )
+    lookup = {}
+    if not isinstance(checks, list):
+        return lookup
+
+    for chk in checks:
+        if not isinstance(chk, dict):
+            continue
+        month_key = str(chk.get("month", "") or "")
+        account_keys = {
+            str(chk.get("account_number", "") or ""),
+            str(chk.get("account_no", "") or ""),
+        }
+        for account_key in account_keys:
+            lookup[(month_key, account_key)] = chk
+        if month_key and not any(account_keys):
+            lookup[(month_key, "")] = chk
+    return lookup
+
+
+def _reconciliation_check_for_month_row(row: dict, lookup: dict) -> dict | None:
+    if not isinstance(row, dict) or not isinstance(lookup, dict):
+        return None
+    month_key = str(row.get("month", "") or "")
+    account_key = str(row.get("account_number", row.get("account_no", "")) or "")
+    return lookup.get((month_key, account_key)) or lookup.get((month_key, ""))
+
+
+def _effective_reconciliation_values(row: dict, lookup: dict | None = None) -> dict:
+    chk = _reconciliation_check_for_month_row(row, lookup or {})
+    source = chk if chk is not None else (row if isinstance(row, dict) else {})
+
+    if "passed" in source:
+        passed = bool(source.get("passed"))
+    else:
+        status_text = str(source.get("reconciliation_status") or "").upper()
+        if status_text:
+            passed = status_text == "PASS"
+        else:
+            passed = abs(safe_float(source.get("reconciliation_delta", 0))) <= 1.00
+
+    status = "PASS" if passed else "FAIL"
+    note = "" if passed else str(
+        source.get("data_quality_note")
+        or source.get("note")
+        or source.get("remarks")
+        or (row.get("data_quality_note") if isinstance(row, dict) else "")
+        or ""
+    )
+
+    return {
+        "status": status,
+        "delta": safe_float(source.get("reconciliation_delta", 0)),
+        "gaps": int(safe_float(source.get("extraction_gaps", source.get("extraction_gaps_count", 0)))),
+        "missing_debits": safe_float(source.get("missing_debit_amount", 0)),
+        "missing_credits": safe_float(source.get("missing_credit_amount", 0)),
+        "note": note,
+    }
+
+
 def _sync_transaction_pattern_flags(
     data: dict,
     *,
@@ -5455,7 +5520,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     schema_version = str(report_info.get("schema_version", ""))
     is_v620 = schema_version in ("6.2.0", "6.2.1", "6.2.2", "6.3.0", "6.3.1", "6.3.2", "6.3.3", "6.3.4", "6.3.5") or consolidated.get("total_fx_credits") is not None
     is_v630 = schema_version in ("6.3.0", "6.3.1", "6.3.2", "6.3.3", "6.3.4", "6.3.5") or consolidated.get("total_unclassified_cr") is not None
-    has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(parsing.get("account_month_checks"))
+    recon_lookup = _build_reconciliation_lookup(parsing)
+    has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(recon_lookup)
 
     # Build cp_sorted HERE so it's available for both Counterparty and CP Ledger sheets
     cp_sorted = build_canonical_counterparty_ledger_rows(cp_ledger)
@@ -5581,6 +5647,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     if is_v620:
         cash_num_cols.update({43, 45})
     for idx, item in enumerate(monthly_analysis, 2):
+        effective_recon = _effective_reconciliation_values(item, recon_lookup) if has_recon else None
         values = [
             item.get("month"), item.get("bank_name", ""), item.get("account_number", ""),
             item.get("gross_credits"), item.get("gross_debits"), item.get("net_credits"), item.get("net_debits"),
@@ -5604,12 +5671,12 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             ]
         if has_recon:
             values += [
-                item.get("reconciliation_status", ""), item.get("reconciliation_delta", 0),
-                item.get("extraction_gaps", 0), item.get("missing_debit_amount", 0),
-                item.get("missing_credit_amount", 0), item.get("data_quality_note", "") or "",
+                effective_recon["status"], effective_recon["delta"],
+                effective_recon["gaps"], effective_recon["missing_debits"],
+                effective_recon["missing_credits"], effective_recon["note"],
             ]
         write_values(ws2, idx, values, number_cols=cash_num_cols)
-        if item.get("reconciliation_status") == "FAIL":
+        if effective_recon and effective_recon["status"] == "FAIL":
             for col in range(1, len(values) + 1):
                 ws2.cell(row=idx, column=col).fill = fail_fill
     auto_width(ws2, min_width=12)
@@ -5779,30 +5846,127 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # auto_width(ws5, min_width=8, max_width=40)  # Uncomment if you want auto-adjustment with limits
 
     # CP Ledger
+    # CP Ledger Sheet (Summary only)
     ws5b = wb.create_sheet("CP Ledger")
     ws5b.cell(row=1, column=1, value="COUNTERPARTY LEDGER").font = title_font
-    ledger_headers = ["Counterparty", "Total Credits", "Total Debits", "Net Position", "Cr Count", "Dr Count", "Txn Count"]
+
+    # Updated headers with No. column at the beginning
+    ledger_headers = ["No.", "Counterparty", "Total Credits", "Total Debits", "Net Position", "Cr Count", "Dr Count", "Txn Count"]
     row = 3
     write_headers(ws5b, row, ledger_headers)
-    for cp in cp_sorted:
+
+    # Set column widths for CP Ledger
+    ws5b.column_dimensions["A"].width = 6   # No.
+    ws5b.column_dimensions["B"].width = 40  # Counterparty
+    ws5b.column_dimensions["C"].width = 18  # Total Credits
+    ws5b.column_dimensions["D"].width = 18  # Total Debits
+    ws5b.column_dimensions["E"].width = 18  # Net Position
+    ws5b.column_dimensions["F"].width = 12  # Cr Count
+    ws5b.column_dimensions["G"].width = 12  # Dr Count
+    ws5b.column_dimensions["H"].width = 12  # Txn Count
+
+    # Write data rows
+    for idx, cp in enumerate(cp_sorted, 1):
         row += 1
-        values = [cp.get("counterparty_name", ""), cp.get("total_credits", 0), cp.get("total_debits", 0), cp.get("net_position", 0), cp.get("credit_count", 0), cp.get("debit_count", 0), cp.get("transaction_count", 0)]
-        write_values(ws5b, row, values, number_cols={2, 3, 4}, credit_cols={2}, debit_cols={3})
-    row += 2
-    ws5b.cell(row=row, column=1, value="TRANSACTION DETAIL BY COUNTERPARTY").font = title_font
-    for cp in cp_sorted:
-        row += 1
-        ws5b.cell(row=row, column=1, value=cp.get("counterparty_name", "")).font = Font(name="Calibri", bold=True, color="1B4F72", size=11)
-        row += 1
-        detail_headers = ["Date", "Description", "Amount", "Type", "Account"]
-        write_headers(ws5b, row, detail_headers, header_fill_orange)
-        for txn in cp.get("transactions", []) or []:
-            row += 1
-            txn_type = (txn.get("type") or "").upper()
-            values = [txn.get("date", ""), (txn.get("description", "") or "")[:70], txn.get("amount", 0), txn.get("type", ""), txn.get("account_number", "")]
-            write_values(ws5b, row, values, number_cols={3}, credit_cols={3} if txn_type == "CREDIT" else set(), debit_cols={3} if txn_type != "CREDIT" else set())
+        values = [
+            idx,  # No. - integer
+            cp.get("counterparty_name", ""), 
+            cp.get("total_credits", 0), 
+            cp.get("total_debits", 0), 
+            cp.get("net_position", 0), 
+            cp.get("credit_count", 0), 
+            cp.get("debit_count", 0), 
+            cp.get("transaction_count", 0)
+        ]
+        write_values(ws5b, row, values, number_cols={3, 4, 5, 6, 7, 8}, credit_cols={3}, debit_cols={4})
+        
+        # Format No. column as integer (not float)
+        ws5b.cell(row=row, column=1).number_format = "0"
+        
+        # Center align ALL columns for the data row
+        for col in range(1, 9):  # Columns A-H
+            ws5b.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Special: Make Counterparty column (column B) left-aligned for readability
+        ws5b.cell(row=row, column=2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        
+        # Format count columns (F, G, H) as integers (no decimals)
+        for count_col in [6, 7, 8]:  # Cr Count, Dr Count, Txn Count
+            ws5b.cell(row=row, column=count_col).number_format = "0"
+
     auto_width(ws5b)
 
+    # ============================================================
+    # CP Transaction Sheet (Detail by Counterparty)
+    # ============================================================
+    ws5c = wb.create_sheet("CP Transaction")
+    ws5c.cell(row=1, column=1, value="COUNTERPARTY TRANSACTION DETAIL").font = title_font
+
+    # Set column widths for transaction detail
+    ws5c.column_dimensions["A"].width = 6   # No.
+    ws5c.column_dimensions["B"].width = 14  # Date
+    ws5c.column_dimensions["C"].width = 60  # Description - wider
+    ws5c.column_dimensions["D"].width = 18  # Amount
+    ws5c.column_dimensions["E"].width = 14  # Type
+    ws5c.column_dimensions["F"].width = 20  # Account
+
+    row = 3  # Start after title
+
+    # Transaction detail for each counterparty
+    for cp_idx, cp in enumerate(cp_sorted):
+        counterparty_name = cp.get("counterparty_name", "")
+        transactions = cp.get("transactions", []) or []
+        
+        # Write counterparty name as section header
+        ws5c.cell(row=row, column=1, value=counterparty_name).font = Font(name="Calibri", bold=True, color="1B4F72", size=12)
+        row += 1
+        
+        # Write transaction headers
+        detail_headers = ["No.", "Date", "Description", "Amount", "Type", "Account"]
+        write_headers(ws5c, row, detail_headers, header_fill_orange)
+        row += 1
+        
+        # Write transaction rows
+        if transactions:
+            for txn_idx, txn in enumerate(transactions, 1):
+                txn_type = (txn.get("type") or "").upper()
+                values = [
+                    txn_idx,  # No. - integer
+                    txn.get("date", ""), 
+                    (txn.get("description", "") or "")[:100],  # Allow more text
+                    txn.get("amount", 0), 
+                    txn.get("type", ""), 
+                    txn.get("account_number", "")
+                ]
+                write_values(ws5c, row, values, number_cols={4}, 
+                            credit_cols={4} if txn_type == "CREDIT" else set(), 
+                            debit_cols={4} if txn_type != "CREDIT" else set())
+                
+                # Format No. column as integer
+                ws5c.cell(row=row, column=1).number_format = "0"
+                
+                # Column alignments:
+                # - No., Date, Amount, Type, Account: Center aligned
+                # - Description: Left aligned
+                for col in range(1, 7):  # Columns A-F
+                    if col == 3:  # Description column - Left aligned
+                        ws5c.cell(row=row, column=col).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                    else:  # All other columns - Center aligned
+                        ws5c.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                
+                row += 1
+        else:
+            # No transactions for this counterparty
+            ws5c.cell(row=row, column=1, value="No transactions")
+            style_data_cell(ws5c, row, 1)
+            ws5c.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            row += 1
+        
+        # Add 1 row spacer after each counterparty (except the last one)
+        if cp_idx < len(cp_sorted) - 1:
+            row += 1
+
+    auto_width(ws5c)
     # NOTE: Related Parties sheet (ws5c) has been REMOVED as content is now in Counterparty sheet
 
     # Unclassified
