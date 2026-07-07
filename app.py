@@ -5680,50 +5680,95 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Counterparty - MODIFIED: Combined with Related Parties content
     ws5 = wb.create_sheet("Counterparty")
     ws5.cell(row=1, column=1, value="COUNTERPARTY TRANSACTIONS").font = title_font
-    
+
     # --- START: Related Parties content inserted here ---
     row = 3
     ws5.cell(row=row, column=1, value="RELATED PARTIES").font = bold_font
     row += 1
-    rp_headers = ["Name", "Relationship", "Total Credits", "Total Debits", "Transactions"]
+
+    # Related Parties headers - ONLY columns A-E (No., Name, Relationship, Total Credits, Total Debits, Transactions)
+    # Note: We're using columns A-F (6 columns)
+    rp_headers = ["No.", "Name", "Relationship", "Total Credits", "Total Debits", "Transactions"]
     write_headers(ws5, row, rp_headers, header_fill_orange)
-    
+
+    # Set custom column widths for Related Parties section (narrower)
+    ws5.column_dimensions["A"].width = 6   # No.
+    ws5.column_dimensions["B"].width = 25  # Name - smaller than counterparty summary
+    ws5.column_dimensions["C"].width = 20  # Relationship
+    ws5.column_dimensions["D"].width = 16  # Total Credits
+    ws5.column_dimensions["E"].width = 16  # Total Debits
+    ws5.column_dimensions["F"].width = 14  # Transactions
+
     cp_by_name = {str(cp.get("counterparty_name", "")).strip().upper(): cp for cp in cp_sorted if cp.get("counterparty_name")}
     rp_row_start = row + 1
     related_parties = report_info.get("related_parties", []) or []
+
     if related_parties:
         for rp_idx, rp in enumerate(related_parties):
             row = rp_row_start + rp_idx
             name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
             relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
             match = cp_by_name.get(name.strip().upper(), {})
-            values = [name, relationship, match.get("total_credits"), match.get("total_debits"), match.get("transaction_count")]
-            write_values(ws5, row, values, number_cols={3, 4}, credit_cols={3}, debit_cols={4})
+            # Now 6 values instead of 5 (added No. at beginning)
+            values = [
+                rp_idx + 1,  # No. column
+                name, 
+                relationship, 
+                match.get("total_credits"), 
+                match.get("total_debits"), 
+                match.get("transaction_count")
+            ]
+            write_values(ws5, row, values, number_cols={4, 5}, credit_cols={4}, debit_cols={5})
+            # Center align the No. column
+            ws5.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         row = rp_row_start + len(related_parties)
     else:
         row = rp_row_start
         ws5.cell(row=row, column=1, value="No related parties defined.")
         style_data_cell(ws5, row, 1)
         row += 1
-    
+
     row += 2
     # --- END: Related Parties content ---
-    
+
+    # COUNTERPARTY SUMMARY with its own column widths
     ws5.cell(row=row, column=1, value="COUNTERPARTY SUMMARY").font = bold_font
     row += 1
+
+    # Counterparty Summary headers - columns A-F (No., Date, Description, Amount, Party Type, Party Name)
     counterparty_headers = ["No.", "Date", "Description", "Amount", "Party Type", "Party Name"]
     write_headers(ws5, row, counterparty_headers, header_fill_orange)
+
+    # Set custom column widths for Counterparty Summary section (wider)
+    ws5.column_dimensions["A"].width = 6   # No.
+    ws5.column_dimensions["B"].width = 14  # Date
+    ws5.column_dimensions["C"].width = 55  # Description - WIDER for counterparty summary
+    ws5.column_dimensions["D"].width = 18  # Amount
+    ws5.column_dimensions["E"].width = 18  # Party Type
+    ws5.column_dimensions["F"].width = 40  # Party Name - WIDER for counterparty summary
+
     for idx, txn in enumerate(own_related.get("transactions", []) or [], 1):
         row += 1
         txn_type = (txn.get("type") or "").upper()
-        values = [idx, txn.get("date"), (txn.get("description", "") or "")[:60], txn.get("amount"), txn.get("party_type"), txn.get("party_name", "")]
+        values = [
+            idx,  # No.
+            txn.get("date"), 
+            (txn.get("description", "") or "")[:60], 
+            txn.get("amount"), 
+            txn.get("party_type"), 
+            txn.get("party_name", "")
+        ]
         write_values(ws5, row, values, number_cols={4},
-                     credit_cols={4} if txn_type == "CREDIT" else set(),
-                     debit_cols={4} if txn_type != "CREDIT" else set())
+                    credit_cols={4} if txn_type == "CREDIT" else set(),
+                    debit_cols={4} if txn_type != "CREDIT" else set())
         ws5.cell(row=row, column=1).number_format = "0"
         for centre_col in (1, 2, 4, 5):
             ws5.cell(row=row, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    auto_width(ws5)
+
+    # Optional: You can also auto-adjust just the Description column for the summary section
+    # But since we already set explicit widths, auto_width might override them
+    # If you want to keep the manual widths, don't call auto_width(ws5) or call it with min/max limits
+    # auto_width(ws5, min_width=8, max_width=40)  # Uncomment if you want auto-adjustment with limits
 
     # CP Ledger
     ws5b = wb.create_sheet("CP Ledger")
