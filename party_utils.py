@@ -1384,13 +1384,38 @@ def _cp_marker_rank(marker: str) -> int:
     }.get(marker, 4)
 
 
+def _cp_legal_entity_candidate(tokens: List[str]) -> str:
+    if not tokens:
+        return ""
+
+    if "SDN" in tokens:
+        sdn_index = tokens.index("SDN")
+        if sdn_index > 0:
+            return " ".join(tokens[: sdn_index + 1] + ["BHD"])
+
+    for marker in ("BHD", "BERHAD", "PLT", "LLP"):
+        if marker in tokens:
+            marker_index = tokens.index(marker)
+            if marker_index > 0:
+                candidate_tokens = tokens[: marker_index + 1]
+                if marker == "BERHAD":
+                    candidate_tokens = candidate_tokens[:-1] + ["BHD"]
+                return " ".join(candidate_tokens)
+
+    return ""
+
+
 def _cp_choose_person_canonical(names: List[str], groups: Dict[str, dict]) -> str:
+    legal_candidates: List[str] = []
     marker_candidates: List[Tuple[str, List[str], str]] = []
     plain_candidates: List[List[str]] = []
     for name in names:
         if name not in groups:
             continue
         for tokens in _cp_group_token_variants(name, groups[name]):
+            legal_candidate = _cp_legal_entity_candidate(tokens)
+            if legal_candidate:
+                legal_candidates.append(legal_candidate)
             marker_split = _cp_person_marker_split(tokens)
             if marker_split:
                 before, marker, after = marker_split
@@ -1398,6 +1423,12 @@ def _cp_choose_person_canonical(names: List[str], groups: Dict[str, dict]) -> st
             plain = _cp_plain_person_tokens(tokens)
             if plain:
                 plain_candidates.append(plain)
+
+    if legal_candidates:
+        return sorted(
+            set(legal_candidates),
+            key=lambda value: (len(value.split()), len(value), value),
+        )[0]
 
     unique_plain = {tuple(tokens): tokens for tokens in plain_candidates}
     plain_keys = set(unique_plain)

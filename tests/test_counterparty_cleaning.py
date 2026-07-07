@@ -55,6 +55,7 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(clean_counterparty_name("ALPHA SDN BH"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BHD"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA BERHAD"), "ALPHA BHD")
+        self.assertEqual(clean_counterparty_name("MUHAFIZ PRIMA SDN. B"), "MUHAFIZ PRIMA SDN BHD")
 
     def test_truncates_company_name_after_sd_or_sdn_marker(self):
         self.assertEqual(clean_counterparty_name("ALPHA SD TOKEN PAYMENT"), "ALPHA SDN BHD")
@@ -269,6 +270,29 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(set(merged.keys()), {"MUHAFIZ TECHNOLOGY SDN BHD"})
         row = merged["MUHAFIZ TECHNOLOGY SDN BHD"]
         self.assertEqual(row["total_debits"], 1130000.0)
+        self.assertEqual(row["transaction_count"], 3)
+
+    def test_short_name_merges_into_sdn_bhd_canonical(self):
+        groups = {
+            "MUHAFIZ PRIMA SDN BHD": {
+                "counterparty_name": "MUHAFIZ PRIMA SDN BHD",
+                "total_credits": 39600.0,
+                "total_debits": 0.0,
+                "transaction_count": 2,
+            },
+            "MUHAFIZ PRIMA": {
+                "counterparty_name": "MUHAFIZ PRIMA",
+                "total_credits": 0.0,
+                "total_debits": 900000.0,
+                "transaction_count": 1,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"MUHAFIZ PRIMA SDN BHD"})
+        row = merged["MUHAFIZ PRIMA SDN BHD"]
+        self.assertEqual(row["total_credits"], 39600.0)
+        self.assertEqual(row["total_debits"], 900000.0)
         self.assertEqual(row["transaction_count"], 3)
 
     def test_human_names_with_bin_variants_merge_when_tail_is_similar(self):

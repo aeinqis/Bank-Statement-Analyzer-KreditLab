@@ -1042,6 +1042,23 @@ def generate_interactive_html(data):
             return ''
         return max(matches, key=lambda value: (len(value), value.casefold()))
 
+    _own_party_display_fallbacks = {
+        'UNKNOWN', 'UNKNOWN PARTY', 'COMPANY', 'OWN PARTY', 'OWN PARTY (SELF)', 'SELF'
+    }
+
+    def _own_party_display_name(raw_party_name):
+        for value in (company_name, raw_party_name):
+            name = re.sub(
+                r'\s*\(\s*OWN[\s\-_]?PARTY\s*\)\s*',
+                ' ',
+                str(value or ''),
+                flags=re.I,
+            )
+            name = re.sub(r'\s+', ' ', name).strip()
+            if name and name.upper() not in _own_party_display_fallbacks:
+                return name
+        return 'Own Party (Self)'
+
     # ── Related-party candidates (advisory only; analyst confirms) ──
     # MEDIUM/LOW RP3 near-misses that did NOT auto-confirm and exclude nothing.
     # Surfaced so the analyst sees them instead of hunting the full ledger.
@@ -1577,8 +1594,7 @@ def generate_interactive_html(data):
         # Determine badge type: OWN or RELATED
         if party_type_upper.startswith('OWN'):
             badge_type = 'OP'
-            # For OWN party, use a consistent name
-            party_name = 'Own Party (Self)'
+            party_name = _own_party_display_name(raw_party_name)
         else:
             badge_type = 'RP'
             party_name = _matched_related_party_name(raw_party_name, t.get('description')) or raw_party_name
