@@ -5772,7 +5772,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Round Figure Transactions - Updated with proper formatting
     round_rows = get_round_transactions_for_report(report_data)
-    ws_round = wb.create_sheet("Round Figure Transactions")
+    ws_round = wb.create_sheet("Round Figure")
     write_split_transaction_sheet(
         ws_round,
         "ROUND FIGURE TRANSACTIONS",
@@ -5861,6 +5861,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Risk Signals
     ws7 = wb.create_sheet("Risk Signals")
+    ws7.cell(row=1, column=1, value="RISK SIGNALS").font = title_font
     risk_headers = ["No.", "Signal", "Detected", "Remarks"]
     write_headers(ws7, 1, risk_headers)
     risk_df = build_risk_signals_dataframe_for_excel(flags, consolidated, statutory_compliance, monthly_analysis, report_data)
