@@ -8252,6 +8252,8 @@ def build_track2_result(
                 "name": c["name"],
                 "confidence": c["confidence"],
                 "score": c.get("score"),
+                "signals": c.get("signals", []),
+                "method": c.get("method"),
                 "evidence": c.get("evidence", ""),
                 "total_dr": c.get("total_dr", 0.0),
                 "total_cr": c.get("total_cr", 0.0),

@@ -3,6 +3,7 @@ import unittest
 from kredit_lab_classify_track2 import (
     _is_excluded_related_party_name,
     advisory_rp_candidates,
+    build_track2_result,
     dedup_counterparty_entries,
     scan_related_party_candidates,
 )
@@ -227,6 +228,47 @@ class RelatedPartyCandidateTests(unittest.TestCase):
             advisory_rp_candidates(candidates, effective_related_parties=[])[0]["name"],
             "MARIANA AHMAT",
         )
+
+    def test_track2_report_info_preserves_mariana_candidate_signals(self):
+        mariana = {
+            "counterparty_name": "MARIANA AHMAT",
+            "transaction_count": 9,
+            "credit_count": 0,
+            "debit_count": 9,
+            "total_credits": 0.0,
+            "total_debits": 8760.0,
+            "transactions": [
+                _debit("2025-09-24", "TR TO SAVINGS MARIANA BINTI AHMAT Petty Cash PO Rahman", 200.0),
+                _debit("2025-09-25", "TR TO SAVINGS ACC NO 210316929501 MARIANA BINTI AHMAT SESCO ELECTRICITY", 960.0),
+                _debit("2025-11-03", "TR TO SAVINGS STAFF OUTSTATION TO MARIANA BINTI AHMAT PETTY CASH", 500.0),
+                _debit("2025-11-13", "TR TO SAVINGS MARIANA BINTI AHMAT PETTY CASH", 400.0),
+                _debit("2025-11-20", "TR TO SAVINGS MARIANA BINTI AHMAT Travel Agent Golf", 5400.0),
+                _debit("2025-12-02", "TR TO SAVINGS MARIANA BINTI AHMAT PETTY CASH", 200.0),
+                _debit("2025-12-19", "TR TO SAVINGS MARIANA BINTI AHMAT STAFF BONUS", 500.0),
+                _debit("2026-01-28", "TR TO SAVINGS MARIANA BINTI AHMAT PETTY CASH", 300.0),
+                _debit("2026-02-24", "TR TO SAVINGS MARIANA BINTI AHMAT PETTY CASH", 300.0),
+            ],
+        }
+        gross_dr_anchor = {
+            "counterparty_name": "BETA TRADING SDN BHD",
+            "total_debits": 1_000_000.0,
+            "transactions": [],
+        }
+
+        report = build_track2_result(
+            transactions=[],
+            counterparty_ledger={"counterparties": [mariana, gross_dr_anchor]},
+            company_names=["BETA TRADING SDN BHD"],
+        )
+        candidate = next(
+            c for c in report["report_info"]["related_party_candidates"]
+            if c["name"] == "MARIANA AHMAT"
+        )
+
+        self.assertIn("personal_keyword_sweep", candidate["signals"])
+        self.assertIn("monthly_recurrence", candidate["signals"])
+        self.assertEqual(candidate["debit_month_count"], 5)
+        self.assertIn("7 personal-kw rows", candidate["evidence"])
 
     def test_personal_keyword_sweep_reads_description_and_counterparty_fields(self):
         ahmad = {

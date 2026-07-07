@@ -1122,8 +1122,22 @@ def generate_interactive_html(data):
             add_candidate(candidate)
 
         if _TRACK2_AVAILABLE:
-            cp_ledger_for_candidates = data.get('counterparty_ledger')
-            if isinstance(cp_ledger_for_candidates, dict):
+            candidate_ledgers = []
+
+            def _add_candidate_ledger(ledger):
+                if not isinstance(ledger, dict) or not ledger.get('counterparties'):
+                    return
+                if any(ledger is existing for existing in candidate_ledgers):
+                    return
+                candidate_ledgers.append(ledger)
+
+            _add_candidate_ledger(data.get('counterparty_ledger'))
+            if data.get('transactions'):
+                try:
+                    _add_candidate_ledger(build_track2_counterparty_ledger(data.get('transactions', [])))
+                except Exception:
+                    pass
+            for cp_ledger_for_candidates in candidate_ledgers:
                 try:
                     live_candidates = advisory_rp_candidates(
                         scan_related_party_candidates(cp_ledger_for_candidates),
@@ -8248,15 +8262,38 @@ def detect_related_party_candidates(
                 "source": "track2",
             }
 
-    # Always supplement cached report candidates with a live ledger scan. A
-    # report_info candidate list can be stale or capped, while the manager
-    # should reflect the currently visible counterparty ledger.
-    if isinstance(cp_ledger, dict) and _TRACK2_AVAILABLE:
-        try:
-            for c in advisory_rp_candidates(
-                scan_related_party_candidates(cp_ledger),
-                list(confirmed_names or []),
-            ):
+    # Always supplement cached report candidates with live ledger scans. A
+    # report_info candidate list can be stale/capped, and some parser regexes
+    # keep the counterparty display name while the personal-keyword evidence
+    # lives in the original transaction detail text.
+    if _TRACK2_AVAILABLE:
+        candidate_ledgers = []
+
+        def _add_candidate_ledger(ledger):
+            if not isinstance(ledger, dict) or not ledger.get("counterparties"):
+                return
+            if any(ledger is existing for existing in candidate_ledgers):
+                return
+            candidate_ledgers.append(ledger)
+
+        _add_candidate_ledger(cp_ledger)
+        if isinstance(shared_report_data, dict) and shared_report_data.get("transactions"):
+            try:
+                _add_candidate_ledger(
+                    build_track2_counterparty_ledger(shared_report_data.get("transactions", []))
+                )
+            except Exception:
+                pass
+
+        for candidate_ledger in candidate_ledgers:
+            try:
+                live_candidates = advisory_rp_candidates(
+                    scan_related_party_candidates(candidate_ledger),
+                    list(confirmed_names or []),
+                )
+            except Exception:
+                continue
+            for c in live_candidates:
                 if not isinstance(c, dict):
                     continue
                 display_name = str(c.get("name", "") or "").strip()
@@ -8273,8 +8310,6 @@ def detect_related_party_candidates(
                     "debit_month_count": int(safe_float(c.get("debit_month_count", 0))),
                     "source": "track2",
                 }
-        except Exception:
-            pass
 
     order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
     priority_signals = {"monthly_recurrence", "personal_keyword_sweep"}
