@@ -2205,6 +2205,53 @@ def _rp_counterparty_name(cp: dict[str, Any]) -> str:
     ).strip()
 
 
+_RP_KEYWORD_TEXT_FIELDS = (
+    "description",
+    "transaction_details",
+    "transaction_detail",
+    "details",
+    "detail",
+    "narration",
+    "memo",
+    "remarks",
+    "reference",
+    "particulars",
+    "counterparty_name_raw",
+    "raw_counterparty",
+    "_raw_counterparty",
+    "counterparty_name_clean",
+    "counterparty_name",
+    "counterparty",
+    "party_name",
+    "party",
+    "beneficiary",
+    "recipient",
+    "payer",
+    "payee",
+)
+
+
+def _rp_keyword_text(tx: dict[str, Any], counterparty_name: Any = "") -> str:
+    values: list[str] = []
+    seen: set[str] = set()
+
+    for field in _RP_KEYWORD_TEXT_FIELDS:
+        value = _rp_value(tx, field)
+        if value in (None, ""):
+            continue
+        text = re.sub(r"\s+", " ", str(value).upper()).strip()
+        if not text or text in seen:
+            continue
+        values.append(text)
+        seen.add(text)
+
+    cp_text = re.sub(r"\s+", " ", str(counterparty_name or "").upper()).strip()
+    if cp_text and cp_text not in seen:
+        values.append(cp_text)
+
+    return " ".join(values)
+
+
 def _rp_tx_side(tx: dict[str, Any]) -> str:
     raw = str(
         _rp_value(
@@ -2374,7 +2421,7 @@ def _has_director_benefit(cp: dict[str, Any]) -> bool:
     for tx in cp.get("transactions", []) or []:
         if _rp_tx_side(tx) != "DEBIT":
             continue
-        if _DIRECTOR_BENEFIT_RE.search(str(tx.get("description") or "")):
+        if _DIRECTOR_BENEFIT_RE.search(_rp_keyword_text(tx, name)):
             return True
     return False
 
@@ -2481,13 +2528,13 @@ def _compute_rp_signals(
     #    so thin petty-cash/claim/reimburse counterparties aren't excluded
     #    before they're even checked.
     if debit_count >= 2:
-        personal_hits = sum(
-            1 for tx in txs
-            if _rp_tx_side(tx) == "DEBIT" and any(
-                kw in (tx.get("description") or "").upper()
-                for kw in PERSONAL_KEYWORDS_RP4
-            )
-        )
+        personal_hits = 0
+        for tx in txs:
+            if _rp_tx_side(tx) != "DEBIT":
+                continue
+            keyword_text = _rp_keyword_text(tx, cp_name)
+            if any(kw in keyword_text for kw in PERSONAL_KEYWORDS_RP4):
+                personal_hits += 1
         if personal_hits >= 2:
             signals.append(
                 ("personal_keyword_sweep", 2,

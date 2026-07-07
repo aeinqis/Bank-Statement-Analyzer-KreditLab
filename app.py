@@ -5987,6 +5987,47 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
             return "pattern_matched"
         return "raw_fallback"
 
+    def _clean_optional_text(value) -> str:
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        return re.sub(r"\s+", " ", str(value).strip()).upper()
+
+    def _ledger_transaction_entry(
+        tx: dict,
+        amount: float,
+        txn_type: str,
+        extraction_method: str,
+        clean_name: str,
+    ) -> dict:
+        raw_counterparty = _clean_optional_text(
+            tx.get("_raw_counterparty")
+            or tx.get("counterparty_name_raw")
+            or tx.get("raw_counterparty")
+            or tx.get("party_name")
+            or tx.get("counterparty_name")
+            or tx.get("counterparty")
+        )
+        entry = {
+            "date": tx.get("date", ""),
+            "description": tx.get("description", ""),
+            "amount": round(amount, 2),
+            "type": txn_type,
+            "balance": safe_float(tx.get("balance", 0)),
+            "extraction_method": extraction_method,
+            "counterparty_name": clean_name,
+            "counterparty_name_clean": clean_name,
+            "party_name": clean_name,
+        }
+        if raw_counterparty:
+            entry["counterparty_name_raw"] = raw_counterparty
+            entry["raw_counterparty"] = raw_counterparty
+        return entry
+
     extraction_stats = {
         "pattern_matched": 0,
         "special_bucket": 0,
@@ -6016,7 +6057,6 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
     })
 
     for tx in tx_df.to_dict("records"):
-        desc = tx.get("description", "")
         name = _clean_name(tx.get("counterparty") or tx.get("party_name"))
         matched_parser_pattern = bool(tx.get("_counterparty_pattern_matched"))
         if not name:
@@ -6032,28 +6072,18 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
             bucket[extraction_method] += 1
             extraction_stats[extraction_method] += 1
             extraction_stats["total_transactions"] += 1
-            bucket["transactions"].append({
-                "date": tx.get("date", ""),
-                "description": desc,
-                "amount": round(credit, 2),
-                "type": "CREDIT",
-                "balance": safe_float(tx.get("balance", 0)),
-                "extraction_method": extraction_method,
-            })
+            bucket["transactions"].append(
+                _ledger_transaction_entry(tx, credit, "CREDIT", extraction_method, name)
+            )
         if debit > 0:
             bucket["total_debits"] += debit
             bucket["debit_count"] += 1
             bucket[extraction_method] += 1
             extraction_stats[extraction_method] += 1
             extraction_stats["total_transactions"] += 1
-            bucket["transactions"].append({
-                "date": tx.get("date", ""),
-                "description": desc,
-                "amount": round(debit, 2),
-                "type": "DEBIT",
-                "balance": safe_float(tx.get("balance", 0)),
-                "extraction_method": extraction_method,
-            })
+            bucket["transactions"].append(
+                _ledger_transaction_entry(tx, debit, "DEBIT", extraction_method, name)
+            )
 
     counterparties = []
     for name, b in buckets.items():
