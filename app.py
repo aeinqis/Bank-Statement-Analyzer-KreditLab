@@ -5457,6 +5457,9 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     is_v630 = schema_version in ("6.3.0", "6.3.1", "6.3.2", "6.3.3", "6.3.4", "6.3.5") or consolidated.get("total_unclassified_cr") is not None
     has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(parsing.get("account_month_checks"))
 
+    # Build cp_sorted HERE so it's available for both Counterparty and CP Ledger sheets
+    cp_sorted = build_canonical_counterparty_ledger_rows(cp_ledger)
+
     # Summary
     ws = wb.active
     ws.title = "Summary"
@@ -5687,16 +5690,17 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     
     cp_by_name = {str(cp.get("counterparty_name", "")).strip().upper(): cp for cp in cp_sorted if cp.get("counterparty_name")}
     rp_row_start = row + 1
-    for rp_idx, rp in enumerate(report_info.get("related_parties", []) or [], 0):
-        row = rp_row_start + rp_idx
-        name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
-        relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
-        match = cp_by_name.get(name.strip().upper(), {})
-        values = [name, relationship, match.get("total_credits"), match.get("total_debits"), match.get("transaction_count")]
-        write_values(ws5, row, values, number_cols={3, 4}, credit_cols={3}, debit_cols={4})
-    
-    # If no related parties, show a note
-    if not report_info.get("related_parties", []):
+    related_parties = report_info.get("related_parties", []) or []
+    if related_parties:
+        for rp_idx, rp in enumerate(related_parties):
+            row = rp_row_start + rp_idx
+            name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
+            relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
+            match = cp_by_name.get(name.strip().upper(), {})
+            values = [name, relationship, match.get("total_credits"), match.get("total_debits"), match.get("transaction_count")]
+            write_values(ws5, row, values, number_cols={3, 4}, credit_cols={3}, debit_cols={4})
+        row = rp_row_start + len(related_parties)
+    else:
         row = rp_row_start
         ws5.cell(row=row, column=1, value="No related parties defined.")
         style_data_cell(ws5, row, 1)
@@ -5727,7 +5731,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ledger_headers = ["Counterparty", "Total Credits", "Total Debits", "Net Position", "Cr Count", "Dr Count", "Txn Count"]
     row = 3
     write_headers(ws5b, row, ledger_headers)
-    cp_sorted = build_canonical_counterparty_ledger_rows(cp_ledger)
     for cp in cp_sorted:
         row += 1
         values = [cp.get("counterparty_name", ""), cp.get("total_credits", 0), cp.get("total_debits", 0), cp.get("net_position", 0), cp.get("credit_count", 0), cp.get("debit_count", 0), cp.get("transaction_count", 0)]
