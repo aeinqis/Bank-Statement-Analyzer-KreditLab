@@ -5894,7 +5894,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         for count_col in [6, 7, 8]:  # Cr Count, Dr Count, Txn Count
             ws5b.cell(row=row, column=count_col).number_format = "0"
 
-    auto_width(ws5b)
 
     # ============================================================
     # CP Transaction Sheet (Detail by Counterparty)
@@ -5966,7 +5965,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         if cp_idx < len(cp_sorted) - 1:
             row += 1
 
-    auto_width(ws5c)
     # NOTE: Related Parties sheet (ws5c) has been REMOVED as content is now in Counterparty sheet
 
     # Unclassified
