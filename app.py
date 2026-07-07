@@ -5680,23 +5680,20 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Counterparty - MODIFIED: Combined with Related Parties content
     ws5 = wb.create_sheet("Counterparty")
     ws5.cell(row=1, column=1, value="COUNTERPARTY TRANSACTIONS").font = title_font
-    ws5.cell(row=row_idx, column=1).number_format = "0"
 
     # --- START: Related Parties content inserted here ---
     row = 3
     ws5.cell(row=row, column=1, value="RELATED PARTIES").font = bold_font
     row += 1
 
-    # Related Parties headers - ONLY columns A-E (No., Name, Relationship, Total Credits, Total Debits, Transactions)
-    # Note: We're using columns A-F (6 columns)
+    # Related Parties headers - columns A-F (No., Relationship, Name, Total Credits, Total Debits, Transactions)
     rp_headers = ["No.", "Relationship", "Name", "Total Credits", "Total Debits", "Transactions"]
     write_headers(ws5, row, rp_headers, header_fill_orange)
 
-
     # Set custom column widths for Related Parties section (narrower)
     ws5.column_dimensions["A"].width = 6   # No.
-    ws5.column_dimensions["B"].width = 25  # Name - smaller than counterparty summary
-    ws5.column_dimensions["C"].width = 20  # Relationship
+    ws5.column_dimensions["B"].width = 25  # Relationship
+    ws5.column_dimensions["C"].width = 20  # Name - smaller than counterparty summary
     ws5.column_dimensions["D"].width = 16  # Total Credits
     ws5.column_dimensions["E"].width = 16  # Total Debits
     ws5.column_dimensions["F"].width = 14  # Transactions
@@ -5711,9 +5708,9 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
             name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
             match = cp_by_name.get(name.strip().upper(), {})
-            # Now 6 values instead of 5 (added No. at beginning)
+            # 6 values: No., Relationship, Name, Total Credits, Total Debits, Transactions
             values = [
-                rp_idx + 1,  # No. column
+                rp_idx + 1,  # No. column - integer
                 relationship,
                 name,
                 match.get("total_credits"), 
@@ -5721,8 +5718,17 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                 match.get("transaction_count")
             ]
             write_values(ws5, row, values, number_cols={4, 5}, credit_cols={4}, debit_cols={5})
-            # Center align the No. column
-            ws5.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Format the No. column as integer (not float)
+            ws5.cell(row=row, column=1).number_format = "0"
+            
+            # Center align ALL columns for Related Parties
+            for col in range(1, 7):  # Columns A-F
+                ws5.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Special: Make Name column left-aligned for readability
+            ws5.cell(row=row, column=3).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            
         row = rp_row_start + len(related_parties)
     else:
         row = rp_row_start
