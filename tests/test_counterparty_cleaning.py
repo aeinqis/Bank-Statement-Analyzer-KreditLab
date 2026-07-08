@@ -51,7 +51,7 @@ class CounterpartyCleaningTests(unittest.TestCase):
 
     def test_preserves_and_expands_company_suffixes(self):
         self.assertEqual(clean_counterparty_name("ALPHA SB"), "ALPHA SDN BHD")
-        self.assertEqual(clean_counterparty_name("ALPHA MTSB"), "ALPHA SDN BHD")
+        self.assertEqual(clean_counterparty_name("ALPHA MTSB"), "ALPHA")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BH"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BHD"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA BERHAD"), "ALPHA BHD")
@@ -271,7 +271,16 @@ class CounterpartyCleaningTests(unittest.TestCase):
         merged = _merge_counterparty_groups(groups)
         self.assertEqual(len(merged), 2)
 
-    def test_muhafiz_technology_variants_merge_to_sdn_bhd(self):
+    def test_muhafiz_technology_variants_merge_without_sdn_bhd(self):
+        self.assertEqual(
+            clean_counterparty_name("MUHAFIZ TECHNOLOGY MTSB SHARE CAP"),
+            "MUHAFIZ TECHNOLOGY",
+        )
+        self.assertEqual(
+            clean_counterparty_name("MUHAFIZ TECHNOLOGY PAYMENT"),
+            "MUHAFIZ TECHNOLOGY",
+        )
+
         groups = {
             "MUHAFIZ TECHNOLOGY MTSB": {
                 "counterparty_name": "MUHAFIZ TECHNOLOGY MTSB",
@@ -288,8 +297,8 @@ class CounterpartyCleaningTests(unittest.TestCase):
         }
 
         merged = _merge_counterparty_groups(groups)
-        self.assertEqual(set(merged.keys()), {"MUHAFIZ TECHNOLOGY SDN BHD"})
-        row = merged["MUHAFIZ TECHNOLOGY SDN BHD"]
+        self.assertEqual(set(merged.keys()), {"MUHAFIZ TECHNOLOGY"})
+        row = merged["MUHAFIZ TECHNOLOGY"]
         self.assertEqual(row["total_debits"], 1130000.0)
         self.assertEqual(row["transaction_count"], 3)
 

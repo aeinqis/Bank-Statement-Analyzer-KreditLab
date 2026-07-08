@@ -44,7 +44,7 @@ COUNTERPARTY_DESCRIPTOR_TOKENS = {
     "RUJUKAN", "SIGN", "SURAT", "PGM", "PROGRAM", "MPC", "MSSB", "TRADE",
     "HOSTEL", "MELAKA", "MELAKA.", "TM",
     "SHARE", "CAPITAL", "CAP", "SHARECAP", "SHARECAPITAL",
-    "AND", "BOULEV", "BOULEVARD", "TRIENEKEN",
+    "AND", "BOULEV", "BOULEVARD", "TRIENEKEN", "MTSB",
 }
 COUNTERPARTY_MONTH_TOKENS = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -138,7 +138,7 @@ COUNTERPARTY_DATE_RE = re.compile(
 )
 COUNTERPARTY_REF_TOKEN_RE = re.compile(r"^(?:INV|REF|NO|ACC|ACCOUNT)?\d{2,}[A-Z0-9]*$")
 COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
-COUNTERPARTY_SDN_MARKER_TOKENS = {"MTSB", "SB", "SD", "SDN", "SND", "SN"}
+COUNTERPARTY_SDN_MARKER_TOKENS = {"SB", "SD", "SDN", "SND", "SN"}
 COUNTERPARTY_TRANSFER_RAIL_PREFIX_RE = re.compile(
     r"^\s*IBG\s+CREDIT\s+(?:INTERBANK\s+GIRO\s+)*",
     re.I,
@@ -367,7 +367,7 @@ def normalize_company_suffix(name: Any) -> str:
 
         if token_core == "SN" and not tokens:
             token = "SN"
-        elif token_core in {"MTSB", "SB", "SN", "SND", "SD", "SDN"}:
+        elif token_core in {"SB", "SN", "SND", "SD", "SDN"}:
             token = "SDN"
         elif token_core in {"BH", "BDH", "B", "BHD"} and any(existing == "SDN" for existing in tokens):
             token = "BHD"
@@ -1108,6 +1108,7 @@ CP_PREFIX_ALLOWED_SUFFIX_TOKENS = (
         "CCARD",
         "CEO",
         "CREDIT",
+        "MTSB",
         "PAYMENT",
         "PETTY",
         "SHARE",
@@ -1123,6 +1124,7 @@ CP_PERSON_SUFFIX_NOISE_TOKENS = {
     "CCARD",
     "CEO",
     "CREDIT",
+    "MTSB",
     "PAYMENT",
     "PETTY",
     "SHARE",
@@ -1442,13 +1444,29 @@ def _cp_choose_person_canonical(names: List[str], groups: Dict[str, dict]) -> st
         for display, markerless, marker in marker_candidates
         if tuple(markerless) in plain_keys
     ]
+    unique_direct_plain = {tuple(tokens): tokens for tokens in direct_plain_candidates}
+    if unique_direct_plain and matching_markers:
+        direct_prefixes = [
+            tokens
+            for direct_key, tokens in unique_direct_plain.items()
+            for _display, markerless, _marker in matching_markers
+            if len(markerless) > len(direct_key)
+            and tuple(markerless[: len(direct_key)]) == direct_key
+        ]
+        if direct_prefixes:
+            return " ".join(
+                sorted(
+                    direct_prefixes,
+                    key=lambda tokens: (-len(tokens), -len(tokens[-1]), " ".join(tokens)),
+                )[0]
+            )
+
     if matching_markers:
         return sorted(
             matching_markers,
             key=lambda item: (_cp_marker_rank(item[2]), -len(item[0]), item[0]),
         )[0][0]
 
-    unique_direct_plain = {tuple(tokens): tokens for tokens in direct_plain_candidates}
     if unique_direct_plain:
         return " ".join(
             sorted(
@@ -1806,9 +1824,23 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
                 if len(lk) <= len(sk):
                     continue
                 if lk.startswith(sk) and (len(lk) == len(sk) or lk[len(sk)] == " "):
-                    survivor, loser = (long, short) if _cp_score(groups[long]) >= _cp_score(groups[short]) else (short, long)
-                    _cp_absorb(groups[survivor], groups[loser])
-                    del groups[loser]
+                    legal_candidates: List[str] = []
+                    for candidate_name in (short, long):
+                        if candidate_name not in groups:
+                            continue
+                        for tokens in _cp_group_token_variants(candidate_name, groups[candidate_name]):
+                            legal_candidate = _cp_legal_entity_candidate(tokens)
+                            if legal_candidate and _cp_merge_key(legal_candidate).startswith(sk):
+                                legal_candidates.append(legal_candidate)
+                    canonical = (
+                        sorted(
+                            set(legal_candidates),
+                            key=lambda value: (len(value.split()), len(value), value),
+                        )[0]
+                        if legal_candidates
+                        else sk
+                    )
+                    _cp_merge_pair(groups, short, long, canonical)
                     merged_any = True
                     break
 

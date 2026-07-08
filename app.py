@@ -1690,55 +1690,13 @@ def generate_interactive_html(data):
         'related_party_cr': int(rp_summary.get('related_party_cr_count') or 0) or _count_txn('RELATED', 'CREDIT'),
         'related_party_dr': int(rp_summary.get('related_party_dr_count') or 0) or _count_txn('RELATED', 'DEBIT'),
     }
-    rp_groups = {}
-    for t in own_related.get('transactions', []) or []:
-        if not isinstance(t, dict):
-            continue
-        raw_party_name = str(t.get('party_name') or 'Unknown Party').strip() or 'Unknown Party'
-        party_type = str(t.get('party_type') or '').strip()
-        party_type_upper = party_type.upper()
-        
-        # Determine badge type: OWN or RELATED
-        if party_type_upper.startswith('OWN'):
-            badge_type = 'OP'
-            party_name = _own_party_display_name(raw_party_name)
-        else:
-            badge_type = 'RP'
-            party_name = _matched_related_party_name(raw_party_name, t.get('description')) or raw_party_name
-        
-        key = (party_name.casefold(), badge_type, party_name)
-        group = rp_groups.setdefault(
-            key,
-            {
-                'party_name': party_name,
-                'party_type': party_type or ('Own Party' if badge_type == 'OP' else 'Related Party'),
-                'badge_type': badge_type,
-                'transactions': [],
-                'credits': 0.0,
-                'debits': 0.0,
-                'credit_count': 0,
-                'debit_count': 0,
-            },
-        )
-        amount = safe_float(t.get('amount', 0))
-        txn_type = str(t.get('type') or '').upper()
-        if txn_type == 'CREDIT':
-            group['credits'] += amount
-            group['credit_count'] += 1
-        elif txn_type == 'DEBIT':
-            group['debits'] += amount
-            group['debit_count'] += 1
-        group['transactions'].append(t)
-
-    # Sort groups: OP first, then RP by name
-    def _group_sort_key(g):
-        # OP groups come first, then RP groups sorted by name
-        if g['badge_type'] == 'OP':
-            return (0, g['party_name'].casefold())
-        return (1, g['party_name'].casefold())
-    
     rp_party_rows = ""
-    for idx, group in enumerate(sorted(rp_groups.values(), key=_group_sort_key)):
+    rp_group_list = build_own_related_party_groups_for_report(
+        own_related,
+        related_parties=related_parties,
+        company_name=company_name,
+    )
+    for idx, group in enumerate(rp_group_list):
         badge_cls = 'op-badge' if group['badge_type'] == 'OP' else 'rp-badge'
         detail_rows = ""
         for t in group['transactions']:
@@ -3790,6 +3748,106 @@ def _matched_report_related_party_name(counterparty_name, description, related_p
     return max(matches, key=lambda value: (len(value), value.casefold()))
 
 
+_REPORT_OWN_PARTY_FALLBACKS = {
+    "UNKNOWN",
+    "UNKNOWN PARTY",
+    "COMPANY",
+    "OWN PARTY",
+    "OWN PARTY (SELF)",
+    "SELF",
+}
+
+
+def _report_clean_party_display_name(value) -> str:
+    name = re.sub(
+        r"\s*\(\s*OWN[\s\-_]?PARTY\s*\)\s*",
+        " ",
+        str(value or ""),
+        flags=re.I,
+    )
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def _strip_report_company_suffix(name: str) -> str:
+    cleaned = _report_clean_party_display_name(name)
+    stripped = re.sub(
+        r"\s+(?:SDN\s+BHD|SDN\s+BH|SDN\s+B|BHD|BERHAD)\.?\s*$",
+        "",
+        cleaned,
+        flags=re.I,
+    )
+    return re.sub(r"\s+", " ", stripped).strip() or cleaned
+
+
+def _report_flexible_phrase_pattern(name: str) -> str:
+    tokens = re.findall(r"[A-Z0-9]+", str(name or "").upper())
+    if not tokens:
+        return ""
+    return r"\s+".join(re.escape(token) for token in tokens)
+
+
+def _own_party_source_text_for_report(txns) -> str:
+    parts = []
+    for txn in txns or []:
+        if not isinstance(txn, dict):
+            continue
+        party_type = str(txn.get("party_type") or "").upper()
+        if party_type and not party_type.startswith("OWN"):
+            continue
+        for field in (
+            "party_name",
+            "counterparty_name",
+            "counterparty_name_clean",
+            "counterparty_name_raw",
+            "description",
+        ):
+            value = txn.get(field)
+            if value:
+                parts.append(str(value))
+    return " ".join(parts).upper()
+
+
+def _own_party_suffix_visible_in_sources(company_name: str, txns) -> bool:
+    company_display = _report_clean_party_display_name(company_name)
+    company_base = _strip_report_company_suffix(company_display)
+    if not company_display or company_display == company_base:
+        return False
+
+    source_text = _own_party_source_text_for_report(txns)
+    if not source_text:
+        return False
+
+    base_pattern = _report_flexible_phrase_pattern(company_base)
+    if not base_pattern:
+        return False
+    return bool(
+        re.search(
+            rf"\b{base_pattern}\s+(?:SD|SDN|SND|SN|SB|S/B|SDN\s+B|SDN\s+BH|SDN\s+BHD|BHD|BERHAD)\b",
+            source_text,
+            flags=re.I,
+        )
+    )
+
+
+def _own_party_group_name_for_report(txns, company_name: str = "") -> str:
+    company_display = _report_clean_party_display_name(company_name)
+    if company_display and company_display.upper() not in _REPORT_OWN_PARTY_FALLBACKS:
+        if _own_party_suffix_visible_in_sources(company_display, txns):
+            return company_display
+        return _strip_report_company_suffix(company_display)
+
+    for txn in txns or []:
+        if not isinstance(txn, dict):
+            continue
+        party_type = str(txn.get("party_type") or "").upper()
+        if party_type and not party_type.startswith("OWN"):
+            continue
+        raw_party_name = _report_clean_party_display_name(txn.get("party_name"))
+        if raw_party_name and raw_party_name.upper() not in _REPORT_OWN_PARTY_FALLBACKS:
+            return raw_party_name
+    return "Own Party (Self)"
+
+
 def _own_party_display_name_for_report(raw_party_name, company_name: str = "") -> str:
     fallbacks = {"UNKNOWN", "UNKNOWN PARTY", "COMPANY", "OWN PARTY", "OWN PARTY (SELF)", "SELF"}
     for value in (raw_party_name, company_name):
@@ -3803,6 +3861,21 @@ def _own_party_display_name_for_report(raw_party_name, company_name: str = "") -
         if name and name.upper() not in fallbacks:
             return name
     return "Own Party (Self)"
+
+
+def _report_related_party_entries(related_parties) -> List[tuple[str, str]]:
+    entries: List[tuple[str, str]] = []
+    seen = set()
+    for party in related_parties or []:
+        name = _report_party_display_name(party)
+        if not name:
+            continue
+        key = name.upper()
+        if key in seen:
+            continue
+        entries.append((name, _report_party_relationship(party)))
+        seen.add(key)
+    return entries
 
 
 def _report_transaction_amount(txn: dict) -> float:
@@ -3841,6 +3914,25 @@ def build_own_related_party_groups_for_report(
         txns = []
 
     groups = {}
+    related_entries = _report_related_party_entries(related_parties)
+    has_confirmed_related_parties = bool(related_entries)
+    own_party_name = _own_party_group_name_for_report(txns, company_name)
+
+    def _empty_group(party_name: str, badge_type: str, party_type: str) -> dict:
+        return {
+            "party_name": party_name,
+            "party_type": party_type,
+            "badge_type": badge_type,
+            "transactions": [],
+            "credits": 0.0,
+            "debits": 0.0,
+            "credit_count": 0,
+            "debit_count": 0,
+        }
+
+    def _group_key(party_name: str, badge_type: str):
+        return (party_name.casefold(), badge_type, party_name)
+
     for txn in txns:
         if not isinstance(txn, dict):
             continue
@@ -3850,27 +3942,26 @@ def build_own_related_party_groups_for_report(
 
         if party_type_upper.startswith("OWN"):
             badge_type = "OP"
-            party_name = _own_party_display_name_for_report(raw_party_name, company_name)
+            party_name = own_party_name
         else:
             badge_type = "RP"
-            party_name = (
-                _matched_report_related_party_name(raw_party_name, txn.get("description"), related_parties)
-                or raw_party_name
+            matched_name = _matched_report_related_party_name(
+                raw_party_name,
+                txn.get("description"),
+                related_parties,
             )
+            if has_confirmed_related_parties and not matched_name:
+                continue
+            party_name = matched_name or raw_party_name
 
-        key = (party_name.casefold(), badge_type, party_name)
+        key = _group_key(party_name, badge_type)
         group = groups.setdefault(
             key,
-            {
-                "party_name": party_name,
-                "party_type": party_type or ("Own Party" if badge_type == "OP" else "Related Party"),
-                "badge_type": badge_type,
-                "transactions": [],
-                "credits": 0.0,
-                "debits": 0.0,
-                "credit_count": 0,
-                "debit_count": 0,
-            },
+            _empty_group(
+                party_name,
+                badge_type,
+                party_type or ("Own Party" if badge_type == "OP" else "Related Party"),
+            ),
         )
 
         amount = _report_transaction_amount(txn)
@@ -3888,6 +3979,18 @@ def build_own_related_party_groups_for_report(
         txn_copy["type"] = txn_type
         txn_copy["amount"] = amount
         group["transactions"].append(txn_copy)
+
+    if own_party_name:
+        groups.setdefault(
+            _group_key(own_party_name, "OP"),
+            _empty_group(own_party_name, "OP", "Own Party"),
+        )
+
+    for related_name, _relationship in related_entries:
+        groups.setdefault(
+            _group_key(related_name, "RP"),
+            _empty_group(related_name, "RP", "Related Party"),
+        )
 
     def _group_sort_key(group):
         if group["badge_type"] == "OP":
@@ -3972,36 +4075,46 @@ def build_related_party_summary_rows_for_report(
             continue
         relationship = _report_party_relationship(party)
         group = _matching_group(name)
-        fallback = {} if group else _merge_counterparty_rows_for_related_party(cp_rows or [], name)
+        group_transactions = group.get("transactions", []) if group else []
+        fallback = (
+            {}
+            if group_transactions
+            else _merge_counterparty_rows_for_related_party(cp_rows or [], name)
+        )
+        use_group_totals = bool(group) and (
+            bool(group_transactions)
+            or not int(safe_float(fallback.get("transaction_count", 0)))
+        )
         row = {
             "relationship": relationship,
             "name": name,
-            "total_credits": group.get("credits", 0) if group else fallback.get("total_credits", 0),
-            "total_debits": group.get("debits", 0) if group else fallback.get("total_debits", 0),
+            "total_credits": group.get("credits", 0) if use_group_totals else fallback.get("total_credits", 0),
+            "total_debits": group.get("debits", 0) if use_group_totals else fallback.get("total_debits", 0),
             "transaction_count": (
                 len(group.get("transactions", []) or [])
-                if group
+                if use_group_totals
                 else fallback.get("transaction_count", 0)
             ),
-            "transactions": group.get("transactions", []) if group else [],
+            "transactions": group.get("transactions", []) if use_group_totals else [],
         }
         rows.append(row)
         seen.add(name.upper())
 
-    for group in groups:
-        group_name = str(group.get("party_name") or "").strip()
-        if group_name and group_name.upper() not in seen:
-            rows.append(
-                {
-                    "relationship": "",
-                    "name": group_name,
-                    "total_credits": group.get("credits", 0),
-                    "total_debits": group.get("debits", 0),
-                    "transaction_count": len(group.get("transactions", []) or []),
-                    "transactions": group.get("transactions", []) or [],
-                }
-            )
-            seen.add(group_name.upper())
+    if not related_parties:
+        for group in groups:
+            group_name = str(group.get("party_name") or "").strip()
+            if group_name and group_name.upper() not in seen:
+                rows.append(
+                    {
+                        "relationship": "",
+                        "name": group_name,
+                        "total_credits": group.get("credits", 0),
+                        "total_debits": group.get("debits", 0),
+                        "transaction_count": len(group.get("transactions", []) or []),
+                        "transactions": group.get("transactions", []) or [],
+                    }
+                )
+                seen.add(group_name.upper())
 
     return rows
 
