@@ -6984,13 +6984,30 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws6.cell(row=summary_start_row, column=summary_start_col, value="SUMMARY").font = bold_font
     summary_start_row += 1
 
-    # Write headers vertically (as rows)
+    # Write the header row (Labels and Values) with ORANGE color and LEFT alignment
+    header_row = summary_start_row
+    # Label header (Column H)
+    ws6.cell(row=header_row, column=summary_start_col, value="Item").font = header_font
+    ws6.cell(row=header_row, column=summary_start_col).fill = header_fill_orange
+    ws6.cell(row=header_row, column=summary_start_col).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws6.cell(row=header_row, column=summary_start_col).border = thin_border
+
+    # Value header (Column I)
+    ws6.cell(row=header_row, column=summary_start_col + 1, value="Value").font = header_font
+    ws6.cell(row=header_row, column=summary_start_col + 1).fill = header_fill_orange
+    ws6.cell(row=header_row, column=summary_start_col + 1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws6.cell(row=header_row, column=summary_start_col + 1).border = thin_border
+
+    summary_start_row += 1  # Move to data rows
+
+    # Write data rows vertically
     for idx, (label, value) in enumerate(zip(summary_labels, summary_values)):
         row = summary_start_row + idx
-        # Write the label in column H - center aligned
-        ws6.cell(row=row, column=summary_start_col, value=label).font = Font(name="Calibri", bold=True, size=11)
+        
+        # Write the label in column H - left aligned
+        ws6.cell(row=row, column=summary_start_col, value=label).font = Font(name="Calibri", size=11)
         ws6.cell(row=row, column=summary_start_col).border = thin_border
-        ws6.cell(row=row, column=summary_start_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws6.cell(row=row, column=summary_start_col).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         
         # Write the value in column I (next column) - center aligned
         ws6.cell(row=row, column=summary_start_col + 1, value=value)
