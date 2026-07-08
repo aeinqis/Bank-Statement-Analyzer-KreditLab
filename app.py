@@ -6951,7 +6951,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         row += 2
     ws5f.column_dimensions["A"].width = 100
 
-    # Facilities - MODIFIED: Summary table header now ORANGE
+   # Facilities - MODIFIED: Summary table moved to right side (Column H)
     ws6 = wb.create_sheet("Facilities")
 
     def _fac_amount(t):
@@ -6969,44 +6969,119 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     loan_repay_total = round(sum(_fac_amount(t) for t in loan_repay), 2)
 
     ws6.cell(row=1, column=1, value="FACILITIES").font = title_font
-    summary_headers = ["Total Disbursements (RM)", "Total Repayments (RM)", "Disbursement Txns", "Repayment Txns"]
-    
-    # MODIFIED: Use ORANGE header fill for the summary table
-    write_headers(ws6, 3, summary_headers, header_fill_orange)
-    write_values(ws6, 4, [loan_disb_total, loan_repay_total, len(loan_disb), len(loan_repay)],
-                 number_cols={1, 2}, credit_cols={1}, debit_cols={2})
 
-    facility_headers = ["No.", "Date", "Description", "Amount", "Category"]
-    row = 6
+    # ============================================================
+    # SUMMARY TABLE - Moved to right side (Column H, Row 3)
+    # ============================================================
+    summary_labels = ["Total Disbursements (RM)", "Total Repayments (RM)", "Disbursement Txns", "Repayment Txns"]
+    summary_values = [loan_disb_total, loan_repay_total, len(loan_disb), len(loan_repay)]
+
+    # Write the summary table at Column H (column 8), starting at row 3
+    summary_start_col = 8  # Column H
+    summary_start_row = 3
+
+    # Write the title for the summary table
+    ws6.cell(row=summary_start_row, column=summary_start_col, value="SUMMARY").font = bold_font
+    summary_start_row += 1
+
+    # Write headers vertically (as rows)
+    for idx, (label, value) in enumerate(zip(summary_labels, summary_values)):
+        row = summary_start_row + idx
+        # Write the label in column H - center aligned
+        ws6.cell(row=row, column=summary_start_col, value=label).font = Font(name="Calibri", bold=True, size=11)
+        ws6.cell(row=row, column=summary_start_col).border = thin_border
+        ws6.cell(row=row, column=summary_start_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Write the value in column I (next column) - center aligned
+        ws6.cell(row=row, column=summary_start_col + 1, value=value)
+        ws6.cell(row=row, column=summary_start_col + 1).border = thin_border
+        ws6.cell(row=row, column=summary_start_col + 1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Apply number formatting for amounts
+        if idx in [0, 1]:  # Total Disbursements and Total Repayments
+            ws6.cell(row=row, column=summary_start_col + 1).number_format = "#,##0.00"
+        else:  # Counts - format as integer
+            ws6.cell(row=row, column=summary_start_col + 1).number_format = "0"
+        
+        # Color coding: Credits (Disbursements) in green, Debits (Repayments) in red
+        if idx == 0:  # Total Disbursements - Credit
+            ws6.cell(row=row, column=summary_start_col + 1).font = credit_font
+        elif idx == 1:  # Total Repayments - Debit
+            ws6.cell(row=row, column=summary_start_col + 1).font = debit_font
+
+    # Set column widths for the summary table
+    ws6.column_dimensions[get_column_letter(summary_start_col)].width = 25   # Column H - Labels
+    ws6.column_dimensions[get_column_letter(summary_start_col + 1)].width = 18   # Column I - Values
+
+    # ============================================================
+    # DISBURSEMENTS TABLE (Left side, starting at Column A)
+    # ============================================================
+    row = 3  # Start at row 3
     ws6.cell(row=row, column=1, value="DISBURSEMENTS (Credits)").font = bold_font
     row += 1
+
+    facility_headers = ["No.", "Date", "Description", "Amount", "Category"]
     write_headers(ws6, row, facility_headers, header_fill_green)
+    row += 1
+
     if not loan_disb:
-        row += 1
         ws6.cell(row=row, column=3, value="No disbursements")
         style_data_cell(ws6, row, 1)
-    for idx, txn in enumerate(loan_disb, 1):
+        # Center align the "No disbursements" message
+        ws6.cell(row=row, column=3).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         row += 1
-        values = [idx, txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
-        write_values(ws6, row, values, number_cols={4}, credit_cols={4})
-        ws6.cell(row=row, column=1).number_format = "0"
-        for centre_col in (1, 2, 4, 5):
-            ws6.cell(row=row, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    row += 2
+    else:
+        for idx, txn in enumerate(loan_disb, 1):
+            values = [idx, txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
+            write_values(ws6, row, values, number_cols={4}, credit_cols={4})
+            
+            # Format No. column as integer
+            ws6.cell(row=row, column=1).number_format = "0"
+            
+            # Center align ALL columns for data rows
+            for col in range(1, 6):  # Columns A-E
+                ws6.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Special: Make Description column (column 3) left-aligned for readability
+            ws6.cell(row=row, column=3).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            
+            row += 1
+
+    row += 2  # Add spacing
+
+    # ============================================================
+    # REPAYMENTS TABLE (Left side, continuing from disbursements)
+    # ============================================================
     ws6.cell(row=row, column=1, value="REPAYMENTS (Debits)").font = bold_font
     row += 1
+
     write_headers(ws6, row, facility_headers, header_fill_red)
+    row += 1
+
     if not loan_repay:
-        row += 1
         ws6.cell(row=row, column=3, value="No repayments")
         style_data_cell(ws6, row, 1)
-    for idx, txn in enumerate(loan_repay, 1):
+        # Center align the "No repayments" message
+        ws6.cell(row=row, column=3).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         row += 1
-        values = [idx, txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
-        write_values(ws6, row, values, number_cols={4}, debit_cols={4})
-        ws6.cell(row=row, column=1).number_format = "0"
-        for centre_col in (1, 2, 4, 5):
-            ws6.cell(row=row, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    else:
+        for idx, txn in enumerate(loan_repay, 1):
+            values = [idx, txn.get("date"), (txn.get("description", "") or "")[:70], _fac_amount(txn), txn.get("category", "")]
+            write_values(ws6, row, values, number_cols={4}, debit_cols={4})
+            
+            # Format No. column as integer
+            ws6.cell(row=row, column=1).number_format = "0"
+            
+            # Center align ALL columns for data rows
+            for col in range(1, 6):  # Columns A-E
+                ws6.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Special: Make Description column (column 3) left-aligned for readability
+            ws6.cell(row=row, column=3).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            
+            row += 1
+
+    # Set column widths for the main tables (Columns A-E)
     ws6.column_dimensions["A"].width = 8    # No.
     ws6.column_dimensions["B"].width = 14   # Date
     ws6.column_dimensions["C"].width = 55   # Description
