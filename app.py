@@ -1037,7 +1037,12 @@ def generate_interactive_html(data):
         matches = []
         for name in related_party_names:
             name_upper = name.upper()
-            if name_upper in cp_upper or name_upper in desc_upper:
+            if (
+                name_upper in cp_upper
+                or name_upper in desc_upper
+                or _report_candidate_contains_party_tokens(counterparty_name, name)
+                or _report_candidate_contains_party_tokens(description, name)
+            ):
                 matches.append(name)
         if not matches:
             return ''
@@ -1048,7 +1053,7 @@ def generate_interactive_html(data):
     }
 
     def _own_party_display_name(raw_party_name):
-        for value in (company_name, raw_party_name):
+        for value in (raw_party_name, company_name):
             name = re.sub(
                 r'\s*\(\s*OWN[\s\-_]?PARTY\s*\)\s*',
                 ' ',
@@ -1812,7 +1817,12 @@ def generate_interactive_html(data):
             val_fail_warning = '<div style="background:var(--amber-dim);border:1px solid var(--amber);color:var(--amber);margin:0.75rem 0;padding:0.75rem;border-radius:8px;display:flex;gap:0.5rem;align-items:center"><div>⚠️</div><div><div style="font-weight:600">Counterparty ledger cleaning failed validation</div><div style="font-size:0.85rem">Showing original parser output.</div></div></div>'
 
         raw_counterparties = cp_ledger.get('counterparties', []) or []
-        counterparties_sorted = build_canonical_counterparty_ledger_rows(cp_ledger)
+        counterparties_sorted = build_report_counterparty_ledger_rows(
+            cp_ledger,
+            related_parties=related_parties,
+            own_related=own_related,
+            company_name=company_name,
+        )
         if raw_counterparties and len(counterparties_sorted) != len(raw_counterparties):
             original_cp = original_cp or len(raw_counterparties)
             merges = merges or (len(raw_counterparties) - len(counterparties_sorted))
@@ -3768,7 +3778,12 @@ def _matched_report_related_party_name(counterparty_name, description, related_p
     matches = []
     for name in related_party_names:
         name_upper = name.upper()
-        if name_upper in cp_upper or name_upper in desc_upper:
+        if (
+            name_upper in cp_upper
+            or name_upper in desc_upper
+            or _report_candidate_contains_party_tokens(counterparty_name, name)
+            or _report_candidate_contains_party_tokens(description, name)
+        ):
             matches.append(name)
     if not matches:
         return ""
@@ -3777,7 +3792,7 @@ def _matched_report_related_party_name(counterparty_name, description, related_p
 
 def _own_party_display_name_for_report(raw_party_name, company_name: str = "") -> str:
     fallbacks = {"UNKNOWN", "UNKNOWN PARTY", "COMPANY", "OWN PARTY", "OWN PARTY (SELF)", "SELF"}
-    for value in (company_name, raw_party_name):
+    for value in (raw_party_name, company_name):
         name = re.sub(
             r"\s*\(\s*OWN[\s\-_]?PARTY\s*\)\s*",
             " ",
@@ -3989,6 +4004,225 @@ def build_related_party_summary_rows_for_report(
             seen.add(group_name.upper())
 
     return rows
+
+
+_REPORT_LEGAL_SUFFIX_TOKENS = {
+    "SDN", "BHD", "BERHAD", "PLT", "LLP", "LTD", "LIMITED"
+}
+
+
+def _report_match_tokens(value) -> List[str]:
+    text = re.sub(r"[^A-Z0-9\s]", " ", str(value or "").upper())
+    return [token for token in re.sub(r"\s+", " ", text).strip().split() if token]
+
+
+def _report_party_core_tokens(name) -> List[str]:
+    tokens = _report_match_tokens(name)
+    core = [token for token in tokens if token not in _REPORT_LEGAL_SUFFIX_TOKENS]
+    return core or tokens
+
+
+def _report_token_compatible(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    shorter, longer = sorted((left, right), key=len)
+    return len(shorter) >= 3 and longer.startswith(shorter) and len(longer) - len(shorter) <= 2
+
+
+def _report_candidate_contains_party_tokens(candidate, party_name) -> bool:
+    party_tokens = _report_party_core_tokens(party_name)
+    candidate_tokens = _report_match_tokens(candidate)
+    if len(party_tokens) < 2 or len(candidate_tokens) < len(party_tokens):
+        return False
+
+    search_start = 0
+    for party_token in party_tokens:
+        found_at = None
+        for idx in range(search_start, len(candidate_tokens)):
+            if _report_token_compatible(party_token, candidate_tokens[idx]):
+                found_at = idx
+                break
+        if found_at is None:
+            return False
+        search_start = found_at + 1
+    return True
+
+
+def _counterparty_row_report_match_sources(cp: dict) -> List[str]:
+    sources = [
+        cp.get("counterparty_name"),
+        cp.get("counterparty"),
+    ]
+    raw_names = cp.get("raw_names", [])
+    if isinstance(raw_names, (list, tuple, set)):
+        sources.extend(raw_names)
+    elif raw_names:
+        sources.append(raw_names)
+
+    for txn in cp.get("transactions", []) or []:
+        if not isinstance(txn, dict):
+            continue
+        sources.extend(
+            [
+                txn.get("counterparty_name"),
+                txn.get("counterparty_name_clean"),
+                txn.get("counterparty_name_raw"),
+                txn.get("party_name"),
+                txn.get("description"),
+            ]
+        )
+    return [str(source) for source in sources if source]
+
+
+def _counterparty_row_matches_report_party(cp: dict, party_name: str) -> bool:
+    return any(
+        _report_candidate_contains_party_tokens(source, party_name)
+        for source in _counterparty_row_report_match_sources(cp)
+    )
+
+
+def _report_counterparty_alignment_targets(
+    related_parties=None,
+    own_related=None,
+    company_name: str = "",
+) -> List[dict]:
+    targets: List[dict] = []
+    seen = set()
+
+    def add_target(name: str, is_related_party: bool = False) -> None:
+        display_name = re.sub(r"\s+", " ", str(name or "").strip())
+        key = display_name.upper()
+        if not key or key in seen or len(_report_party_core_tokens(display_name)) < 2:
+            return
+        targets.append({"name": display_name, "is_related_party": is_related_party})
+        seen.add(key)
+
+    for group in build_own_related_party_groups_for_report(
+        own_related,
+        related_parties=related_parties,
+        company_name=company_name,
+    ):
+        add_target(
+            group.get("party_name", ""),
+            is_related_party=group.get("badge_type") == "RP",
+        )
+
+    for party in related_parties or []:
+        add_target(_report_party_display_name(party), is_related_party=True)
+
+    return targets
+
+
+def _copy_counterparty_row_for_report(cp: dict, display_name: str, is_related_party: bool = False) -> dict:
+    copied = dict(cp)
+    copied["counterparty_name"] = display_name
+    copied["is_related_party"] = bool(copied.get("is_related_party")) or is_related_party
+    raw_names = cp.get("raw_names", [])
+    copied_raw_names = set()
+    if isinstance(raw_names, (list, tuple, set)):
+        copied_raw_names.update(str(value) for value in raw_names if value)
+    elif raw_names:
+        copied_raw_names.add(str(raw_names))
+    copied["raw_names"] = copied_raw_names
+    original_name = cp.get("counterparty_name") or cp.get("counterparty")
+    if original_name:
+        copied["raw_names"].add(str(original_name))
+    copied["transactions"] = []
+    for txn in cp.get("transactions", []) or []:
+        if not isinstance(txn, dict):
+            continue
+        txn_copy = dict(txn)
+        txn_copy["counterparty_name_clean"] = display_name
+        txn_copy["counterparty_name"] = display_name
+        txn_copy["party_name"] = display_name
+        copied["transactions"].append(txn_copy)
+    return copied
+
+
+def _merge_report_counterparty_row(target: dict, source: dict, display_name: str, is_related_party: bool = False) -> None:
+    for key in ("total_credits", "total_debits"):
+        target[key] = round(safe_float(target.get(key)) + safe_float(source.get(key)), 2)
+    for key in ("credit_count", "debit_count", "transaction_count", "pattern_matched", "special_bucket", "raw_fallback"):
+        target[key] = int(safe_float(target.get(key))) + int(safe_float(source.get(key)))
+    target["net_position"] = round(safe_float(target.get("total_credits")) - safe_float(target.get("total_debits")), 2)
+    target["is_related_party"] = bool(target.get("is_related_party")) or bool(source.get("is_related_party")) or is_related_party
+
+    raw_names = target.setdefault("raw_names", set())
+    source_raw = source.get("raw_names", [])
+    if isinstance(source_raw, (list, tuple, set)):
+        raw_names.update(str(value) for value in source_raw if value)
+    elif source_raw:
+        raw_names.add(str(source_raw))
+    source_name = source.get("counterparty_name") or source.get("counterparty")
+    if source_name:
+        raw_names.add(str(source_name))
+
+    target_txns = target.setdefault("transactions", [])
+    for txn in source.get("transactions", []) or []:
+        if not isinstance(txn, dict):
+            continue
+        txn_copy = dict(txn)
+        txn_copy["counterparty_name_clean"] = display_name
+        txn_copy["counterparty_name"] = display_name
+        txn_copy["party_name"] = display_name
+        target_txns.append(txn_copy)
+
+
+def build_report_counterparty_ledger_rows(
+    cp_ledger: dict,
+    related_parties=None,
+    own_related=None,
+    company_name: str = "",
+) -> List[dict]:
+    rows = build_canonical_counterparty_ledger_rows(cp_ledger)
+    targets = _report_counterparty_alignment_targets(
+        related_parties=related_parties,
+        own_related=own_related,
+        company_name=company_name,
+    )
+    if not rows or not targets:
+        return rows
+
+    merged: Dict[str, dict] = {}
+    for cp in rows:
+        matches = [
+            target for target in targets
+            if _counterparty_row_matches_report_party(cp, target["name"])
+        ]
+        if matches:
+            target = max(matches, key=lambda item: (len(_report_party_core_tokens(item["name"])), len(item["name"])))
+            display_name = target["name"]
+            is_related_party = bool(target.get("is_related_party"))
+        else:
+            display_name = str(cp.get("counterparty_name") or "UNKNOWN")
+            is_related_party = bool(cp.get("is_related_party"))
+
+        key = display_name.casefold()
+        if key not in merged:
+            merged[key] = _copy_counterparty_row_for_report(cp, display_name, is_related_party=is_related_party)
+        else:
+            _merge_report_counterparty_row(
+                merged[key],
+                cp,
+                display_name,
+                is_related_party=is_related_party,
+            )
+
+    output = list(merged.values())
+    for row in output:
+        row["total_credits"] = round(safe_float(row.get("total_credits")), 2)
+        row["total_debits"] = round(safe_float(row.get("total_debits")), 2)
+        row["net_position"] = round(row["total_credits"] - row["total_debits"], 2)
+        if not row.get("transaction_count"):
+            row["transaction_count"] = int(safe_float(row.get("credit_count"))) + int(safe_float(row.get("debit_count")))
+        row["raw_names"] = sorted(row.get("raw_names", []) or [])
+        row["transactions"] = sorted(
+            row.get("transactions", []) or [],
+            key=lambda tx: (str(tx.get("date") or ""), str(tx.get("description") or "")),
+        )
+
+    output.sort(key=lambda cp: str(cp.get("counterparty_name", "") or "").casefold())
+    return output
 
 
 _PARTY_GHOST_STOPWORDS = {
@@ -5817,7 +6051,14 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(recon_lookup)
 
     # Build cp_sorted HERE so it's available for both Counterparty and CP Ledger sheets
-    cp_sorted = build_canonical_counterparty_ledger_rows(cp_ledger)
+    related_parties = report_info.get("related_parties", []) or []
+    company_name = report_info.get("company_name", "")
+    cp_sorted = build_report_counterparty_ledger_rows(
+        cp_ledger,
+        related_parties=related_parties,
+        own_related=own_related,
+        company_name=company_name,
+    )
 
     # Summary
     ws = wb.active
@@ -6244,7 +6485,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Top Parties
     ws3 = wb.create_sheet("Top Parties")
     ws3.cell(row=1, column=1, value="TOP PARTIES ANALYSIS").font = title_font
-    company_name = report_info.get("company_name", "")
     party_view = prepare_top_parties_for_report(top_parties, limit=10, company_name=company_name)
     payers = party_view["payers"]
     payees = party_view["payees"]
@@ -8600,7 +8840,6 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
 
     # Build the same canonical counterparty summary used by HTML and Excel.
     display_cp_ledger = build_track2_counterparty_ledger(prepared_df.to_dict("records"))
-    canonical_cp_rows = build_canonical_counterparty_ledger_rows(display_cp_ledger)
     company_name_for_top = (st.session_state.get("company_name_override") or "").strip()
     if not company_name_for_top and "company_name" in prepared_df.columns:
         company_names = [
@@ -8609,6 +8848,12 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
             if str(value).strip()
         ]
         company_name_for_top = company_names[0] if company_names else ""
+    canonical_cp_rows = build_report_counterparty_ledger_rows(
+        display_cp_ledger,
+        related_parties=st.session_state.get("related_parties_override", []) or [],
+        own_related={},
+        company_name=company_name_for_top,
+    )
     top_party_view = build_top_party_view_from_counterparty_ledger(
         display_cp_ledger,
         limit=10,

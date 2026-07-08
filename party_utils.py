@@ -1409,6 +1409,11 @@ def _cp_choose_person_canonical(names: List[str], groups: Dict[str, dict]) -> st
     legal_candidates: List[str] = []
     marker_candidates: List[Tuple[str, List[str], str]] = []
     plain_candidates: List[List[str]] = []
+    direct_plain_candidates: List[List[str]] = []
+    for name in names:
+        direct_plain = _cp_plain_person_tokens(_cp_tokens(name))
+        if direct_plain:
+            direct_plain_candidates.append(direct_plain)
     for name in names:
         if name not in groups:
             continue
@@ -1442,6 +1447,15 @@ def _cp_choose_person_canonical(names: List[str], groups: Dict[str, dict]) -> st
             matching_markers,
             key=lambda item: (_cp_marker_rank(item[2]), -len(item[0]), item[0]),
         )[0][0]
+
+    unique_direct_plain = {tuple(tokens): tokens for tokens in direct_plain_candidates}
+    if unique_direct_plain:
+        return " ".join(
+            sorted(
+                unique_direct_plain.values(),
+                key=lambda tokens: (-len(tokens[-1]), len(tokens), " ".join(tokens)),
+            )[0]
+        )
 
     if unique_plain:
         return " ".join(

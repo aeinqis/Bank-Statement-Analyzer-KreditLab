@@ -57,6 +57,9 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(clean_counterparty_name("ALPHA BERHAD"), "ALPHA BHD")
         self.assertEqual(clean_counterparty_name("MUHAFIZ PRIMA SDN. B"), "MUHAFIZ PRIMA SDN BHD")
 
+    def test_does_not_append_company_suffix_without_marker(self):
+        self.assertEqual(clean_counterparty_name("MUHAFIZ SECURITY"), "MUHAFIZ SECURITY")
+
     def test_truncates_company_name_after_sd_or_sdn_marker(self):
         self.assertEqual(clean_counterparty_name("ALPHA SD TOKEN PAYMENT"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BHD RENTAL JUL"), "ALPHA SDN BHD")
@@ -206,6 +209,24 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(row["total_debits"], 5.0)
         self.assertEqual(row["transaction_count"], 2)
         self.assertEqual(len(row["transactions"]), 2)
+
+    def test_single_clean_bucket_does_not_revert_to_noisy_raw_alias(self):
+        groups = {
+            "DAYANG SITI RAUDZAH": {
+                "counterparty_name": "DAYANG SITI RAUDZAH",
+                "raw_names": {"DAYANG SITI RAUDZAH OFFICE ELECTRICITY"},
+                "total_credits": 0.0,
+                "total_debits": 179632.30,
+                "credit_count": 0,
+                "debit_count": 33,
+                "transaction_count": 33,
+                "transactions": [{"description": "TR IBG DAYANG SITI RAUDZAH OFFICE ELECTRICITY"}],
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(list(merged.keys()), ["DAYANG SITI RAUDZAH"])
+        self.assertEqual(merged["DAYANG SITI RAUDZAH"]["transaction_count"], 33)
 
     def test_markerless_counterparties_merge_when_prefix_and_suffix_allowed(self):
         groups = {
