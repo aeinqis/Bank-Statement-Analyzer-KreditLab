@@ -5993,8 +5993,10 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Remove auto_width to maintain manual column widths
     # auto_width(ws2, min_width=12)
 
+
     # Top Parties
     ws3 = wb.create_sheet("Top Parties")
+    ws3.cell(row=1, column=1, value="TOP PARTIES ANALYSIS").font = title_font
     company_name = report_info.get("company_name", "")
     party_view = prepare_top_parties_for_report(top_parties, limit=10, company_name=company_name)
     payers = party_view["payers"]
@@ -6009,36 +6011,49 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     party_headers = ["Rank", "Party Name", "Total Amount", "Transactions", "Related Party"] + monthly_bd
     party_num_cols = {3, *range(6, 6 + len(monthly_bd))}
 
-    ws3.cell(row=1, column=1, value="TOP PAYERS (Income Sources)").font = bold_font
-    write_headers(ws3, 2, party_headers, header_fill_green)
-    for row_idx, party in enumerate(payers, 3):
+    # Start from row 3 to leave space for title
+    start_row = 3
+
+    # TOP PAYERS (Income Sources)
+    ws3.cell(row=start_row, column=1, value="TOP PAYERS (Income Sources)").font = bold_font
+    row = start_row + 1
+    write_headers(ws3, row, party_headers, header_fill_green)
+    row += 1
+
+    for party in payers:
         lookup = {mb.get("month"): safe_float(mb.get("amount")) for mb in (party.get("monthly_breakdown") or []) if isinstance(mb, dict)}
         values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
         values.extend(lookup.get(month, 0) for month in monthly_bd)
-        write_values(ws3, row_idx, values, number_cols=party_num_cols, credit_cols=party_num_cols)
-        ws3.cell(row=row_idx, column=1).number_format = "0"
-        ws3.cell(row=row_idx, column=4).number_format = "0"
-        ws3.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        write_values(ws3, row, values, number_cols=party_num_cols, credit_cols=party_num_cols)
+        ws3.cell(row=row, column=1).number_format = "0"
+        ws3.cell(row=row, column=4).number_format = "0"
+        ws3.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        for col in range(3, 12):  # from column 3 to 11
-            ws3.cell(row=row_idx, column=col).alignment = alignment
-    auto_width(ws3)
+        for col in range(3, 3 + len(party_headers)):
+            ws3.cell(row=row, column=col).alignment = alignment
+        row += 1
 
-    row = len(payers) + 5
+    row = row + 2
+
+    # TOP PAYEES (Payment Destinations)
     ws3.cell(row=row, column=1, value="TOP PAYEES (Payment Destinations)").font = bold_font
     row += 1
     write_headers(ws3, row, party_headers, header_fill_red)
-    for row_idx, party in enumerate(payees, row + 1):
+    row += 1
+
+    for party in payees:
         lookup = {mb.get("month"): safe_float(mb.get("amount")) for mb in (party.get("monthly_breakdown") or []) if isinstance(mb, dict)}
         values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
         values.extend(lookup.get(month, 0) for month in monthly_bd)
-        write_values(ws3, row_idx, values, number_cols=party_num_cols, debit_cols=party_num_cols)
-        ws3.cell(row=row_idx, column=1).number_format = "0"
-        ws3.cell(row=row_idx, column=4).number_format = "0"
-        ws3.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        write_values(ws3, row, values, number_cols=party_num_cols, debit_cols=party_num_cols)
+        ws3.cell(row=row, column=1).number_format = "0"
+        ws3.cell(row=row, column=4).number_format = "0"
+        ws3.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        for col in range(3, 12):  # from column 3 to 11
-            ws3.cell(row=row_idx, column=col).alignment = alignment
+        for col in range(3, 3 + len(party_headers)):
+            ws3.cell(row=row, column=col).alignment = alignment
+        row += 1
+
     auto_width(ws3)
     ws3.column_dimensions["A"].width = 8
     ws3.column_dimensions["B"].width = 50
@@ -6388,9 +6403,9 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # Risk Signals
     ws7 = wb.create_sheet("Risk Signals")
-    ws7.cell(row=1, column=1, value="RISK SIGNALS").font = title_font
+    ws7.cell(row=1, column=1, value="RISK SIGNALS ANALYSIS").font = title_font
     risk_headers = ["No.", "Signal", "Detected", "Remarks"]
-    write_headers(ws7, 1, risk_headers)
+    write_headers(ws7, 3, risk_headers)  # Changed from 1 to 3 to leave space for title
     risk_df = build_risk_signals_dataframe_for_excel(flags, consolidated, statutory_compliance, monthly_analysis, report_data)
     for row_idx, item in enumerate(risk_df.to_dict(orient="records"), 2):
         values = [item.get("#"), item.get("Signal"), item.get("Detected"), item.get("Remarks")]
