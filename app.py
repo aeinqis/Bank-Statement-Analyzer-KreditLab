@@ -3744,6 +3744,253 @@ def build_canonical_counterparty_ledger_rows(cp_ledger: dict) -> List[dict]:
     return rows
 
 
+def _report_party_display_name(party) -> str:
+    if isinstance(party, dict):
+        raw_name = party.get("name") or party.get("party_name") or ""
+    else:
+        raw_name = "" if party is None else str(party)
+    return re.sub(r"\s+", " ", str(raw_name).strip())
+
+
+def _report_party_relationship(party) -> str:
+    if not isinstance(party, dict):
+        return ""
+    return re.sub(r"\s+", " ", str(party.get("relationship") or "").strip())
+
+
+def _matched_report_related_party_name(counterparty_name, description, related_parties) -> str:
+    related_party_names = [
+        name for name in (_report_party_display_name(party) for party in (related_parties or []))
+        if name
+    ]
+    cp_upper = str(counterparty_name or "").upper()
+    desc_upper = str(description or "").upper()
+    matches = []
+    for name in related_party_names:
+        name_upper = name.upper()
+        if name_upper in cp_upper or name_upper in desc_upper:
+            matches.append(name)
+    if not matches:
+        return ""
+    return max(matches, key=lambda value: (len(value), value.casefold()))
+
+
+def _own_party_display_name_for_report(raw_party_name, company_name: str = "") -> str:
+    fallbacks = {"UNKNOWN", "UNKNOWN PARTY", "COMPANY", "OWN PARTY", "OWN PARTY (SELF)", "SELF"}
+    for value in (company_name, raw_party_name):
+        name = re.sub(
+            r"\s*\(\s*OWN[\s\-_]?PARTY\s*\)\s*",
+            " ",
+            str(value or ""),
+            flags=re.I,
+        )
+        name = re.sub(r"\s+", " ", name).strip()
+        if name and name.upper() not in fallbacks:
+            return name
+    return "Own Party (Self)"
+
+
+def _report_transaction_amount(txn: dict) -> float:
+    amount = safe_float(txn.get("amount", 0))
+    if amount:
+        return amount
+    credit = safe_float(txn.get("credit", 0))
+    debit = safe_float(txn.get("debit", 0))
+    return credit if credit else debit
+
+
+def _report_transaction_side(txn: dict) -> str:
+    raw_type = str(txn.get("type") or txn.get("transaction_type") or "").upper()
+    if "CR" in raw_type or "CREDIT" in raw_type:
+        return "CREDIT"
+    if "DR" in raw_type or "DEBIT" in raw_type:
+        return "DEBIT"
+    if safe_float(txn.get("credit", 0)) > 0:
+        return "CREDIT"
+    if safe_float(txn.get("debit", 0)) > 0:
+        return "DEBIT"
+    return "DEBIT" if _report_transaction_amount(txn) < 0 else "CREDIT"
+
+
+def build_own_related_party_groups_for_report(
+    own_related,
+    related_parties=None,
+    company_name: str = "",
+) -> List[dict]:
+    """Group C01-C04 rows the same way the HTML Own/RP report presents them."""
+    if isinstance(own_related, list):
+        txns = own_related
+    elif isinstance(own_related, dict):
+        txns = own_related.get("transactions", []) or []
+    else:
+        txns = []
+
+    groups = {}
+    for txn in txns:
+        if not isinstance(txn, dict):
+            continue
+        raw_party_name = str(txn.get("party_name") or "Unknown Party").strip() or "Unknown Party"
+        party_type = str(txn.get("party_type") or "").strip()
+        party_type_upper = party_type.upper()
+
+        if party_type_upper.startswith("OWN"):
+            badge_type = "OP"
+            party_name = _own_party_display_name_for_report(raw_party_name, company_name)
+        else:
+            badge_type = "RP"
+            party_name = (
+                _matched_report_related_party_name(raw_party_name, txn.get("description"), related_parties)
+                or raw_party_name
+            )
+
+        key = (party_name.casefold(), badge_type, party_name)
+        group = groups.setdefault(
+            key,
+            {
+                "party_name": party_name,
+                "party_type": party_type or ("Own Party" if badge_type == "OP" else "Related Party"),
+                "badge_type": badge_type,
+                "transactions": [],
+                "credits": 0.0,
+                "debits": 0.0,
+                "credit_count": 0,
+                "debit_count": 0,
+            },
+        )
+
+        amount = _report_transaction_amount(txn)
+        txn_type = _report_transaction_side(txn)
+        if txn_type == "CREDIT":
+            group["credits"] += amount
+            group["credit_count"] += 1
+        elif txn_type == "DEBIT":
+            group["debits"] += amount
+            group["debit_count"] += 1
+
+        txn_copy = dict(txn)
+        txn_copy["party_name"] = party_name
+        txn_copy["party_type"] = group["party_type"]
+        txn_copy["type"] = txn_type
+        txn_copy["amount"] = amount
+        group["transactions"].append(txn_copy)
+
+    def _group_sort_key(group):
+        if group["badge_type"] == "OP":
+            return (0, group["party_name"].casefold())
+        return (1, group["party_name"].casefold())
+
+    for group in groups.values():
+        group["credits"] = round(group["credits"], 2)
+        group["debits"] = round(group["debits"], 2)
+
+    return sorted(groups.values(), key=_group_sort_key)
+
+
+def _counterparty_row_matches_related_party(cp: dict, related_party_name: str) -> bool:
+    target = str(related_party_name or "").strip().upper()
+    if not target:
+        return False
+    names = [
+        cp.get("counterparty_name"),
+        cp.get("counterparty"),
+        *(cp.get("raw_names", []) or []),
+    ]
+    for name in names:
+        candidate = str(name or "").strip().upper()
+        if candidate and (candidate == target or target in candidate or candidate in target):
+            return True
+    return False
+
+
+def _merge_counterparty_rows_for_related_party(cp_rows: List[dict], related_party_name: str) -> dict:
+    matches = [
+        cp for cp in (cp_rows or [])
+        if isinstance(cp, dict) and _counterparty_row_matches_related_party(cp, related_party_name)
+    ]
+    return {
+        "total_credits": round(sum(safe_float(cp.get("total_credits", cp.get("total_credit", 0))) for cp in matches), 2),
+        "total_debits": round(sum(safe_float(cp.get("total_debits", cp.get("total_debit", 0))) for cp in matches), 2),
+        "transaction_count": sum(
+            int(safe_float(cp.get("transaction_count") or len(cp.get("transactions", []) or [])))
+            for cp in matches
+        ),
+    }
+
+
+def build_related_party_summary_rows_for_report(
+    related_parties,
+    own_related,
+    cp_rows: List[dict] | None = None,
+    company_name: str = "",
+) -> List[dict]:
+    """Return related-party totals for Excel/HTML exports using C03-C04 rows first."""
+    groups = [
+        group for group in build_own_related_party_groups_for_report(
+            own_related,
+            related_parties=related_parties,
+            company_name=company_name,
+        )
+        if group.get("badge_type") == "RP"
+    ]
+
+    def _matching_group(name: str):
+        target = str(name or "").strip().upper()
+        if not target:
+            return None
+        exact = next((g for g in groups if str(g.get("party_name", "")).upper() == target), None)
+        if exact:
+            return exact
+        matches = [
+            g for g in groups
+            if target in str(g.get("party_name", "")).upper()
+            or str(g.get("party_name", "")).upper() in target
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda g: (len(str(g.get("party_name", ""))), str(g.get("party_name", "")).casefold()))
+
+    rows = []
+    seen = set()
+    for party in related_parties or []:
+        name = _report_party_display_name(party)
+        if not name:
+            continue
+        relationship = _report_party_relationship(party)
+        group = _matching_group(name)
+        fallback = {} if group else _merge_counterparty_rows_for_related_party(cp_rows or [], name)
+        row = {
+            "relationship": relationship,
+            "name": name,
+            "total_credits": group.get("credits", 0) if group else fallback.get("total_credits", 0),
+            "total_debits": group.get("debits", 0) if group else fallback.get("total_debits", 0),
+            "transaction_count": (
+                len(group.get("transactions", []) or [])
+                if group
+                else fallback.get("transaction_count", 0)
+            ),
+            "transactions": group.get("transactions", []) if group else [],
+        }
+        rows.append(row)
+        seen.add(name.upper())
+
+    for group in groups:
+        group_name = str(group.get("party_name") or "").strip()
+        if group_name and group_name.upper() not in seen:
+            rows.append(
+                {
+                    "relationship": "",
+                    "name": group_name,
+                    "total_credits": group.get("credits", 0),
+                    "total_debits": group.get("debits", 0),
+                    "transaction_count": len(group.get("transactions", []) or []),
+                    "transactions": group.get("transactions", []) or [],
+                }
+            )
+            seen.add(group_name.upper())
+
+    return rows
+
+
 _PARTY_GHOST_STOPWORDS = {
     "TRANSFER", "PAYMENT", "IBG", "IB2G", "IBFT", "IBK", "CR", "DR", "CREDIT", "DEBIT",
     "TO", "FR", "FROM", "A/C", "C/A", "ACCOUNT", "ACCT", "INTER", "BANK", "BANKING", "INTO",
@@ -6092,29 +6339,41 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws5.column_dimensions["E"].width = 16  # Total Debits
     ws5.column_dimensions["F"].width = 14  # Transactions
 
-    cp_by_name = {str(cp.get("counterparty_name", "")).strip().upper(): cp for cp in cp_sorted if cp.get("counterparty_name")}
     rp_row_start = row + 1
     related_parties = report_info.get("related_parties", []) or []
+    related_party_rows = build_related_party_summary_rows_for_report(
+        related_parties,
+        own_related,
+        cp_rows=cp_sorted,
+        company_name=company_name,
+    )
+    own_related_display_transactions = [
+        txn
+        for group in build_own_related_party_groups_for_report(
+            own_related,
+            related_parties=related_parties,
+            company_name=company_name,
+        )
+        for txn in (group.get("transactions", []) or [])
+    ]
 
-    if related_parties:
-        for rp_idx, rp in enumerate(related_parties):
+    if related_party_rows:
+        for rp_idx, rp in enumerate(related_party_rows):
             row = rp_row_start + rp_idx
-            relationship = rp.get("relationship", "") if isinstance(rp, dict) else ""
-            name = (rp.get("name") or rp.get("party_name") if isinstance(rp, dict) else str(rp)) or ""
-            match = cp_by_name.get(name.strip().upper(), {})
             # 6 values: No., Relationship, Name, Total Credits, Total Debits, Transactions
             values = [
                 rp_idx + 1,  # No. column - integer
-                relationship,
-                name,
-                match.get("total_credits"), 
-                match.get("total_debits"), 
-                match.get("transaction_count")
+                rp.get("relationship", ""),
+                rp.get("name", ""),
+                rp.get("total_credits", 0),
+                rp.get("total_debits", 0),
+                rp.get("transaction_count", 0),
             ]
-            write_values(ws5, row, values, number_cols={4, 5}, credit_cols={4}, debit_cols={5})
+            write_values(ws5, row, values, number_cols={4, 5, 6}, credit_cols={4}, debit_cols={5})
             
             # Format the No. column as integer (not float)
             ws5.cell(row=row, column=1).number_format = "0"
+            ws5.cell(row=row, column=6).number_format = "0"
             
             # Center align ALL columns for Related Parties
             for col in range(1, 7):  # Columns A-F
@@ -6123,7 +6382,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             # Special: Make Name column left-aligned for readability
             ws5.cell(row=row, column=3).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
             
-        row = rp_row_start + len(related_parties)
+        row = rp_row_start + len(related_party_rows)
     else:
         row = rp_row_start
         ws5.cell(row=row, column=1, value="No related parties defined.")
@@ -6149,7 +6408,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws5.column_dimensions["E"].width = 18  # Party Type
     ws5.column_dimensions["F"].width = 40  # Party Name - WIDER for counterparty summary
 
-    for idx, txn in enumerate(own_related.get("transactions", []) or [], 1):
+    for idx, txn in enumerate(own_related_display_transactions or own_related.get("transactions", []) or [], 1):
         row += 1
         txn_type = (txn.get("type") or "").upper()
         values = [
