@@ -6291,14 +6291,13 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     write_headers(ws2, row, basic_headers, header_fill)
     row += 1
 
-    # Set widths for basic summary columns (added Total Txn column)
+    # Set widths for basic summary columns
     basic_widths = [14, 18, 20, 26, 16, 16, 16, 16, 16, 12, 12, 14]
     for idx, width in enumerate(basic_widths, 1):
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
     # Write basic data
     total_rows = len(monthly_analysis)
-    total_row_start = row
     grand_total_credits = 0
     grand_total_debits = 0
     grand_net_credits = 0
@@ -6346,7 +6345,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         grand_debit_count += int(debit_count or 0)
         grand_total_txn += int(total_txn or 0)
 
-    row = idx + 2
+    row = idx + 1  # CHANGED: was idx + 2, now idx + 1 (no spacing)
 
     # Add Total row for Transaction Summary
     ws2.cell(row=row, column=1, value="TOTAL").font = bold_font
@@ -6354,11 +6353,11 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws2.cell(row=row, column=1).border = thin_border
 
     total_values = [
-        None,  # Month - leave blank
-        None,  # Bank - leave blank
-        None,  # Account No - leave blank
-        None,  # Opening Balance - leave blank
-        None,  # Closing Balance - leave blank
+        "-",  # Month - use dash
+        "-",  # Bank - use dash
+        "-",  # Account No - use dash
+        "-",  # Opening Balance - use dash
+        "-",  # Closing Balance - use dash
         grand_total_credits,
         grand_total_debits,
         grand_net_credits,
@@ -6369,11 +6368,12 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ]
 
     for col_idx, value in enumerate(total_values, 1):
-        if value is not None:
-            cell = ws2.cell(row=row, column=col_idx, value=value)
-            cell.border = thin_border
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            
+        cell = ws2.cell(row=row, column=col_idx, value=value)
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Skip formatting for dash values
+        if value != "-":
             # Apply number formatting
             if col_idx in [6, 7, 8, 9]:  # Amount columns
                 cell.number_format = "#,##0.00"
@@ -6387,7 +6387,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             # Apply alternating fill for total row
             cell.fill = alt_row_fill
 
-    row += 2
+    row += 2  # Now this is 2 rows after TOTAL (spacing before next section)
 
     # ============================================================
     # SECTION 2: EXCLUSIONS (What's removed from Gross)
@@ -6429,19 +6429,20 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         for i in range(2, 9):  # Skip Month (column 1)
             exclusion_totals[i-2] += safe_float(values[i-1] or 0)
 
-    row = idx + 2
+    row = idx + 1  # CHANGED: was idx + 2, now idx + 1 (no spacing)
 
     # Add Total row for Exclusions
     ws2.cell(row=row, column=1, value="TOTAL").font = bold_font
     ws2.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     ws2.cell(row=row, column=1).border = thin_border
 
-    exclusion_total_values = [None] + exclusion_totals  # None for Month column
+    exclusion_total_values = ["-"] + exclusion_totals  # "-" for Month column
     for col_idx, value in enumerate(exclusion_total_values, 1):
-        if value is not None:
-            cell = ws2.cell(row=row, column=col_idx, value=value)
-            cell.border = thin_border
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell = ws2.cell(row=row, column=col_idx, value=value)
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        if value != "-":
             cell.number_format = "#,##0.00"
             # Apply color coding
             if col_idx in [2, 4, 6, 7, 8]:  # Credit columns
@@ -6450,7 +6451,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                 cell.font = debit_font
             cell.fill = alt_row_fill
 
-    row += 2
+    row += 2  # Now this is 2 rows after TOTAL (spacing before next section)
 
     # ============================================================
     # SECTION 3: CASH & CHEQUE ACTIVITY
@@ -6458,7 +6459,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws2.cell(row=row, column=1, value="CASH & CHEQUE ACTIVITY").font = bold_font
     row += 1
 
-    cash_headers = ["Month", "Cash Dep Count", "Cash Dep Amt", "Cash Wdl Count", "Cash Wdl Amt",
+    cash_headers = ["Month", "Cash Dep Count", "Cash Dep Amt", "Cash Withd Count", "Cash Withd Amt",
                     "Chq Dep Count", "Chq Dep Amt", "Chq Issue Count", "Chq Issue Amt"]
     write_headers(ws2, row, cash_headers, header_fill_green)
     row += 1
@@ -6497,20 +6498,20 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         for i in range(2, 10):  # Skip Month (column 1)
             cash_totals[i-2] += safe_float(values[i-1] or 0)
 
-    row = idx + 2
+    row = idx + 1  # CHANGED: was idx + 2, now idx + 1 (no spacing)
 
     # Add Total row for Cash & Cheque Activity
     ws2.cell(row=row, column=1, value="TOTAL").font = bold_font
     ws2.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     ws2.cell(row=row, column=1).border = thin_border
 
-    cash_total_values = [None] + cash_totals  # None for Month column
+    cash_total_values = ["-"] + cash_totals  # "-" for Month column
     for col_idx, value in enumerate(cash_total_values, 1):
-        if value is not None:
-            cell = ws2.cell(row=row, column=col_idx, value=value)
-            cell.border = thin_border
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            
+        cell = ws2.cell(row=row, column=col_idx, value=value)
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        if value != "-":
             # Apply formatting
             if col_idx in [3, 5, 7, 9]:  # Amount columns
                 cell.number_format = "#,##0.00"
@@ -6523,7 +6524,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             
             cell.fill = alt_row_fill
 
-    row += 2
+    row += 2  # Now this is 2 rows after TOTAL (spacing before next section)
 
     # ============================================================
     # SECTION 4: STATUTORY PAYMENTS
