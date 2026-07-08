@@ -6287,17 +6287,31 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     basic_headers = ["Month", "Bank", "Account No", "Opening Balance", "Closing Balance", 
                     "Gross Credits", "Gross Debits", "Net Credits", "Net Debits", 
-                    "Credit Count", "Debit Count"]
+                    "Credit Count", "Debit Count", "Total Txn"]
     write_headers(ws2, row, basic_headers, header_fill)
     row += 1
 
-    # Set widths for basic summary columns
-    basic_widths = [14, 18, 20, 26, 16, 16, 16, 16, 16, 12, 12]
+    # Set widths for basic summary columns (added Total Txn column)
+    basic_widths = [14, 18, 20, 26, 16, 16, 16, 16, 16, 12, 12, 14]
     for idx, width in enumerate(basic_widths, 1):
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
     # Write basic data
+    total_rows = len(monthly_analysis)
+    total_row_start = row
+    grand_total_credits = 0
+    grand_total_debits = 0
+    grand_net_credits = 0
+    grand_net_debits = 0
+    grand_credit_count = 0
+    grand_debit_count = 0
+    grand_total_txn = 0
+
     for idx, item in enumerate(monthly_analysis, row):
+        credit_count = item.get("credit_count", 0)
+        debit_count = item.get("debit_count", 0)
+        total_txn = credit_count + debit_count
+        
         values = [
             item.get("month"), 
             item.get("bank_name", ""), 
@@ -6308,21 +6322,72 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             item.get("gross_debits"), 
             item.get("net_credits"), 
             item.get("net_debits"),
-            item.get("credit_count"), 
-            item.get("debit_count")
+            credit_count,
+            debit_count,
+            total_txn
         ]
-        write_values(ws2, idx, values, number_cols={4, 5, 6, 7, 8, 9}, 
+        write_values(ws2, idx, values, number_cols={4, 5, 6, 7, 8, 9, 12}, 
                     credit_cols={6, 8}, debit_cols={7, 9})
         
         # Center align ALL columns for data rows
-        for col in range(1, 12):
+        for col in range(1, 13):
             ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         
         # Format count columns as integers
-        for count_col in [10, 11]:
+        for count_col in [10, 11, 12]:
             ws2.cell(row=idx, column=count_col).number_format = "0"
+        
+        # Accumulate grand totals
+        grand_total_credits += safe_float(item.get("gross_credits", 0))
+        grand_total_debits += safe_float(item.get("gross_debits", 0))
+        grand_net_credits += safe_float(item.get("net_credits", 0))
+        grand_net_debits += safe_float(item.get("net_debits", 0))
+        grand_credit_count += int(credit_count or 0)
+        grand_debit_count += int(debit_count or 0)
+        grand_total_txn += int(total_txn or 0)
 
     row = idx + 2
+
+    # Add Total row for Transaction Summary
+    ws2.cell(row=row, column=1, value="TOTAL").font = bold_font
+    ws2.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws2.cell(row=row, column=1).border = thin_border
+
+    total_values = [
+        None,  # Month - leave blank
+        None,  # Bank - leave blank
+        None,  # Account No - leave blank
+        None,  # Opening Balance - leave blank
+        None,  # Closing Balance - leave blank
+        grand_total_credits,
+        grand_total_debits,
+        grand_net_credits,
+        grand_net_debits,
+        grand_credit_count,
+        grand_debit_count,
+        grand_total_txn
+    ]
+
+    for col_idx, value in enumerate(total_values, 1):
+        if value is not None:
+            cell = ws2.cell(row=row, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Apply number formatting
+            if col_idx in [6, 7, 8, 9]:  # Amount columns
+                cell.number_format = "#,##0.00"
+                if col_idx in [6, 8]:  # Credits
+                    cell.font = credit_font
+                else:  # Debits
+                    cell.font = debit_font
+            elif col_idx in [10, 11, 12]:  # Count columns
+                cell.number_format = "0"
+            
+            # Apply alternating fill for total row
+            cell.fill = alt_row_fill
+
+    row += 2
 
     # ============================================================
     # SECTION 2: EXCLUSIONS (What's removed from Gross)
@@ -6335,12 +6400,13 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     write_headers(ws2, row, exclusion_headers, header_fill_orange)
     row += 1
 
-    # Set widths for exclusion columns - make Loan Disbursement wider
-    excl_widths = [14, 18, 18, 22, 18, 18, 22, 18]  # "Loan Disbursement Cr" needs wider
+    # Set widths for exclusion columns
+    excl_widths = [14, 18, 18, 22, 18, 18, 22, 18]
     for idx, width in enumerate(excl_widths, 1):
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
     # Write exclusion data
+    exclusion_totals = [0.0] * 7  # 7 columns to sum (skip Month)
     for idx, item in enumerate(monthly_analysis, row):
         values = [
             item.get("month"),
@@ -6358,8 +6424,33 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         # Center align ALL columns for data rows
         for col in range(1, 9):
             ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Accumulate totals
+        for i in range(2, 9):  # Skip Month (column 1)
+            exclusion_totals[i-2] += safe_float(values[i-1] or 0)
 
     row = idx + 2
+
+    # Add Total row for Exclusions
+    ws2.cell(row=row, column=1, value="TOTAL").font = bold_font
+    ws2.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws2.cell(row=row, column=1).border = thin_border
+
+    exclusion_total_values = [None] + exclusion_totals  # None for Month column
+    for col_idx, value in enumerate(exclusion_total_values, 1):
+        if value is not None:
+            cell = ws2.cell(row=row, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.number_format = "#,##0.00"
+            # Apply color coding
+            if col_idx in [2, 4, 6, 7, 8]:  # Credit columns
+                cell.font = credit_font
+            elif col_idx in [3, 5]:  # Debit columns
+                cell.font = debit_font
+            cell.fill = alt_row_fill
+
+    row += 2
 
     # ============================================================
     # SECTION 3: CASH & CHEQUE ACTIVITY
@@ -6378,6 +6469,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
     # Write cash/cheque data
+    cash_totals = [0.0] * 8  # 8 columns to sum (skip Month)
     for idx, item in enumerate(monthly_analysis, row):
         values = [
             item.get("month"),
@@ -6400,8 +6492,38 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         # Format count columns as integers
         for count_col in [2, 4, 6, 8]:
             ws2.cell(row=idx, column=count_col).number_format = "0"
+        
+        # Accumulate totals
+        for i in range(2, 10):  # Skip Month (column 1)
+            cash_totals[i-2] += safe_float(values[i-1] or 0)
 
     row = idx + 2
+
+    # Add Total row for Cash & Cheque Activity
+    ws2.cell(row=row, column=1, value="TOTAL").font = bold_font
+    ws2.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws2.cell(row=row, column=1).border = thin_border
+
+    cash_total_values = [None] + cash_totals  # None for Month column
+    for col_idx, value in enumerate(cash_total_values, 1):
+        if value is not None:
+            cell = ws2.cell(row=row, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            # Apply formatting
+            if col_idx in [3, 5, 7, 9]:  # Amount columns
+                cell.number_format = "#,##0.00"
+                if col_idx in [3, 5, 7]:  # Credit amounts
+                    cell.font = credit_font
+                else:  # Debit amounts
+                    cell.font = debit_font
+            elif col_idx in [2, 4, 6, 8]:  # Count columns
+                cell.number_format = "0"
+            
+            cell.fill = alt_row_fill
+
+    row += 2
 
     # ============================================================
     # SECTION 4: STATUTORY PAYMENTS
@@ -6414,12 +6536,13 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     write_headers(ws2, row, statutory_headers, header_fill_purple)
     row += 1
 
-    # Set widths for statutory columns - make Loan Repayment wider
-    stat_widths = [14, 16, 16, 18, 16, 16, 22, 16, 16]  # "Loan Repayment Dr" needs wider
+    # Set widths for statutory columns
+    stat_widths = [14, 16, 16, 18, 16, 16, 22, 16, 16]
     for idx, width in enumerate(stat_widths, 1):
         ws2.column_dimensions[get_column_letter(idx)].width = width
 
     # Write statutory data
+    statutory_totals = [0.0] * 8  # 8 columns to sum (skip Month)
     for idx, item in enumerate(monthly_analysis, row):
         values = [
             item.get("month"),
@@ -6438,8 +6561,37 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         # Center align ALL columns for data rows
         for col in range(1, 10):
             ws2.cell(row=idx, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Accumulate totals
+        for i in range(2, 10):  # Skip Month (column 1)
+            statutory_totals[i-2] += safe_float(values[i-1] or 0)
 
     row = idx + 2
+
+    # Add Total row for Statutory Payments
+    ws2.cell(row=row, column=1, value="TOTAL").font = bold_font
+    ws2.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws2.cell(row=row, column=1).border = thin_border
+
+    statutory_total_values = [None] + statutory_totals  # None for Month column
+    for col_idx, value in enumerate(statutory_total_values, 1):
+        if value is not None:
+            cell = ws2.cell(row=row, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.number_format = "#,##0.00"
+            
+            # Apply color coding
+            if col_idx in [8, 9]:  # High Value Cr, Round Figure Cr - Credits
+                cell.font = credit_font
+            elif col_idx in [7]:  # Loan Repayment Dr - Debit
+                cell.font = debit_font
+            elif col_idx in [3, 4, 5]:  # EPF, SOCSO, Tax - Debits
+                cell.font = debit_font
+            
+            cell.fill = alt_row_fill
+
+    row += 2
 
     # ============================================================
     # SECTION 5: RETURNED CHEQUES
@@ -6458,6 +6610,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         for idx, width in enumerate(ret_widths, 1):
             ws2.column_dimensions[get_column_letter(idx)].width = width
         
+        # Write returned cheques data
+        ret_totals = [0.0] * 4  # 4 columns to sum (skip Month)
         for idx, item in enumerate(monthly_analysis, row):
             values = [
                 item.get("month"),
@@ -6475,8 +6629,34 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             # Format count columns as integers
             for count_col in [2, 4]:
                 ws2.cell(row=idx, column=count_col).number_format = "0"
+            
+            # Accumulate totals
+            for i in range(2, 6):  # Skip Month (column 1)
+                ret_totals[i-2] += safe_float(values[i-1] or 0)
         
         row = idx + 2
+        
+        # Add Total row for Returned Cheques
+        ws2.cell(row=row, column=1, value="TOTAL").font = bold_font
+        ws2.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws2.cell(row=row, column=1).border = thin_border
+        
+        ret_total_values = [None] + ret_totals  # None for Month column
+        for col_idx, value in enumerate(ret_total_values, 1):
+            if value is not None:
+                cell = ws2.cell(row=row, column=col_idx, value=value)
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                
+                if col_idx in [3, 5]:  # Amount columns
+                    cell.number_format = "#,##0.00"
+                    cell.font = debit_font
+                elif col_idx in [2, 4]:  # Count columns
+                    cell.number_format = "0"
+                
+                cell.fill = alt_row_fill
+        
+        row += 2
 
     # ============================================================
     # SECTION 6: EOD BALANCE ANALYSIS
@@ -7030,54 +7210,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     loan_repay_total = round(sum(_fac_amount(t) for t in loan_repay), 2)
 
     ws6.cell(row=1, column=1, value="FACILITIES").font = title_font
-
-    # ============================================================
-    # SUMMARY TABLE - Moved to right side (Column H, Row 3)
-    # ============================================================
-    summary_labels = ["Total Disbursements (RM)", "Total Repayments (RM)", "Disbursement Txns", "Repayment Txns"]
-    summary_values = [loan_disb_total, loan_repay_total, len(loan_disb), len(loan_repay)]
-
-    # Write the summary table at Column H (column 8), starting at row 3
-    summary_start_col = 8  # Column H
-    summary_start_row = 3
-
-    # Write the title for the summary table
-    ws6.cell(row=summary_start_row, column=summary_start_col, value="SUMMARY").font = bold_font
-    summary_start_row += 1
-
-    # Write data rows vertically
-    for idx, (label, value) in enumerate(zip(summary_labels, summary_values)):
-        row = summary_start_row + idx
-        
-        # Write the label in column H - Bold, Left aligned, Orange background
-        label_cell = ws6.cell(row=row, column=summary_start_col, value=label)
-        label_cell.font = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
-        label_cell.fill = header_fill_orange  # Orange background
-        label_cell.border = thin_border
-        label_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-        
-        # Write the value in column I - Center aligned, Orange background
-        value_cell = ws6.cell(row=row, column=summary_start_col + 1, value=value)
-        value_cell.border = thin_border
-        value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        
-        # Apply number formatting for amounts
-        if idx in [0, 1]:  # Total Disbursements and Total Repayments
-            value_cell.number_format = "#,##0.00"
-        else:  # Counts - format as integer
-            value_cell.number_format = "0"
-        
-        # Color coding: Credits (Disbursements) in green, Debits (Repayments) in red
-        if idx == 0:  # Total Disbursements - Credit
-            value_cell.font = credit_font
-        elif idx == 1:  # Total Repayments - Debit
-            value_cell.font = debit_font
-        else:  # Counts - default black font
-            value_cell.font = Font(name="Calibri", size=11)
-
-    # Set column widths for the summary table
-    ws6.column_dimensions[get_column_letter(summary_start_col)].width = 25   # Column H - Labels
-    ws6.column_dimensions[get_column_letter(summary_start_col + 1)].width = 18   # Column I - Values
 
     # ============================================================
     # DISBURSEMENTS TABLE (Left side, starting at Column A)
