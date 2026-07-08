@@ -6383,9 +6383,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                     cell.font = debit_font
             elif col_idx in [10, 11, 12]:  # Count columns
                 cell.number_format = "0"
-            
-            # Apply alternating fill for total row
-            cell.fill = alt_row_fill
 
     row += 2  # Now this is 2 rows after TOTAL (spacing before next section)
 
@@ -6447,8 +6444,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             if col_idx in [2, 4, 6, 7, 8]:  # Credit columns
                 cell.font = credit_font
             elif col_idx in [3, 5]:  # Debit columns
-                cell.font = debit_font
-            cell.fill = alt_row_fill
+                cell.font = debit_font 
 
     row += 2
 
@@ -6519,9 +6515,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                 else:  # Debit amounts
                     cell.font = debit_font
             elif col_idx in [2, 4, 6, 8]:  # Count columns
-                cell.number_format = "0"
-            
-            cell.fill = alt_row_fill
+                cell.number_format = "0" 
 
     row += 2
 
@@ -6588,8 +6582,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                 cell.font = debit_font
             elif col_idx in [3, 4, 5]:  # EPF, SOCSO, Tax - Debits
                 cell.font = debit_font
-            
-            cell.fill = alt_row_fill
 
     row += 2
 
@@ -6653,8 +6645,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
                     cell.font = debit_font
                 elif col_idx in [2, 4]:  # Count columns
                     cell.number_format = "0"
-                
-                cell.fill = alt_row_fill
         
         row += 2
 
