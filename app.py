@@ -6675,8 +6675,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws5 = wb.create_sheet("Counterparty")
     ws5.cell(row=1, column=1, value="COUNTERPARTY TRANSACTIONS").font = title_font
 
-    # ============================================================
-    # OWN PARTY TABLE (Added above Related Parties)
+   # ============================================================
+    # OWN PARTY TABLE (Added above Related Parties - Single row only)
     # ============================================================
     row = 3
     ws5.cell(row=row, column=1, value="OWN PARTY").font = bold_font
@@ -6685,6 +6685,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Own Party headers - columns A-F (No., Relationship, Name, Total Credits, Total Debits, Transactions)
     own_party_headers = ["No.", "Relationship", "Name", "Total Credits", "Total Debits", "Transactions"]
     write_headers(ws5, row, own_party_headers, header_fill_blue)  # Using blue for Own Party
+    row += 1
 
     # Set custom column widths for Own Party section
     ws5.column_dimensions["A"].width = 6   # No.
@@ -6694,78 +6695,45 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws5.column_dimensions["E"].width = 16  # Total Debits
     ws5.column_dimensions["F"].width = 14  # Transactions
 
-    own_party_row_start = row + 1
+    # Calculate Own Party totals from own_related transactions
+    own_party_total_credits = 0.0
+    own_party_total_debits = 0.0
+    own_party_transaction_count = 0
+    own_party_name = report_info.get("company_name", "Own Party")
 
-    # Build Own Party data from own_related transactions
-    own_party_transactions = []
     for txn in own_related.get("transactions", []) or []:
         if str(txn.get("party_type", "")).upper().startswith("OWN"):
-            own_party_transactions.append(txn)
-
-    # Group Own Party transactions by party name
-    own_party_groups = {}
-    for txn in own_party_transactions:
-        party_name = txn.get("party_name", "Unknown Party")
-        if not party_name or party_name.upper() in ["UNKNOWN", "UNKNOWN PARTY", "OWN PARTY", "OWN PARTY (SELF)", "SELF"]:
-            # Try to get company name
-            party_name = report_info.get("company_name", "Own Party")
-        
-        key = party_name.casefold()
-        if key not in own_party_groups:
-            own_party_groups[key] = {
-                "name": party_name,
-                "relationship": "Own",
-                "total_credits": 0.0,
-                "total_debits": 0.0,
-                "transaction_count": 0,
-                "transactions": []
-            }
-        
-        group = own_party_groups[key]
-        amount = safe_float(txn.get("amount", 0))
-        txn_type = str(txn.get("type", "")).upper()
-        
-        if txn_type == "CREDIT":
-            group["total_credits"] += amount
-        else:
-            group["total_debits"] += amount
-        
-        group["transaction_count"] += 1
-        group["transactions"].append(txn)
-
-    own_party_rows = list(own_party_groups.values())
-
-    if own_party_rows:
-        for op_idx, op in enumerate(own_party_rows):
-            row = own_party_row_start + op_idx
-            values = [
-                op_idx + 1,  # No. column - integer
-                op.get("relationship", "Own"),
-                op.get("name", ""),
-                op.get("total_credits", 0),
-                op.get("total_debits", 0),
-                op.get("transaction_count", 0),
-            ]
-            write_values(ws5, row, values, number_cols={4, 5, 6}, credit_cols={4}, debit_cols={5})
+            amount = safe_float(txn.get("amount", 0))
+            txn_type = str(txn.get("type", "")).upper()
             
-            # Format the No. column as integer (not float)
-            ws5.cell(row=row, column=1).number_format = "0"
-            ws5.cell(row=row, column=6).number_format = "0"
+            if txn_type == "CREDIT":
+                own_party_total_credits += amount
+            else:
+                own_party_total_debits += amount
             
-            # Center align ALL columns for Own Party
-            for col in range(1, 7):  # Columns A-F
-                ws5.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            
-            # Special: Make Name column left-aligned for readability
-            ws5.cell(row=row, column=3).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-        
-        row = own_party_row_start + len(own_party_rows)
-    else:
-        row = own_party_row_start
-        ws5.cell(row=row, column=1, value="No own party transactions detected.")
-        style_data_cell(ws5, row, 1)
-        ws5.cell(row=row, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        row += 1
+            own_party_transaction_count += 1
+
+    # Write the single Own Party row
+    values = [
+        1,  # No. column - always 1
+        "Own",  # Relationship
+        own_party_name,  # Name
+        own_party_total_credits,
+        own_party_total_debits,
+        own_party_transaction_count,
+    ]
+    write_values(ws5, row, values, number_cols={4, 5, 6}, credit_cols={4}, debit_cols={5})
+
+    # Format the No. column as integer (not float)
+    ws5.cell(row=row, column=1).number_format = "0"
+    ws5.cell(row=row, column=6).number_format = "0"
+
+    # Center align ALL columns for Own Party
+    for col in range(1, 7):  # Columns A-F
+        ws5.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # Special: Make Name column left-aligned for readability
+    ws5.cell(row=row, column=3).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
     row += 2
 
