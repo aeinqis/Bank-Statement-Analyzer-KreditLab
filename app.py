@@ -6987,20 +6987,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Write the header row with ORANGE color and LEFT alignment
     header_row = summary_start_row
 
-    # "Item" header - Orange, Left aligned, Bold
-    item_header_cell = ws6.cell(row=header_row, column=summary_start_col, value="Item")
-    item_header_cell.font = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
-    item_header_cell.fill = header_fill_orange
-    item_header_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    item_header_cell.border = thin_border
-
-    # "Value" header - Orange, Center aligned, Bold
-    value_header_cell = ws6.cell(row=header_row, column=summary_start_col + 1, value="Value")
-    value_header_cell.font = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
-    value_header_cell.fill = header_fill_orange
-    value_header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    value_header_cell.border = thin_border
-
     summary_start_row += 1  # Move to data rows
 
     # Write data rows vertically
@@ -7009,14 +6995,13 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         
         # Write the label in column H - Bold, Left aligned, Orange background
         label_cell = ws6.cell(row=row, column=summary_start_col, value=label)
-        label_cell.font = Font(name="Calibri", bold=True, size=11)
+        label_cell.font = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
         label_cell.fill = header_fill_orange  # Orange background
         label_cell.border = thin_border
         label_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         
         # Write the value in column I - Center aligned, Orange background
         value_cell = ws6.cell(row=row, column=summary_start_col + 1, value=value)
-        value_cell.fill = header_fill_orange  # Orange background
         value_cell.border = thin_border
         value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         
