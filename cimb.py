@@ -431,27 +431,48 @@ def extract_cimb_party_name(description: str) -> str:
 
     party_by_rule = extract_cimb_party_name_by_rule(description)
     if party_by_rule:
-        return party_by_rule
+        res = party_by_rule
+    else:
+        parts = [
+            clean_text(p).upper()
+            for p in re.split(r"\s*\|\s*|\n+", description)
+            if clean_text(p)
+        ]
 
-    parts = [
-        clean_text(p).upper()
-        for p in re.split(r"\s*\|\s*|\n+", description)
-        if clean_text(p)
-    ]
+        candidates = []
+        for part in parts:
+            part = clean_text(part).upper()
 
-    candidates = []
-    for part in parts:
-        part = clean_text(part).upper()
+            if not is_cimb_party_candidate_line(part):
+                continue
 
-        if not is_cimb_party_candidate_line(part):
-            continue
+            candidates.append(part)
 
-        candidates.append(part)
+        if not candidates:
+            res = "UNKNOWN"
+        else:
+            res = normalize_cimb_party_name(candidates[-1])
 
-    if not candidates:
-        return "UNKNOWN"
+    # -------------------------------------------------------------------------
+    # NEW: Preserve personal/purpose keywords for related-party detection
+    # -------------------------------------------------------------------------
+    if res != "UNKNOWN" and res != "TRANSFER FEE":
+        RELATED_PARTY_KEYWORDS_RE = re.compile(
+            r"\b(DIRECTOR|LOAN|CLAIM|HOUSE\s+RENTAL|RENTAL|SEWA|PETTY\s+CASH|BAJET|PERUNTUKAN)\b", 
+            re.I
+        )
+        matches = RELATED_PARTY_KEYWORDS_RE.findall(clean_text(description))
+        if matches:
+            unique_kws = []
+            for kw in matches:
+                kw_norm = re.sub(r"\s+", " ", kw.upper().strip())
+                # Only append if the keyword isn't already inside the extracted party name
+                if kw_norm not in res and kw_norm not in unique_kws:
+                    unique_kws.append(kw_norm)
+            if unique_kws:
+                res = f"{res} {' '.join(unique_kws)}"
 
-    return normalize_cimb_party_name(candidates[-1])
+    return res
 
 
 def is_cimb_transfer_fee(description: str) -> bool:
