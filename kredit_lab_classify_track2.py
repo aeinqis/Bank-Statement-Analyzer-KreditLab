@@ -2252,6 +2252,28 @@ _RP_KEYWORD_DYNAMIC_FIELD_TOKENS = (
     "purpose",
 )
 
+_RP_PERSON_RESCUE_KEYWORD_PHRASES = tuple(
+    tuple(re.findall(r"[A-Z]+", kw.upper()))
+    for kw in PERSONAL_KEYWORDS_RP4
+    if kw.strip().upper() != "FI"
+)
+_RP_PERSON_RESCUE_KEYWORD_PHRASES = tuple(
+    phrase for phrase in _RP_PERSON_RESCUE_KEYWORD_PHRASES if phrase
+)
+
+_RP_PERSON_RESCUE_MARKERS = frozenset({"BIN", "BINTI", "A/L", "A/P", "ANAK"})
+
+_RP_PERSON_RESCUE_NOISE_TOKENS = frozenset({
+    "TR", "TRF", "TRSF", "TRANSFER", "OTHER", "FEE", "FEES", "TO", "FROM",
+    "FR", "SAVING", "SAVINGS", "ACCOUNT", "ACC", "AC", "A", "C", "CA",
+    "SA", "DUITNOW", "ONLINE", "IBG", "GIRO", "INTERBANK", "JOMPAY",
+    "PAYMENT", "PYMT", "PAY", "I", "FPX", "FPXPAY", "CCARD", "CARD",
+    "CASH", "PETTY", "CLAIM", "REIMBURSE", "REIMBURSEMENT", "MEDICAL",
+    "BONUS", "DIVIDEND", "LOAN", "HOUSING", "CREDIT", "ADV", "FI",
+    "STAFF", "OUTSTATION", "GENERAL", "LABOUR", "PURPOSE", "REMARK",
+    "REF", "REFERENCE", "NO", "TXN", "TRANSACTION", "DETAIL", "DET",
+})
+
 
 def _rp_keyword_text(tx: dict[str, Any], counterparty_name: Any = "") -> str:
     values: list[str] = []
@@ -2283,6 +2305,170 @@ def _rp_keyword_text(tx: dict[str, Any], counterparty_name: Any = "") -> str:
         values.append(cp_text)
 
     return " ".join(values)
+
+
+def _rp_person_rescue_tokens(text: Any) -> list[str]:
+    upper = str(text or "").upper()
+    upper = re.sub(r"\bA\s*/\s*L\b", "A/L", upper)
+    upper = re.sub(r"\bA\s*/\s*P\b", "A/P", upper)
+    upper = re.sub(r"[^A-Z0-9/]+", " ", upper)
+    return re.findall(r"A/L|A/P|[A-Z]+|\d+", upper)
+
+
+def _rp_person_rescue_keyword_spans(tokens: list[str]) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for idx in range(len(tokens)):
+        for phrase in _RP_PERSON_RESCUE_KEYWORD_PHRASES:
+            end = idx + len(phrase)
+            if tuple(tokens[idx:end]) == phrase:
+                spans.append((idx, end))
+    return spans
+
+
+def _rp_strip_person_rescue_noise(
+    tokens: list[str],
+    *,
+    from_right: bool = False,
+) -> list[str]:
+    cleaned = [token for token in tokens if token and not token.isdigit()]
+    while cleaned and cleaned[0] in _RP_PERSON_RESCUE_NOISE_TOKENS:
+        cleaned.pop(0)
+    while cleaned and cleaned[-1] in _RP_PERSON_RESCUE_NOISE_TOKENS:
+        cleaned.pop()
+    if len(cleaned) > 4 and not any(token in _RP_PERSON_RESCUE_MARKERS for token in cleaned):
+        cleaned = cleaned[-4:] if from_right else cleaned[:4]
+    return cleaned
+
+
+def _rp_candidate_from_person_rescue_window(
+    tokens: list[str],
+    *,
+    from_right: bool = False,
+) -> str:
+    window = _rp_strip_person_rescue_noise(tokens, from_right=from_right)
+    if not window:
+        return ""
+
+    marker_idx = next(
+        (idx for idx, token in enumerate(window) if token in _RP_PERSON_RESCUE_MARKERS),
+        None,
+    )
+    if marker_idx is not None:
+        before: list[str] = []
+        idx = marker_idx - 1
+        while idx >= 0 and len(before) < 3:
+            token = window[idx]
+            if token in _RP_PERSON_RESCUE_NOISE_TOKENS or token.isdigit():
+                break
+            before.insert(0, token)
+            idx -= 1
+
+        after: list[str] = []
+        idx = marker_idx + 1
+        while idx < len(window) and len(after) < 3:
+            token = window[idx]
+            if (
+                token in _RP_PERSON_RESCUE_NOISE_TOKENS
+                or token.isdigit()
+                or _person_token_is_memo(token)
+            ):
+                break
+            after.append(token)
+            idx += 1
+
+        if not before:
+            return ""
+        window = before + [window[marker_idx]] + after
+
+    candidate = _normalise_counterparty_name(" ".join(window))
+    if not candidate:
+        return ""
+    try:
+        cleaned = clean_counterparty_name(candidate)
+    except Exception:
+        cleaned = candidate
+    if not isinstance(cleaned, str):
+        return ""
+    cleaned = _normalise_counterparty_name(_strip_rp_person_purpose_suffix(cleaned))
+    cleaned_tokens = _rp_strip_person_rescue_noise(cleaned.split(), from_right=from_right)
+    cleaned = _normalise_counterparty_name(" ".join(cleaned_tokens))
+    if not cleaned:
+        return ""
+    upper = cleaned.upper()
+    if upper in _RP_EXCLUDE_NAMES or any(upper.startswith(p) for p in _RP_EXCLUDE_PREFIXES):
+        return ""
+    if _looks_like_company(cleaned) or has_corporate_suffix(cleaned):
+        return ""
+    if _FINANCE_INSTITUTION_RE.search(cleaned):
+        return ""
+    if _PUBLIC_BODY_RE.search(cleaned) or _BUSINESS_NOUN_RE.search(cleaned):
+        return ""
+    if not (has_natural_person_marker(cleaned) or _looks_like_personal_name(cleaned)):
+        return ""
+    return cleaned
+
+
+def _rp_rescue_person_name_from_tx(tx: dict[str, Any]) -> str:
+    tokens = _rp_person_rescue_tokens(_rp_keyword_text(tx, ""))
+    if not tokens:
+        return ""
+    spans = _rp_person_rescue_keyword_spans(tokens)
+    candidates: list[str] = []
+    for start, end in spans:
+        before = tokens[max(0, start - 8):start]
+        after = tokens[end:end + 8]
+        for candidate in (
+            _rp_candidate_from_person_rescue_window(before, from_right=True),
+            _rp_candidate_from_person_rescue_window(after, from_right=False),
+        ):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+    if not candidates:
+        return ""
+    return sorted(
+        candidates,
+        key=lambda name: (
+            0 if has_natural_person_marker(name) else 1,
+            -len(name.split()),
+            name,
+        ),
+    )[0]
+
+
+def _rp_rescue_person_counterparties(cp: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    source_name = _rp_counterparty_name(cp)
+    for tx in cp.get("transactions", []) or []:
+        if not isinstance(tx, dict) or _rp_tx_side(tx) != "DEBIT":
+            continue
+        rescued_name = _rp_rescue_person_name_from_tx(tx)
+        if not rescued_name:
+            continue
+        amount = _rp_tx_amount(tx, "DEBIT")
+        group = groups.setdefault(
+            rescued_name,
+            {
+                "counterparty_name": rescued_name,
+                "transaction_count": 0,
+                "credit_count": 0,
+                "debit_count": 0,
+                "total_credits": 0.0,
+                "total_debits": 0.0,
+                "transactions": [],
+                "rescued_from_counterparty": source_name,
+            },
+        )
+        tx_copy = dict(tx)
+        tx_copy["counterparty_name_raw"] = tx_copy.get("counterparty_name_raw") or source_name
+        tx_copy["counterparty_name_clean"] = rescued_name
+        tx_copy["counterparty_name"] = rescued_name
+        tx_copy["party_name"] = rescued_name
+        tx_copy["related_party_candidate_source"] = "personal_keyword_description_rescue"
+        group["transactions"].append(tx_copy)
+        group["transaction_count"] += 1
+        group["debit_count"] += 1
+        group["total_debits"] = round(float(group["total_debits"]) + amount, 2)
+    return list(groups.values())
 
 
 def _rp_tx_side(tx: dict[str, Any]) -> str:
@@ -2731,6 +2917,7 @@ def scan_related_party_candidates(
         )
 
     candidates: list[dict[str, Any]] = []
+    rescued_counterparties: list[dict[str, Any]] = []
     for cp in cps:
         name = _rp_counterparty_name(cp)
         if not name:
@@ -2739,8 +2926,10 @@ def scan_related_party_candidates(
         if _looks_like_company(name):
             continue
         if upper in _RP_EXCLUDE_NAMES:
+            rescued_counterparties.extend(_rp_rescue_person_counterparties(cp))
             continue
         if any(upper.startswith(p) for p in _RP_EXCLUDE_PREFIXES):
+            rescued_counterparties.extend(_rp_rescue_person_counterparties(cp))
             continue
         # Memo / rail / facility synthetic-bucket label appearing anywhere in
         # the name (corpus RP survey 2026-06-06). Gated on the absence of a
@@ -2748,6 +2937,7 @@ def scan_related_party_candidates(
         # the canonicalisation layer; a pure junk label (no BIN/BINTI/A-L)
         # is dropped before scoring.
         if _RP_EXCLUDE_LABEL_RE.search(upper) and not has_natural_person_marker(name):
+            rescued_counterparties.extend(_rp_rescue_person_counterparties(cp))
             continue
         # Synthetic own-party bucket built by the counterparty_ledger pipeline
         # (e.g. ``PRINCIPAL GAS (OWN-PARTY)``). The dispatcher already routes
@@ -2775,6 +2965,24 @@ def scan_related_party_candidates(
             "method": scored["signals"][0],
             **scored,
         })
+
+    existing_names = {str(c.get("name") or "").upper() for c in candidates}
+    for cp in rescued_counterparties:
+        name = _rp_counterparty_name(cp)
+        if not name or name.upper() in existing_names:
+            continue
+        if _is_salary_recipient(cp) and not _has_director_benefit(cp):
+            continue
+        scored = _compute_rp_signals(cp, gross_dr)
+        if scored is None:
+            continue
+        candidates.append({
+            "name": name,
+            "method": scored["signals"][0],
+            "rescued_from_counterparty": cp.get("rescued_from_counterparty"),
+            **scored,
+        })
+        existing_names.add(name.upper())
 
     confidence_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
     candidates.sort(

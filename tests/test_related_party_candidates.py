@@ -431,6 +431,48 @@ class RelatedPartyCandidateTests(unittest.TestCase):
 
         self.assertEqual([c["name"] for c in ordered], ["KHAIRUL OTHMAN", "AHMAD ALI"])
 
+    def test_personal_keyword_sweep_rescues_person_from_synthetic_bucket(self):
+        ledger = {
+            "counterparties": [
+                {
+                    "counterparty_name": "TRANSFER FEE",
+                    "transaction_count": 2,
+                    "credit_count": 0,
+                    "debit_count": 2,
+                    "total_credits": 0.0,
+                    "total_debits": 4500.0,
+                    "transactions": [
+                        _debit(
+                            "2025-09-01",
+                            "OTHER TRANSFER FEE FATHIN SYAIRAH NAJLA PETTY CASH",
+                            2500.0,
+                        ),
+                        _debit(
+                            "2025-09-26",
+                            "OTHER TRANSFER FEE FATHIN SYAIRAH NAJLA CLAIM",
+                            2000.0,
+                        ),
+                    ],
+                },
+                {
+                    "counterparty_name": "BETA TRADING SDN BHD",
+                    "total_debits": 1_000_000.0,
+                    "transactions": [],
+                },
+            ],
+        }
+
+        candidates = scan_related_party_candidates(ledger)
+        candidate = next(c for c in candidates if c["name"] == "FATHIN SYAIRAH NAJLA")
+
+        self.assertEqual(candidate["confidence"], "MEDIUM")
+        self.assertIn("personal_keyword_sweep", candidate["signals"])
+        self.assertIn("2 personal-kw rows", candidate["evidence"])
+        self.assertEqual(
+            advisory_rp_candidates(candidates, effective_related_parties=[])[0]["name"],
+            "FATHIN SYAIRAH NAJLA",
+        )
+
     def test_transfer_fee_and_full_kwsp_name_are_synthetic_not_related_parties(self):
         ledger = {
             "counterparties": [
