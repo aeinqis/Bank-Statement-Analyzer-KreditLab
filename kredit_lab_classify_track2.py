@@ -2746,19 +2746,24 @@ def _compute_rp_signals(
     # 1. Personal-keyword sweep — lowered gate from >= 3 to >= 2 debit rows
     #    so thin petty-cash/claim/reimburse counterparties aren't excluded
     #    before they're even checked.
-    if debit_count >= 2:
-        personal_hits = 0
-        for tx in txs:
-            if _rp_tx_side(tx) != "DEBIT":
-                continue
-            keyword_text = _rp_keyword_text(tx, cp_name)
-            if any(kw in keyword_text for kw in PERSONAL_KEYWORDS_RP4):
-                personal_hits += 1
-        if personal_hits >= 2:
-            signals.append(
-                ("personal_keyword_sweep", 2,
-                 f"{personal_hits} personal-kw rows")
-            )
+    personal_hits = 0
+    for tx in txs:
+        # Keep your requirement: Only look at DEBIT transactions
+        if _rp_tx_side(tx) != "DEBIT": 
+            continue 
+        
+        # FIX: Scan the raw, original description line instead of the cleaned party name
+        raw_desc = str(tx.get("description", "")).upper()
+        
+        # Check if any of the target personal keywords exist in the raw text
+        if any(kw in raw_desc for kw in ["DIRECTOR", "LOAN", "CLAIM", "RENTAL", "SEWA", "HOUSE RENTAL"]):
+            personal_hits += 1
+
+    # If 2 or more debit transactions contain the keywords, trigger the rule
+    if personal_hits >= 2:
+        signals.append(
+            ("personal_keyword_sweep", 2, f"{personal_hits} personal-kw rows")
+        )
 
     # 2. Concentration: cp gross DR ≥ 5% of total gross DR.
     if gross_dr > 0 and total_dr / gross_dr >= _RP_CONCENTRATION_DR_THRESHOLD:
