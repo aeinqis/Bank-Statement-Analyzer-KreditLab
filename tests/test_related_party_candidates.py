@@ -509,6 +509,31 @@ class RelatedPartyCandidateTests(unittest.TestCase):
 
         self.assertEqual([c["name"] for c in ordered], ["KHAIRUL OTHMAN", "AHMAD ALI"])
 
+    def test_unconfirmed_high_candidate_still_surfaces_for_analyst_review(self):
+        mariana = {
+            "name": "MARIANA BINTI AHMAT",
+            "confidence": "HIGH",
+            "signals": ["personal_keyword_sweep", "bidirectional_flow", "monthly_recurrence"],
+            "total_dr": 8760.0,
+            "total_cr": 1000.0,
+            "debit_count": 7,
+            "credit_count": 2,
+            "debit_month_count": 5,
+            "evidence": "7 personal-kw rows · 2CR / 7DR · DR over 5 months",
+        }
+
+        self.assertEqual(
+            advisory_rp_candidates([mariana], effective_related_parties=[])[0]["name"],
+            "MARIANA BINTI AHMAT",
+        )
+        self.assertEqual(
+            advisory_rp_candidates(
+                [mariana],
+                effective_related_parties=["MARIANA BINTI AHMAT"],
+            ),
+            [],
+        )
+
     def test_personal_keyword_sweep_rescues_person_from_synthetic_bucket(self):
         ledger = {
             "counterparties": [

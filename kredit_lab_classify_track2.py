@@ -2781,13 +2781,17 @@ def advisory_rp_candidates(
     effective_related_parties: list[str] | None,
     company_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Filter the raw MEDIUM/LOW RP3 candidates down to a trustworthy
+    """Filter raw RP3 candidates down to a trustworthy
     person-only advisory list: individuals (marker or clean name shape), not
     already confirmed, not the statement holder's own company, not a public
-    body / firm, and materially active. Candidates carrying a recurring
-    DR-month signal OR a personal-keyword sweep (petty cash, claims,
-    reimbursements, etc.) are prioritised for display before lower-signal
-    candidates so both explicit signals stay visible under the display cap.
+    body / firm, and materially active.
+
+    ``HIGH`` candidates are normally auto-confirmed by ``build_track2_result``
+    and then removed here by the effective-related-party filter. Report/UI
+    live scans can run against older or manager-only payloads where that
+    auto-confirmed list is not present; in that case keep the unconfirmed
+    ``HIGH`` person visible instead of letting it disappear from both Known
+    and Possible Related Parties.
     """
     eff = {str(r).upper() for r in (effective_related_parties or [])}
     own_roots = [
@@ -2797,7 +2801,7 @@ def advisory_rp_candidates(
     for c in rp_candidates:
         nm = c.get("name") or ""
         up = nm.upper()
-        if c.get("confidence") not in ("MEDIUM", "LOW"):
+        if c.get("confidence") not in ("HIGH", "MEDIUM", "LOW"):
             continue
         if up in eff:
             continue
@@ -2810,7 +2814,7 @@ def advisory_rp_candidates(
         if float(c.get("total_dr", 0) or 0) < _ADVISORY_RP_MIN_DR:
             continue
         out.append(c)
-    confidence_order = {"MEDIUM": 0, "LOW": 1}
+    confidence_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
     _PRIORITY_SIGNALS = {"monthly_recurrence", "personal_keyword_sweep"}
     out.sort(
         key=lambda c: (
