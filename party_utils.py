@@ -562,7 +562,7 @@ def clean_counterparty_name(raw_name: Any) -> str:
     # FIX: If the string consists entirely of or contains vital personal keywords,
     # DO NOT let it get stripped down to empty/UNKNOWN string.
     # -------------------------------------------------------------------------
-    PROTECTED_KEYWORDS = {"DIRECTOR", "LOAN", "CLAIM", "RENTAL", "SEWA", "HOUSE RENTAL", "BAJET", "PERUNTUKAN"}
+    PROTECTED_KEYWORDS = {"DIRECTOR", "LOAN", "CLAIM", "RENTAL", "SEWA", "HOUSE RENTAL", "BAJET", "PERUNTUKAN","PETTY","CASH","BONUS"}
     # Check if any protected keyword is part of the name tokens
     name_tokens = set(re.findall(r"\b[A-Z]+\b", upper_name))
     if name_tokens.intersection(PROTECTED_KEYWORDS):
