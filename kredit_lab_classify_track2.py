@@ -2276,33 +2276,55 @@ _RP_PERSON_RESCUE_NOISE_TOKENS = frozenset({
 
 
 def _rp_keyword_text(tx: dict[str, Any], counterparty_name: Any = "") -> str:
+    """Extract ALL text from a transaction for keyword scanning."""
     values: list[str] = []
     seen: set[str] = set()
 
-    fields = list(_RP_KEYWORD_TEXT_FIELDS)
-    seen_fields = {field.lower() for field in fields}
-    for key in tx.keys():
-        key_text = str(key).strip()
-        key_lower = key_text.lower()
-        if not key_text or key_lower in seen_fields:
-            continue
-        if any(token in key_lower for token in _RP_KEYWORD_DYNAMIC_FIELD_TOKENS):
-            fields.append(key_text)
-            seen_fields.add(key_lower)
+    # PRIMARY: Always include the full description
+    desc = tx.get("description")
+    if desc:
+        text = re.sub(r"\s+", " ", str(desc).upper()).strip()
+        if text:
+            values.append(text)
+            seen.add(text)
 
-    for field in fields:
+    # Include raw counterparty fields
+    for field in ("counterparty_name_raw", "raw_counterparty", "_raw_counterparty"):
         value = _rp_value(tx, field)
-        if value in (None, ""):
-            continue
-        text = re.sub(r"\s+", " ", str(value).upper()).strip()
-        if not text or text in seen:
-            continue
-        values.append(text)
-        seen.add(text)
+        if value:
+            text = re.sub(r"\s+", " ", str(value).upper()).strip()
+            if text and text not in seen:
+                values.append(text)
+                seen.add(text)
 
-    cp_text = re.sub(r"\s+", " ", str(counterparty_name or "").upper()).strip()
-    if cp_text and cp_text not in seen:
-        values.append(cp_text)
+    # Include detail/memo fields
+    for field in ("transaction_details", "transaction_detail", "details", "detail", 
+                  "narration", "memo", "remarks", "reference", "particulars"):
+        value = _rp_value(tx, field)
+        if value:
+            text = re.sub(r"\s+", " ", str(value).upper()).strip()
+            if text and text not in seen:
+                values.append(text)
+                seen.add(text)
+
+    # Include counterparty name
+    if counterparty_name:
+        text = re.sub(r"\s+", " ", str(counterparty_name).upper()).strip()
+        if text and text not in seen:
+            values.append(text)
+            seen.add(text)
+
+    # Include ALL fields that might contain relevant text
+    for key, value in tx.items():
+        if isinstance(value, str):
+            key_lower = key.lower()
+            # Skip fields that are purely numeric or IDs
+            if key_lower in ("date", "account_no", "account_number", "page", "seq", "source_file"):
+                continue
+            text = re.sub(r"\s+", " ", value.upper()).strip()
+            if text and len(text) > 3 and text not in seen:
+                values.append(text)
+                seen.add(text)
 
     return " ".join(values)
 
