@@ -2751,12 +2751,13 @@ def _compute_rp_signals(
         # Keep your requirement: Only look at DEBIT transactions
         if _rp_tx_side(tx) != "DEBIT": 
             continue 
-        
-        # FIX: Scan the raw, original description line instead of the cleaned party name
-        raw_desc = str(tx.get("description", "")).upper()
-        
-        # Check if any of the target personal keywords exist in the raw text
-        if any(kw in raw_desc for kw in ["DIRECTOR", "LOAN", "CLAIM", "RENTAL", "SEWA", "HOUSE RENTAL","PETTY","CASH","BONUS"]):
+
+        # Scan the full raw transaction text (description, raw description,
+        # memo/detail fields, and raw/clean counterparty aliases) so keyword
+        # detection is not lost when regex extraction separates the party name.
+        keyword_text = _rp_keyword_text(tx, cp_name)
+
+        if any(kw in keyword_text for kw in PERSONAL_KEYWORDS_RP4):
             personal_hits += 1
 
     # If 2 or more debit transactions contain the keywords, trigger the rule

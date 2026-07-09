@@ -453,25 +453,6 @@ def extract_cimb_party_name(description: str) -> str:
         else:
             res = normalize_cimb_party_name(candidates[-1])
 
-    # -------------------------------------------------------------------------
-    # NEW: Preserve personal/purpose keywords for related-party detection
-    # -------------------------------------------------------------------------
-    if res != "UNKNOWN" and res != "TRANSFER FEE":
-        RELATED_PARTY_KEYWORDS_RE = re.compile(
-            r"\b(DIRECTOR|LOAN|CLAIM|HOUSE\s+RENTAL|RENTAL|SEWA|PETTY\s+CASH|BAJET|PERUNTUKAN)\b", 
-            re.I
-        )
-        matches = RELATED_PARTY_KEYWORDS_RE.findall(clean_text(description))
-        if matches:
-            unique_kws = []
-            for kw in matches:
-                kw_norm = re.sub(r"\s+", " ", kw.upper().strip())
-                # Only append if the keyword isn't already inside the extracted party name
-                if kw_norm not in res and kw_norm not in unique_kws:
-                    unique_kws.append(kw_norm)
-            if unique_kws:
-                res = f"{res} {' '.join(unique_kws)}"
-
     return res
 
 
