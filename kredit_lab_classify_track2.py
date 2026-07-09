@@ -2756,7 +2756,7 @@ def _compute_rp_signals(
         raw_desc = str(tx.get("description", "")).upper()
         
         # Check if any of the target personal keywords exist in the raw text
-        if any(kw in raw_desc for kw in ["DIRECTOR", "LOAN", "CLAIM", "RENTAL", "SEWA", "HOUSE RENTAL"]):
+        if any(kw in raw_desc for kw in ["DIRECTOR", "LOAN", "CLAIM", "RENTAL", "SEWA", "HOUSE RENTAL","PETTY","CASH","BONUS"]):
             personal_hits += 1
 
     # If 2 or more debit transactions contain the keywords, trigger the rule
