@@ -245,13 +245,15 @@ class RelatedPartyCandidateTests(unittest.TestCase):
                     ],
                 }
                 for date, name, amount in [
-                    ("2025-09-24", "MARIANA BINTI AHMAT PETTY CASH", 1200.0),
-                    ("2025-09-25", "MARIANA BINTI AHMAT CLAIM", 960.0),
-                    ("2025-10-03", "STAFF OUTSTATION MARIANA BINTI AHMAT PETTY CASH", 1500.0),
-                    ("2025-11-13", "MARIANA BINTI AHMAT REIMBURSE", 1300.0),
-                    ("2025-12-02", "MARIANA BINTI AHMAT MEDICAL", 1100.0),
-                    ("2026-01-28", "MARIANA BINTI AHMAT STAFF BONUS", 1400.0),
-                    ("2026-02-24", "MARIANA BINTI AHMAT PETTY CASH PO RAHMAN", 1500.0),
+                    ("2025-09-24", "MARIANA BINTI AHMAT PETTY CASH PO RAHMAN", 200.0),
+                    ("2025-09-25", "MARIANA BINTI AHMAT SESCO ELECTRICITY", 960.0),
+                    ("2025-11-03", "STAFF OUTSTATION MARIANA BINTI AHMAT PETTY CASH", 500.0),
+                    ("2025-11-13", "MARIANA BINTI AHMAT PETTY CASH", 400.0),
+                    ("2025-11-20", "MARIANA BINTI AHMAT TRAVEL AGENT GOLF", 5400.0),
+                    ("2025-12-02", "MARIANA BINTI AHMAT PETTY CASH", 200.0),
+                    ("2025-12-19", "MARIANA BINTI AHMAT STAFF BONUS", 500.0),
+                    ("2026-01-28", "MARIANA BINTI AHMAT PETTY CASH", 300.0),
+                    ("2026-02-24", "MARIANA BINTI AHMAT PETTY CASH", 300.0),
                 ]
             ]
         }
@@ -264,15 +266,29 @@ class RelatedPartyCandidateTests(unittest.TestCase):
         candidate = next(c for c in candidates if c["name"] == "MARIANA BINTI AHMAT")
 
         self.assertEqual(keyword_candidate["confidence"], "MEDIUM")
+        self.assertEqual(keyword_candidate["total_dr"], 8760.0)
         self.assertEqual(candidate["confidence"], "MEDIUM")
+        self.assertEqual(candidate["total_dr"], 8760.0)
         self.assertIn("personal_keyword_sweep", candidate["signals"])
         self.assertIn("monthly_recurrence", candidate["signals"])
         self.assertIn("7 personal-kw rows", candidate["evidence"])
-        self.assertIn("DR over 6 months", candidate["evidence"])
-        self.assertEqual(
-            advisory_rp_candidates(candidates, effective_related_parties=[])[0]["name"],
-            "MARIANA BINTI AHMAT",
+        self.assertIn("DR over 5 months", candidate["evidence"])
+        advisory_names = [
+            c["name"] for c in advisory_rp_candidates(candidates, effective_related_parties=[])
+        ]
+        self.assertEqual(advisory_names[0], "MARIANA BINTI AHMAT")
+        self.assertNotIn("MARIANA BINTI AHMAT TRAVEL AGENT GOLF", advisory_names)
+        report = build_track2_result(
+            transactions=[],
+            counterparty_ledger=ledger,
+            company_names=["BETA TRADING SDN BHD"],
         )
+        report_candidate = next(
+            c for c in report["report_info"]["related_party_candidates"]
+            if c["name"] == "MARIANA BINTI AHMAT"
+        )
+        self.assertEqual(report_candidate["total_dr"], 8760.0)
+        self.assertIn("7 personal-kw rows", report_candidate["evidence"])
 
     def test_mariana_ahmat_stays_possible_when_debit_share_is_high(self):
         mariana = {

@@ -2611,6 +2611,76 @@ def _rp_gross_debit_total(cps: list[dict[str, Any]]) -> float:
     )
 
 
+def _rp_person_match_tokens(name: Any) -> list[str]:
+    tokens = _rp_person_rescue_tokens(name)
+    return [
+        token
+        for token in tokens
+        if token.isalpha()
+        and len(token) >= 3
+        and token not in _RP_PERSON_RESCUE_MARKERS
+        and token not in _RP_PERSON_RESCUE_NOISE_TOKENS
+    ]
+
+
+def _rp_text_matches_person_name(text: Any, person_name: Any) -> bool:
+    person = _normalise_counterparty_name(str(person_name or ""))
+    if not person:
+        return False
+    text_upper = re.sub(r"\s+", " ", str(text or "").upper()).strip()
+    if not text_upper:
+        return False
+    if person in _normalise_counterparty_name(text_upper):
+        return True
+    person_tokens = _rp_person_match_tokens(person)
+    if len(person_tokens) < 2:
+        return False
+    text_tokens = set(_rp_person_rescue_tokens(text_upper))
+    return all(token in text_tokens for token in person_tokens)
+
+
+def _rp_tx_matches_person_name(
+    tx: dict[str, Any],
+    source_name: Any,
+    person_name: Any,
+) -> bool:
+    for value in (
+        source_name,
+        tx.get("counterparty_name_clean"),
+        tx.get("party_name"),
+        tx.get("counterparty_name"),
+        tx.get("counterparty"),
+        tx.get("counterparty_name_raw"),
+        tx.get("raw_counterparty"),
+        tx.get("_raw_counterparty"),
+        tx.get("description"),
+        tx.get("transaction_description"),
+        tx.get("raw_description"),
+        tx.get("transaction_details"),
+        tx.get("details"),
+        tx.get("narration"),
+        tx.get("memo"),
+        tx.get("remarks"),
+        tx.get("reference"),
+        tx.get("particulars"),
+        tx.get("payment_details"),
+        tx.get("purpose"),
+    ):
+        if value and _rp_text_matches_person_name(value, person_name):
+            return True
+    return False
+
+
+def _rp_tx_identity(tx: dict[str, Any], source_name: Any, side: str) -> tuple[Any, ...]:
+    return (
+        source_name,
+        tx.get("date") or tx.get("transaction_date") or tx.get("posting_date") or "",
+        tx.get("description") or tx.get("transaction_description") or tx.get("raw_description") or "",
+        round(_rp_tx_amount(tx, side), 2),
+        side,
+    )
+
+
 def scan_personal_keyword_related_party_candidates(
     counterparty_ledger: dict[str, Any] | None,
     *,
@@ -2638,7 +2708,7 @@ def scan_personal_keyword_related_party_candidates(
     if gross_dr is None:
         gross_dr = _rp_gross_debit_total(cps)
 
-    groups: dict[str, dict[str, Any]] = {}
+    seeded_names: dict[str, set[str]] = {}
     for cp in cps:
         source_name = _rp_counterparty_name(cp)
         for tx in cp.get("transactions", []) or []:
@@ -2655,8 +2725,56 @@ def scan_personal_keyword_related_party_candidates(
             person_name = _rp_personal_keyword_candidate_name(tx_context, source_name)
             if not person_name:
                 continue
+            rescued_from = seeded_names.setdefault(person_name, set())
+            if source_name and source_name.upper() != person_name.upper():
+                rescued_from.add(source_name)
 
-            amount = _rp_tx_amount(tx_context, "DEBIT")
+    if not seeded_names:
+        return []
+
+    groups: dict[str, dict[str, Any]] = {
+        name: {
+            "counterparty_name": name,
+            "transaction_count": 0,
+            "credit_count": 0,
+            "debit_count": 0,
+            "total_credits": 0.0,
+            "total_debits": 0.0,
+            "transactions": [],
+            "rescued_from_counterparties": set(rescued_from),
+            "_seen_transactions": set(),
+        }
+        for name, rescued_from in seeded_names.items()
+    }
+    ordered_seed_names = sorted(
+        seeded_names,
+        key=lambda name: (-len(_rp_person_match_tokens(name)), -len(name), name),
+    )
+
+    for cp in cps:
+        source_name = _rp_counterparty_name(cp)
+        for tx in cp.get("transactions", []) or []:
+            if not isinstance(tx, dict):
+                continue
+            side = _rp_tx_side(tx)
+            if side not in {"DEBIT", "CREDIT"}:
+                continue
+            tx_context = dict(tx)
+            if source_name:
+                tx_context.setdefault("ledger_counterparty_name", source_name)
+                tx_context.setdefault("counterparty_name", source_name)
+                tx_context.setdefault("party_name", source_name)
+
+            person_name = next(
+                (
+                    name for name in ordered_seed_names
+                    if _rp_tx_matches_person_name(tx_context, source_name, name)
+                ),
+                "",
+            )
+            if not person_name:
+                continue
+
             group = groups.setdefault(
                 person_name,
                 {
@@ -2670,8 +2788,13 @@ def scan_personal_keyword_related_party_candidates(
                     "rescued_from_counterparties": set(),
                 },
             )
+            identity = _rp_tx_identity(tx_context, source_name, side)
+            if identity in group.setdefault("_seen_transactions", set()):
+                continue
+            group["_seen_transactions"].add(identity)
             if source_name and source_name.upper() != person_name.upper():
                 group["rescued_from_counterparties"].add(source_name)
+            amount = _rp_tx_amount(tx_context, side)
             tx_copy = dict(tx_context)
             tx_copy["counterparty_name_raw"] = tx_copy.get("counterparty_name_raw") or source_name
             tx_copy["counterparty_name_clean"] = person_name
@@ -2680,11 +2803,16 @@ def scan_personal_keyword_related_party_candidates(
             tx_copy["related_party_candidate_source"] = "personal_keyword_transaction_scan"
             group["transactions"].append(tx_copy)
             group["transaction_count"] += 1
-            group["debit_count"] += 1
-            group["total_debits"] = round(float(group["total_debits"]) + amount, 2)
+            if side == "DEBIT":
+                group["debit_count"] += 1
+                group["total_debits"] = round(float(group["total_debits"]) + amount, 2)
+            else:
+                group["credit_count"] += 1
+                group["total_credits"] = round(float(group["total_credits"]) + amount, 2)
 
     candidates: list[dict[str, Any]] = []
     for name, cp in groups.items():
+        cp.pop("_seen_transactions", None)
         if _is_salary_recipient(cp) and not _has_director_benefit(cp):
             continue
         scored = _compute_rp_signals(cp, gross_dr or 0.0)
@@ -3224,17 +3352,110 @@ def scan_related_party_candidates(
         })
         existing_names.add(name.upper())
 
+    confidence_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    candidate_index_by_name = {
+        str(c.get("name") or "").upper(): idx
+        for idx, c in enumerate(candidates)
+        if str(c.get("name") or "").strip()
+    }
     for candidate in scan_personal_keyword_related_party_candidates(
         counterparty_ledger,
         gross_dr=gross_dr,
     ):
         name = str(candidate.get("name") or "").strip()
-        if not name or name.upper() in existing_names:
+        key = name.upper()
+        if not name:
+            continue
+        preserve_existing_name = False
+        if key not in candidate_index_by_name:
+            alias_index = next(
+                (
+                    idx for idx, existing in enumerate(candidates)
+                    if "personal_keyword_sweep" in (existing.get("signals") or [])
+                    and float(existing.get("total_dr") or 0) >= float(candidate.get("total_dr") or 0)
+                    and (
+                        _rp_text_matches_person_name(name, existing.get("name"))
+                        or _rp_text_matches_person_name(existing.get("name"), name)
+                    )
+                ),
+                None,
+            )
+            if alias_index is not None:
+                alias_key = str(candidates[alias_index].get("name") or "").upper()
+                candidate_index_by_name[key] = alias_index
+                key = alias_key
+                preserve_existing_name = True
+        if key in candidate_index_by_name:
+            existing = candidates[candidate_index_by_name[key]]
+            merged_signals = list(existing.get("signals") or [])
+            for signal in candidate.get("signals") or []:
+                if signal not in merged_signals:
+                    merged_signals.append(signal)
+            candidate_is_richer = (
+                "personal_keyword_sweep" in (candidate.get("signals") or [])
+                or float(candidate.get("total_dr") or 0) > float(existing.get("total_dr") or 0)
+                or int(candidate.get("debit_count") or 0) > int(existing.get("debit_count") or 0)
+            )
+            if candidate_is_richer:
+                merged = {**existing, **candidate}
+            else:
+                merged = {**candidate, **existing}
+            if preserve_existing_name:
+                merged["name"] = existing.get("name")
+                merged["method"] = existing.get("method") or merged.get("method")
+            merged["signals"] = merged_signals
+            merged["total_dr"] = max(
+                float(existing.get("total_dr") or 0),
+                float(candidate.get("total_dr") or 0),
+            )
+            merged["total_cr"] = max(
+                float(existing.get("total_cr") or 0),
+                float(candidate.get("total_cr") or 0),
+            )
+            merged["debit_count"] = max(
+                int(existing.get("debit_count") or 0),
+                int(candidate.get("debit_count") or 0),
+            )
+            merged["credit_count"] = max(
+                int(existing.get("credit_count") or 0),
+                int(candidate.get("credit_count") or 0),
+            )
+            merged["debit_month_count"] = max(
+                int(existing.get("debit_month_count") or 0),
+                int(candidate.get("debit_month_count") or 0),
+            )
+            if confidence_order.get(
+                str(candidate.get("confidence") or "").upper(), 9
+            ) < confidence_order.get(str(existing.get("confidence") or "").upper(), 9):
+                merged["confidence"] = candidate.get("confidence")
+            candidates[candidate_index_by_name[key]] = merged
             continue
         candidates.append(candidate)
-        existing_names.add(name.upper())
+        existing_names.add(key)
+        candidate_index_by_name[key] = len(candidates) - 1
 
-    confidence_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    personal_keyword_groups = [
+        c for c in candidates
+        if "personal_keyword_sweep" in (c.get("signals") or [])
+    ]
+    if personal_keyword_groups:
+        filtered_candidates: list[dict[str, Any]] = []
+        for candidate in candidates:
+            candidate_name = str(candidate.get("name") or "")
+            candidate_key = candidate_name.upper()
+            candidate_total_dr = float(candidate.get("total_dr") or 0)
+            shadowed = any(
+                "personal_keyword_sweep" not in (candidate.get("signals") or [])
+                and
+                candidate_key != str(group.get("name") or "").upper()
+                and float(group.get("total_dr") or 0) >= candidate_total_dr
+                and _rp_text_matches_person_name(candidate_name, group.get("name"))
+                for group in personal_keyword_groups
+            )
+            if not shadowed:
+                filtered_candidates.append(candidate)
+        candidates = filtered_candidates
+
     candidates.sort(
         key=lambda c: (
             confidence_order.get(c["confidence"], 9),
