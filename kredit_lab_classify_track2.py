@@ -2207,6 +2207,13 @@ def _rp_counterparty_name(cp: dict[str, Any]) -> str:
 
 _RP_KEYWORD_TEXT_FIELDS = (
     "description",
+    "transaction_description",
+    "txn_description",
+    "raw_description",
+    "description_raw",
+    "full_description",
+    "description_full",
+    "original_description",
     "transaction_details",
     "transaction_detail",
     "details",
@@ -2216,6 +2223,9 @@ _RP_KEYWORD_TEXT_FIELDS = (
     "remarks",
     "reference",
     "particulars",
+    "payment_details",
+    "purpose",
+    "transaction_purpose",
     "counterparty_name_raw",
     "raw_counterparty",
     "_raw_counterparty",
@@ -2230,12 +2240,35 @@ _RP_KEYWORD_TEXT_FIELDS = (
     "payee",
 )
 
+_RP_KEYWORD_DYNAMIC_FIELD_TOKENS = (
+    "description",
+    "desc",
+    "detail",
+    "narration",
+    "memo",
+    "remark",
+    "reference",
+    "particular",
+    "purpose",
+)
+
 
 def _rp_keyword_text(tx: dict[str, Any], counterparty_name: Any = "") -> str:
     values: list[str] = []
     seen: set[str] = set()
 
-    for field in _RP_KEYWORD_TEXT_FIELDS:
+    fields = list(_RP_KEYWORD_TEXT_FIELDS)
+    seen_fields = {field.lower() for field in fields}
+    for key in tx.keys():
+        key_text = str(key).strip()
+        key_lower = key_text.lower()
+        if not key_text or key_lower in seen_fields:
+            continue
+        if any(token in key_lower for token in _RP_KEYWORD_DYNAMIC_FIELD_TOKENS):
+            fields.append(key_text)
+            seen_fields.add(key_lower)
+
+    for field in fields:
         value = _rp_value(tx, field)
         if value in (None, ""):
             continue

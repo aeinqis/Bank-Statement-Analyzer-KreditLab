@@ -316,6 +316,48 @@ class RelatedPartyCandidateTests(unittest.TestCase):
             "AHMAD ALI",
         )
 
+    def test_personal_keyword_sweep_reads_full_description_fields(self):
+        ahmad = {
+            "counterparty_name": "AHMAD ALI",
+            "transaction_count": 2,
+            "credit_count": 0,
+            "debit_count": 2,
+            "total_credits": 0.0,
+            "total_debits": 4500.0,
+            "transactions": [
+                {
+                    "date": "2025-09-05",
+                    "description": "TR TO AHMAD ALI",
+                    "raw_description": "TR TO AHMAD ALI CLAIM",
+                    "counterparty_name_clean": "AHMAD ALI",
+                    "amount": 2500.0,
+                    "type": "DEBIT",
+                },
+                {
+                    "date": "2025-09-26",
+                    "description": "DUITNOW TO ACCOUNT AHMAD ALI",
+                    "transaction_description": "DUITNOW TO ACCOUNT AHMAD ALI PETTY CASH",
+                    "party_name": "AHMAD ALI",
+                    "amount": 2000.0,
+                    "type": "DEBIT",
+                },
+            ],
+        }
+        gross_dr_anchor = {
+            "counterparty_name": "BETA TRADING SDN BHD",
+            "total_debits": 1_000_000.0,
+            "transactions": [],
+        }
+
+        candidates = scan_related_party_candidates(
+            {"counterparties": [ahmad, gross_dr_anchor]}
+        )
+        candidate = next(c for c in candidates if c["name"] == "AHMAD ALI")
+
+        self.assertEqual(candidate["confidence"], "MEDIUM")
+        self.assertIn("personal_keyword_sweep", candidate["signals"])
+        self.assertIn("2 personal-kw rows", candidate["evidence"])
+
     def test_khairul_othman_surfaces_on_three_plus_debit_months(self):
         khairul = {
             "counterparty_name": "KHAIRUL OTHMAN",
