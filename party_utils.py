@@ -552,6 +552,23 @@ def _normalise_embedded_counterparty_anchor(tokens: List[str]) -> List[str]:
 
 
 def clean_counterparty_name(raw_name: Any) -> str:
+
+    if not raw_name:
+        return "UNKNOWN"
+        
+    upper_name = raw_name.upper().strip()
+    
+    # -------------------------------------------------------------------------
+    # FIX: If the string consists entirely of or contains vital personal keywords,
+    # DO NOT let it get stripped down to empty/UNKNOWN string.
+    # -------------------------------------------------------------------------
+    PROTECTED_KEYWORDS = {"DIRECTOR", "LOAN", "CLAIM", "RENTAL", "SEWA", "HOUSE RENTAL", "BAJET", "PERUNTUKAN"}
+    # Check if any protected keyword is part of the name tokens
+    name_tokens = set(re.findall(r"\b[A-Z]+\b", upper_name))
+    if name_tokens.intersection(PROTECTED_KEYWORDS):
+        # Return the normalized string instead of running aggressive suffix stripping
+        return re.sub(r"\s+", " ", upper_name)
+    
     """Return a reusable display/matching name for noisy counterparty strings.
 
     The cleaner strips transaction descriptors, month prefixes, channel
