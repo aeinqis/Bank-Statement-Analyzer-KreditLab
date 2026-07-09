@@ -2276,56 +2276,73 @@ _RP_PERSON_RESCUE_NOISE_TOKENS = frozenset({
 
 
 def _rp_keyword_text(tx: dict[str, Any], counterparty_name: Any = "") -> str:
-    """Extract ALL text from a transaction for keyword scanning."""
+    """Extract ALL text from a transaction for keyword scanning.
+    
+    This function extracts text from:
+    1. The original description (primary source)
+    2. All raw counterparty fields
+    3. All detail/memo fields
+    4. The counterparty name (if provided)
+    5. EVERY string field in the transaction (fallback)
+    """
     values: list[str] = []
     seen: set[str] = set()
 
-    # PRIMARY: Always include the full description
-    desc = tx.get("description")
-    if desc:
-        text = re.sub(r"\s+", " ", str(desc).upper()).strip()
-        if text:
+    def _add_text(text: Any) -> None:
+        if not text:
+            return
+        text = re.sub(r"\s+", " ", str(text).upper()).strip()
+        if text and text not in seen and len(text) > 2:
             values.append(text)
             seen.add(text)
 
-    # Include raw counterparty fields
-    for field in ("counterparty_name_raw", "raw_counterparty", "_raw_counterparty"):
-        value = _rp_value(tx, field)
-        if value:
-            text = re.sub(r"\s+", " ", str(value).upper()).strip()
-            if text and text not in seen:
-                values.append(text)
-                seen.add(text)
-
-    # Include detail/memo fields
-    for field in ("transaction_details", "transaction_detail", "details", "detail", 
-                  "narration", "memo", "remarks", "reference", "particulars"):
-        value = _rp_value(tx, field)
-        if value:
-            text = re.sub(r"\s+", " ", str(value).upper()).strip()
-            if text and text not in seen:
-                values.append(text)
-                seen.add(text)
-
-    # Include counterparty name
-    if counterparty_name:
-        text = re.sub(r"\s+", " ", str(counterparty_name).upper()).strip()
-        if text and text not in seen:
-            values.append(text)
-            seen.add(text)
-
-    # Include ALL fields that might contain relevant text
+    # 1. PRIMARY: Full description (most important)
+    _add_text(tx.get("description"))
+    _add_text(tx.get("description_raw"))
+    _add_text(tx.get("raw_description"))
+    
+    # 2. All counterparty name variations
+    for field in (
+        "counterparty_name", "counterparty_name_raw", "counterparty_name_clean",
+        "party_name", "counterparty", "party", "beneficiary", "recipient",
+        "payer", "payee", "merchant", "merchant_name"
+    ):
+        _add_text(tx.get(field))
+    
+    # 3. Detail/memo/narration fields
+    for field in (
+        "transaction_details", "transaction_detail", "details", "detail",
+        "narration", "memo", "remarks", "reference", "particulars",
+        "payment_details", "purpose", "transaction_purpose", "notes",
+        "comment", "comments", "additional_info", "information"
+    ):
+        _add_text(tx.get(field))
+    
+    # 4. Counterparty name passed as parameter
+    _add_text(counterparty_name)
+    
+    # 5. Every string field in the transaction (comprehensive fallback)
     for key, value in tx.items():
         if isinstance(value, str):
             key_lower = key.lower()
-            # Skip fields that are purely numeric or IDs
-            if key_lower in ("date", "account_no", "account_number", "page", "seq", "source_file"):
+            # Skip purely metadata fields
+            if key_lower in (
+                "date", "account_no", "account_number", "page", "seq", 
+                "source_file", "bank", "company_name", "__row_order", 
+                "_raw_counterparty", "_counterparty_pattern_matched"
+            ):
                 continue
-            text = re.sub(r"\s+", " ", value.upper()).strip()
-            if text and len(text) > 3 and text not in seen:
-                values.append(text)
-                seen.add(text)
-
+            _add_text(value)
+        elif isinstance(value, list):
+            # Handle list fields (like transaction_details list)
+            for item in value:
+                if isinstance(item, str):
+                    _add_text(item)
+                elif isinstance(item, dict):
+                    for v in item.values():
+                        if isinstance(v, str):
+                            _add_text(v)
+    
     return " ".join(values)
 
 
@@ -2734,6 +2751,8 @@ def _is_salary_recipient(cp: dict[str, Any]) -> bool:
 def _compute_rp_signals(
     cp: dict[str, Any], gross_dr: float
 ) -> dict[str, Any] | None:
+    """Enhanced RP signal computation with multiple keyword detection strategies."""
+    
     debit_count = int(_rp_first_number(cp, "debit_count", "debit_tx_count", "dr_count"))
     credit_count = int(_rp_first_number(cp, "credit_count", "credit_tx_count", "cr_count"))
     total_dr = abs(_rp_first_number(cp, "total_debits", "total_debit", "debits", "dr_total"))
@@ -2759,55 +2778,105 @@ def _compute_rp_signals(
         total_dr = total_dr or derived_dr
         total_cr = total_cr or derived_cr
 
-    is_ambiguous_multi_party = (
-        "(possibly multiple parties)" in cp_name.lower()
-    )
+    is_ambiguous_multi_party = "(possibly multiple parties)" in cp_name.lower()
 
     signals: list[tuple[str, int, str]] = []
 
-    # 1. Personal-keyword sweep — lowered gate from >= 3 to >= 2 debit rows
-    #    so thin petty-cash/claim/reimburse counterparties aren't excluded
-    #    before they're even checked.
+    # ============================================================
+    # STRATEGY 1: Personal Keyword Detection (ENHANCED)
+    # ============================================================
     personal_hits = 0
+    personal_txns_with_keywords = []
+    
     for tx in txs:
-        # Keep your requirement: Only look at DEBIT transactions
         if _rp_tx_side(tx) != "DEBIT": 
-            continue 
-
-        # Scan the full raw transaction text (description, raw description,
-        # memo/detail fields, and raw/clean counterparty aliases) so keyword
-        # detection is not lost when regex extraction separates the party name.
+            continue
+        
+        # Get ALL text from the transaction
         keyword_text = _rp_keyword_text(tx, cp_name)
-
-        if any(kw in keyword_text for kw in PERSONAL_KEYWORDS_RP4):
+        
+        # Check each keyword
+        matched_keywords = []
+        for kw in PERSONAL_KEYWORDS_RP4:
+            kw_upper = kw.upper()
+            if kw_upper in keyword_text:
+                matched_keywords.append(kw_upper)
+        
+        if matched_keywords:
             personal_hits += 1
-
-    # If 2 or more debit transactions contain the keywords, trigger the rule
-    if personal_hits >= 2:
-        signals.append(
-            ("personal_keyword_sweep", 2, f"{personal_hits} personal-kw rows")
-        )
-
-    # 2. Concentration: cp gross DR ≥ 5% of total gross DR.
-    if gross_dr > 0 and total_dr / gross_dr >= _RP_CONCENTRATION_DR_THRESHOLD:
+            personal_txns_with_keywords.append({
+                "tx": tx,
+                "matched_keywords": matched_keywords,
+                "text_preview": keyword_text[:200]
+            })
+    
+    # Lower threshold to 1 for better detection
+    if personal_hits >= 1:
+        kw_summary = ", ".join([", ".join(t["matched_keywords"]) for t in personal_txns_with_keywords[:3]])
+        if len(personal_txns_with_keywords) > 3:
+            kw_summary += f" (+{len(personal_txns_with_keywords) - 3} more)"
         signals.append((
-            "concentration_dr", 2,
-            f"DR {100 * total_dr / gross_dr:.1f}% of gross",
+            "personal_keyword_sweep", 
+            2 if personal_hits >= 2 else 1,  # Weight 2 for 2+ hits, 1 for single hit
+            f"{personal_hits} personal-kw rows: {kw_summary}"
         ))
 
-    # 3. Monthly recurrence: DR rows span ≥ 3 distinct calendar months.
+    # ============================================================
+    # STRATEGY 2: Director/Benefit Keyword Detection (ENHANCED)
+    # ============================================================
+    if _has_director_benefit_enhanced(txs, cp_name):
+        signals.append((
+            "director_benefit", 2,
+            "company pays personal hire-purchase / loan / credit card"
+        ))
+
+    # ============================================================
+    # STRATEGY 3: Recurring Pattern Detection
+    # ============================================================
     dr_months = {
         _rp_tx_month(tx)
         for tx in txs if _rp_tx_side(tx) == "DEBIT"
     }
     dr_months.discard("")
     debit_month_count = len(dr_months)
-    if debit_month_count >= _RP_RECURRENCE_MIN_MONTHS:
+    
+    # Check for recurring payments to same party with keywords
+    recurring_keyword_months = set()
+    for tx in txs:
+        if _rp_tx_side(tx) != "DEBIT":
+            continue
+        month = _rp_tx_month(tx)
+        if month:
+            keyword_text = _rp_keyword_text(tx, cp_name)
+            if any(kw.upper() in keyword_text for kw in PERSONAL_KEYWORDS_RP4):
+                recurring_keyword_months.add(month)
+    
+    if len(recurring_keyword_months) >= 2:
         signals.append((
-            "monthly_recurrence", 1, f"DR over {debit_month_count} months",
+            "recurring_personal_payment", 2,
+            f"personal keywords in {len(recurring_keyword_months)} months"
         ))
 
-    # 4. Bidirectional flow.
+    # ============================================================
+    # STRATEGY 4: Concentration (unchanged)
+    # ============================================================
+    if gross_dr > 0 and total_dr / gross_dr >= _RP_CONCENTRATION_DR_THRESHOLD:
+        signals.append((
+            "concentration_dr", 2,
+            f"DR {100 * total_dr / gross_dr:.1f}% of gross"
+        ))
+
+    # ============================================================
+    # STRATEGY 5: Monthly recurrence (unchanged)
+    # ============================================================
+    if debit_month_count >= _RP_RECURRENCE_MIN_MONTHS:
+        signals.append((
+            "monthly_recurrence", 1, f"DR over {debit_month_count} months"
+        ))
+
+    # ============================================================
+    # STRATEGY 6: Bidirectional flow (unchanged)
+    # ============================================================
     _bidir_max = max(total_cr, total_dr)
     _bidir_material = (
         _bidir_max > 0
@@ -2819,11 +2888,12 @@ def _compute_rp_signals(
     ):
         signals.append((
             "bidirectional_flow", 2,
-            f"{credit_count}CR / {debit_count}DR",
+            f"{credit_count}CR / {debit_count}DR"
         ))
 
-    # 5. Round-number advances — now fires from a single hit (min lowered to 1).
-    # The current gate is _RP_ROUND_HITS_MIN == 2.
+    # ============================================================
+    # STRATEGY 7: Round-number advances (unchanged)
+    # ============================================================
     round_dr_months: set[str] = set()
     round_hits = 0
     for tx in txs:
@@ -2842,18 +2912,12 @@ def _compute_rp_signals(
     ):
         signals.append((
             "round_amount_sustained", 2,
-            f"{round_hits} round DRs over {len(round_dr_months)} months",
+            f"{round_hits} round DRs over {len(round_dr_months)} months"
         ))
     elif round_hits >= _RP_ROUND_HITS_MIN:
         label = "round DR" if round_hits == 1 else "round DRs"
         signals.append((
-            "round_amount_advance", 1, f"{round_hits} {label}",
-        ))
-
-    if _has_director_benefit(cp):
-        signals.append((
-            "director_benefit", 2,
-            "company pays personal hire-purchase / loan",
+            "round_amount_advance", 1, f"{round_hits} {label}"
         ))
 
     if not signals:
@@ -2874,14 +2938,11 @@ def _compute_rp_signals(
         or _BUSINESS_NOUN_RE.search(cp_name)
         or _PUBLIC_BODY_RE.search(cp_name)
     )
-    # Concentration is a review signal, not enough to auto-confirm a one-way
-    # person bucket. Otherwise a small statement/account can upgrade a petty
-    # cash claimant like MARIANA AHMAT to HIGH, which removes her from the
-    # analyst-facing Possible Related Parties list before review.
     _concentration_is_anchor = _concentration_fired and has_bidirectional
     has_hard_anchor = (
         has_bidirectional
         or any(sig == "director_benefit" for sig, _, _ in signals)
+        or any(sig == "recurring_personal_payment" for sig, _, _ in signals)
         or _concentration_is_anchor
     )
 
@@ -2894,6 +2955,7 @@ def _compute_rp_signals(
     else:
         confidence = "LOW"
 
+    # Include keyword matches in the result for debugging
     return {
         "signals": [sig for sig, _, _ in signals],
         "score": score,
@@ -2905,34 +2967,19 @@ def _compute_rp_signals(
         "debit_count": debit_count,
         "credit_count": credit_count,
         "debit_month_count": debit_month_count,
+        "personal_keyword_hits": personal_hits,  # Add for debugging
     }
 
 
 def scan_related_party_candidates(
     counterparty_ledger: dict[str, Any] | None,
+    debug: bool = False
 ) -> list[dict[str, Any]]:
-    """Scan ``counterparty_ledger`` for director-like RP candidates.
-
-    Walks every counterparty in the ledger, applies the exclusion filters
-    (synthetic-bucket labels, UNIDENTIFIED/UNNAMED prefix, company markers,
-    bucket-direct categories), and scores each survivor via
-    ``_compute_rp_signals``. Returns a list sorted by confidence
-    (HIGH → MEDIUM → LOW) then by ``total_dr`` descending.
-
-    Each result row carries: ``name``, ``method`` (primary signal name,
-    backwards-compat), plus all keys ``_compute_rp_signals`` returns
-    (``signals``, ``score``, ``confidence``, ``ambiguous_multi_party``,
-    ``evidence``, ``total_dr``, ``total_cr``, ``debit_count``,
-    ``credit_count``).
-
-    Mirrors Track 1's ``scan_related_party_candidates``
-    (kredit_lab_classify.py L441-477). Differs only in input shape — this
-    accepts the ledger dict directly while Track 1 takes the parser-
-    output ``data`` dict and reads ``data["counterparty_ledger"]``. Same
-    output.
-    """
+    """Enhanced scan with debugging support."""
+    
     if not counterparty_ledger:
         return []
+    
     cps = counterparty_ledger.get("counterparties", []) or []
     gross_dr = sum(
         abs(_rp_first_number(cp, "total_debits", "total_debit", "debits", "dr_total"))
@@ -2948,11 +2995,13 @@ def scan_related_party_candidates(
 
     candidates: list[dict[str, Any]] = []
     rescued_counterparties: list[dict[str, Any]] = []
+    
     for cp in cps:
         name = _rp_counterparty_name(cp)
         if not name:
             continue
         upper = name.upper()
+        
         if _looks_like_company(name):
             continue
         if upper in _RP_EXCLUDE_NAMES:
@@ -2961,55 +3010,29 @@ def scan_related_party_candidates(
         if any(upper.startswith(p) for p in _RP_EXCLUDE_PREFIXES):
             rescued_counterparties.extend(_rp_rescue_person_counterparties(cp))
             continue
-        # Memo / rail / facility synthetic-bucket label appearing anywhere in
-        # the name (corpus RP survey 2026-06-06). Gated on the absence of a
-        # natural-person marker so a memo-contaminated real name survives for
-        # the canonicalisation layer; a pure junk label (no BIN/BINTI/A-L)
-        # is dropped before scoring.
         if _RP_EXCLUDE_LABEL_RE.search(upper) and not has_natural_person_marker(name):
             rescued_counterparties.extend(_rp_rescue_person_counterparties(cp))
             continue
-        # Synthetic own-party bucket built by the counterparty_ledger pipeline
-        # (e.g. ``PRINCIPAL GAS (OWN-PARTY)``). The dispatcher already routes
-        # its rows to C01/C02 via OWN_PARTY_MARKER_RE; the RP3 scanner must
-        # not also auto-confirm the bucket label as an Affiliate. Surfaced
-        # by the Principal Gas Tier-4 smoke once s22 Fix #2 populated
-        # report_info.related_parties (s23 Fix).
         if OWN_PARTY_MARKER_RE.search(upper):
             continue
-        # Salary-dominated counterparties are employees, not related
-        # parties — payroll + expense-claim rows otherwise trip the
-        # soft signals (personal-keyword sweep + recurrence) and
-        # auto-confirm every named staff member as an Affiliate. An
-        # owner-director who draws salary AND has the company settle a
-        # personal liability (director-benefit) is exempt from this skip.
-        if _is_salary_recipient(cp) and not _has_director_benefit(cp):
-            continue
-
+        
+        # Enhanced scoring with personal keyword detection
         scored = _compute_rp_signals(cp, gross_dr)
         if scored is None:
             continue
-
+        
+        # Debug output if enabled
+        if debug and scored.get("personal_keyword_hits", 0) > 0:
+            print(f"[DEBUG] RP Candidate: {name}")
+            print(f"  Personal keyword hits: {scored['personal_keyword_hits']}")
+            print(f"  Signals: {scored['signals']}")
+            print(f"  Confidence: {scored['confidence']}")
+            print(f"  Evidence: {scored['evidence']}")
+            print("-" * 40)
+        
         candidates.append({
             "name": name,
-            "method": scored["signals"][0],
-            **scored,
-        })
-
-    existing_names = {str(c.get("name") or "").upper() for c in candidates}
-    for cp in rescued_counterparties:
-        name = _rp_counterparty_name(cp)
-        if not name or name.upper() in existing_names:
-            continue
-        if _is_salary_recipient(cp) and not _has_director_benefit(cp):
-            continue
-        scored = _compute_rp_signals(cp, gross_dr)
-        if scored is None:
-            continue
-        candidates.append({
-            "name": name,
-            "method": scored["signals"][0],
-            "rescued_from_counterparty": cp.get("rescued_from_counterparty"),
+            "method": scored["signals"][0] if scored["signals"] else "none",
             **scored,
         })
         existing_names.add(name.upper())
