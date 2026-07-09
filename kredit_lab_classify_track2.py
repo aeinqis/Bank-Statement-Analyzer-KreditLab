@@ -2846,9 +2846,11 @@ def _compute_rp_signals(
         or _BUSINESS_NOUN_RE.search(cp_name)
         or _PUBLIC_BODY_RE.search(cp_name)
     )
-    _concentration_is_anchor = _concentration_fired and (
-        has_bidirectional or not _is_business_entity
-    )
+    # Concentration is a review signal, not enough to auto-confirm a one-way
+    # person bucket. Otherwise a small statement/account can upgrade a petty
+    # cash claimant like MARIANA AHMAT to HIGH, which removes her from the
+    # analyst-facing Possible Related Parties list before review.
+    _concentration_is_anchor = _concentration_fired and has_bidirectional
     has_hard_anchor = (
         has_bidirectional
         or any(sig == "director_benefit" for sig, _, _ in signals)
