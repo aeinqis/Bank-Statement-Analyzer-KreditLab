@@ -2319,7 +2319,11 @@ def _rp_keyword_text(tx: dict[str, Any], counterparty_name: Any = "") -> str:
         if isinstance(value, str):
             key_lower = key.lower()
             # Skip fields that are purely numeric or IDs
-            if key_lower in ("date", "account_no", "account_number", "page", "seq", "source_file"):
+            if key_lower in (
+                "date", "account_no", "account_number", "page", "seq", "source_file",
+                "type", "transaction_type", "txn_type", "entry_type", "side",
+                "dr_cr", "direction", "transaction_indicator",
+            ):
                 continue
             text = re.sub(r"\s+", " ", value.upper()).strip()
             if text and len(text) > 3 and text not in seen:
@@ -2431,7 +2435,11 @@ def _rp_candidate_from_person_rescue_window(
 
 
 def _rp_rescue_person_name_from_tx(tx: dict[str, Any]) -> str:
-    tokens = _rp_person_rescue_tokens(_rp_keyword_text(tx, ""))
+    return _rp_rescue_person_name_from_text(_rp_keyword_text(tx, ""))
+
+
+def _rp_rescue_person_name_from_text(text: Any) -> str:
+    tokens = _rp_person_rescue_tokens(text)
     if not tokens:
         return ""
     spans = _rp_person_rescue_keyword_spans(tokens)
@@ -2491,6 +2499,214 @@ def _rp_rescue_person_counterparties(cp: dict[str, Any]) -> list[dict[str, Any]]
         group["debit_count"] += 1
         group["total_debits"] = round(float(group["total_debits"]) + amount, 2)
     return list(groups.values())
+
+
+def _rp_contains_personal_keyword(tx: dict[str, Any], counterparty_name: Any = "") -> bool:
+    keyword_text = _rp_keyword_text(tx, counterparty_name)
+    return any(kw in keyword_text for kw in PERSONAL_KEYWORDS_RP4)
+
+
+def _rp_valid_person_candidate_name(name: Any) -> str:
+    if not isinstance(name, str):
+        return ""
+    candidate = re.sub(r"\s+", " ", name.upper()).strip()
+    if not candidate:
+        return ""
+    try:
+        cleaned = clean_counterparty_name(candidate)
+    except Exception:
+        cleaned = candidate
+    if not isinstance(cleaned, str):
+        return ""
+    cleaned = _normalise_counterparty_name(_strip_rp_person_purpose_suffix(cleaned))
+    if not cleaned:
+        return ""
+    upper = cleaned.upper()
+    if upper in _RP_EXCLUDE_NAMES or any(upper.startswith(p) for p in _RP_EXCLUDE_PREFIXES):
+        return ""
+    if OWN_PARTY_MARKER_RE.search(upper):
+        return ""
+    if _looks_like_company(cleaned) or has_corporate_suffix(cleaned):
+        return ""
+    if _FINANCE_INSTITUTION_RE.search(cleaned):
+        return ""
+    if _PUBLIC_BODY_RE.search(cleaned) or _BUSINESS_NOUN_RE.search(cleaned):
+        return ""
+    if not (has_natural_person_marker(cleaned) or _looks_like_personal_name(cleaned)):
+        return ""
+    return cleaned
+
+
+def _rp_personal_keyword_candidate_name(
+    tx: dict[str, Any],
+    counterparty_name: Any = "",
+) -> str:
+    tx_context = dict(tx)
+    if counterparty_name:
+        tx_context.setdefault("ledger_counterparty_name", counterparty_name)
+        tx_context.setdefault("counterparty_name", counterparty_name)
+        tx_context.setdefault("party_name", counterparty_name)
+
+    for value in (
+        tx_context.get("description"),
+        tx_context.get("transaction_description"),
+        tx_context.get("raw_description"),
+        tx_context.get("description_raw"),
+        tx_context.get("full_description"),
+        tx_context.get("transaction_details"),
+        tx_context.get("details"),
+        tx_context.get("narration"),
+        tx_context.get("memo"),
+        tx_context.get("remarks"),
+        tx_context.get("reference"),
+        tx_context.get("particulars"),
+        tx_context.get("payment_details"),
+        tx_context.get("purpose"),
+        tx_context.get("counterparty_name_raw"),
+        tx_context.get("raw_counterparty"),
+        tx_context.get("_raw_counterparty"),
+        tx_context.get("counterparty_name_clean"),
+        tx_context.get("counterparty_name"),
+        tx_context.get("counterparty"),
+        tx_context.get("party_name"),
+        counterparty_name,
+    ):
+        if not value or not _rp_contains_personal_keyword({"description": value}):
+            continue
+        rescued = _rp_rescue_person_name_from_text(value)
+        if rescued:
+            return rescued
+
+    rescued = _rp_rescue_person_name_from_tx(tx_context)
+    if rescued:
+        return rescued
+
+    for value in (
+        tx_context.get("counterparty_name_clean"),
+        tx_context.get("party_name"),
+        tx_context.get("counterparty_name"),
+        tx_context.get("counterparty"),
+        tx_context.get("counterparty_name_raw"),
+        tx_context.get("raw_counterparty"),
+        counterparty_name,
+    ):
+        candidate = _rp_valid_person_candidate_name(value)
+        if candidate:
+            return candidate
+    return ""
+
+
+def _rp_gross_debit_total(cps: list[dict[str, Any]]) -> float:
+    gross_dr = sum(
+        abs(_rp_first_number(cp, "total_debits", "total_debit", "debits", "dr_total"))
+        for cp in cps
+    )
+    if gross_dr > 0:
+        return gross_dr
+    return sum(
+        _rp_tx_amount(tx, "DEBIT")
+        for cp in cps
+        for tx in (cp.get("transactions", []) or [])
+        if isinstance(tx, dict) and _rp_tx_side(tx) == "DEBIT"
+    )
+
+
+def scan_personal_keyword_related_party_candidates(
+    counterparty_ledger: dict[str, Any] | None,
+    *,
+    gross_dr: float | None = None,
+) -> list[dict[str, Any]]:
+    """Supplemental RP scan over ledger transactions one-by-one.
+
+    Some parser/ledger paths fragment a person across purpose-suffixed buckets
+    such as ``MARIANA BINTI AHMAT PETTY CASH`` and ``... CLAIM``. The primary
+    RP scan scores one counterparty bucket at a time, so those rows may never
+    accumulate enough personal-keyword evidence to appear in the advisory
+    Possible Related Parties list. This helper walks every debit transaction,
+    checks the Track 2 ``PERSONAL_KEYWORDS_RP4`` list against the full row
+    text, extracts the individual named in that row, groups matching rows by
+    person, then applies the same RP scoring rules to the grouped evidence.
+    """
+    if not isinstance(counterparty_ledger, dict):
+        return []
+    cps = [
+        cp for cp in (counterparty_ledger.get("counterparties", []) or [])
+        if isinstance(cp, dict)
+    ]
+    if not cps:
+        return []
+    if gross_dr is None:
+        gross_dr = _rp_gross_debit_total(cps)
+
+    groups: dict[str, dict[str, Any]] = {}
+    for cp in cps:
+        source_name = _rp_counterparty_name(cp)
+        for tx in cp.get("transactions", []) or []:
+            if not isinstance(tx, dict) or _rp_tx_side(tx) != "DEBIT":
+                continue
+            tx_context = dict(tx)
+            if source_name:
+                tx_context.setdefault("ledger_counterparty_name", source_name)
+                tx_context.setdefault("counterparty_name", source_name)
+                tx_context.setdefault("party_name", source_name)
+            if not _rp_contains_personal_keyword(tx_context, source_name):
+                continue
+
+            person_name = _rp_personal_keyword_candidate_name(tx_context, source_name)
+            if not person_name:
+                continue
+
+            amount = _rp_tx_amount(tx_context, "DEBIT")
+            group = groups.setdefault(
+                person_name,
+                {
+                    "counterparty_name": person_name,
+                    "transaction_count": 0,
+                    "credit_count": 0,
+                    "debit_count": 0,
+                    "total_credits": 0.0,
+                    "total_debits": 0.0,
+                    "transactions": [],
+                    "rescued_from_counterparties": set(),
+                },
+            )
+            if source_name and source_name.upper() != person_name.upper():
+                group["rescued_from_counterparties"].add(source_name)
+            tx_copy = dict(tx_context)
+            tx_copy["counterparty_name_raw"] = tx_copy.get("counterparty_name_raw") or source_name
+            tx_copy["counterparty_name_clean"] = person_name
+            tx_copy["counterparty_name"] = person_name
+            tx_copy["party_name"] = person_name
+            tx_copy["related_party_candidate_source"] = "personal_keyword_transaction_scan"
+            group["transactions"].append(tx_copy)
+            group["transaction_count"] += 1
+            group["debit_count"] += 1
+            group["total_debits"] = round(float(group["total_debits"]) + amount, 2)
+
+    candidates: list[dict[str, Any]] = []
+    for name, cp in groups.items():
+        if _is_salary_recipient(cp) and not _has_director_benefit(cp):
+            continue
+        scored = _compute_rp_signals(cp, gross_dr or 0.0)
+        if scored is None or "personal_keyword_sweep" not in scored["signals"]:
+            continue
+        rescued_from = sorted(cp.get("rescued_from_counterparties") or [])
+        candidates.append({
+            "name": name,
+            "method": "personal_keyword_sweep",
+            "source": "personal_keyword_transaction_scan",
+            "rescued_from_counterparties": rescued_from,
+            **scored,
+        })
+
+    confidence_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    candidates.sort(
+        key=lambda c: (
+            confidence_order.get(c["confidence"], 9),
+            -c["total_dr"],
+        )
+    )
+    return candidates
 
 
 def _rp_tx_side(tx: dict[str, Any]) -> str:
@@ -2934,17 +3150,7 @@ def scan_related_party_candidates(
     if not counterparty_ledger:
         return []
     cps = counterparty_ledger.get("counterparties", []) or []
-    gross_dr = sum(
-        abs(_rp_first_number(cp, "total_debits", "total_debit", "debits", "dr_total"))
-        for cp in cps
-    )
-    if gross_dr <= 0:
-        gross_dr = sum(
-            _rp_tx_amount(tx, "DEBIT")
-            for cp in cps
-            for tx in (cp.get("transactions", []) or [])
-            if _rp_tx_side(tx) == "DEBIT"
-        )
+    gross_dr = _rp_gross_debit_total([cp for cp in cps if isinstance(cp, dict)])
 
     candidates: list[dict[str, Any]] = []
     rescued_counterparties: list[dict[str, Any]] = []
@@ -3012,6 +3218,16 @@ def scan_related_party_candidates(
             "rescued_from_counterparty": cp.get("rescued_from_counterparty"),
             **scored,
         })
+        existing_names.add(name.upper())
+
+    for candidate in scan_personal_keyword_related_party_candidates(
+        counterparty_ledger,
+        gross_dr=gross_dr,
+    ):
+        name = str(candidate.get("name") or "").strip()
+        if not name or name.upper() in existing_names:
+            continue
+        candidates.append(candidate)
         existing_names.add(name.upper())
 
     confidence_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}

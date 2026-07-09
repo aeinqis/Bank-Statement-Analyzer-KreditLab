@@ -5,6 +5,7 @@ from kredit_lab_classify_track2 import (
     advisory_rp_candidates,
     build_track2_result,
     dedup_counterparty_entries,
+    scan_personal_keyword_related_party_candidates,
     scan_related_party_candidates,
 )
 
@@ -227,6 +228,50 @@ class RelatedPartyCandidateTests(unittest.TestCase):
         self.assertEqual(
             advisory_rp_candidates(candidates, effective_related_parties=[])[0]["name"],
             "MARIANA AHMAT",
+        )
+
+    def test_fragmented_mariana_rows_surface_from_transaction_keyword_scan(self):
+        ledger = {
+            "counterparties": [
+                {
+                    "counterparty_name": name,
+                    "transaction_count": 1,
+                    "credit_count": 0,
+                    "debit_count": 1,
+                    "total_credits": 0.0,
+                    "total_debits": amount,
+                    "transactions": [
+                        _debit(date, f"TR TO SAVINGS {name}", amount),
+                    ],
+                }
+                for date, name, amount in [
+                    ("2025-09-24", "MARIANA BINTI AHMAT PETTY CASH", 1200.0),
+                    ("2025-09-25", "MARIANA BINTI AHMAT CLAIM", 960.0),
+                    ("2025-10-03", "STAFF OUTSTATION MARIANA BINTI AHMAT PETTY CASH", 1500.0),
+                    ("2025-11-13", "MARIANA BINTI AHMAT REIMBURSE", 1300.0),
+                    ("2025-12-02", "MARIANA BINTI AHMAT MEDICAL", 1100.0),
+                    ("2026-01-28", "MARIANA BINTI AHMAT STAFF BONUS", 1400.0),
+                    ("2026-02-24", "MARIANA BINTI AHMAT PETTY CASH PO RAHMAN", 1500.0),
+                ]
+            ]
+        }
+
+        keyword_candidates = scan_personal_keyword_related_party_candidates(ledger)
+        keyword_candidate = next(
+            c for c in keyword_candidates if c["name"] == "MARIANA BINTI AHMAT"
+        )
+        candidates = scan_related_party_candidates(ledger)
+        candidate = next(c for c in candidates if c["name"] == "MARIANA BINTI AHMAT")
+
+        self.assertEqual(keyword_candidate["confidence"], "MEDIUM")
+        self.assertEqual(candidate["confidence"], "MEDIUM")
+        self.assertIn("personal_keyword_sweep", candidate["signals"])
+        self.assertIn("monthly_recurrence", candidate["signals"])
+        self.assertIn("7 personal-kw rows", candidate["evidence"])
+        self.assertIn("DR over 6 months", candidate["evidence"])
+        self.assertEqual(
+            advisory_rp_candidates(candidates, effective_related_parties=[])[0]["name"],
+            "MARIANA BINTI AHMAT",
         )
 
     def test_mariana_ahmat_stays_possible_when_debit_share_is_high(self):
