@@ -35,7 +35,7 @@ COUNTERPARTY_DESCRIPTOR_TOKENS = {
     "STAFF", "SALARY", "OVERTIME", "ADVANCE", "DONATION", "INVOICE",
     "INVOICES", "PAYMENT", "BALANCE", "TOKEN", "AWARD", "TOPUP", "REF",
     "INV", "POLICY", "NO", "ACC", "ACCOUNT", "TRANSFER", "MONTHLY",
-    "INCENTIVE", "IBG", "INTERBANK", "GIRO",
+    "INCENTIVE", "IBG", "INTERBANK", "GIRO", "TR",
     # Malaysian admin / licensing / stamping purpose words — these describe
     # *why* money moved, not *who* it moved to/from. Stripping them lets
     # the underlying person/company name survive intact for grouping.
@@ -43,7 +43,7 @@ COUNTERPARTY_DESCRIPTOR_TOKENS = {
     "PEMBAHARUAN", "LSEN", "LESEN", "LICENSE", "LICENCE", "KDN", "RUJ",
     "RUJUKAN", "SIGN", "SURAT", "PGM", "PROGRAM", "MPC", "MSSB", "TRADE",
     "HOSTEL", "MELAKA", "MELAKA.", "TM",
-    "SHARE", "CAPITAL", "CAP", "SHARECAP", "SHARECAPITAL",
+    "SHARE", "CAPITAL", "CAP", "SHARECAP", "SHARECAPITAL", "BACK",
     "AND", "BOULEV", "BOULEVARD", "TRIENEKEN", "MTSB",
 }
 COUNTERPARTY_MONTH_TOKENS = {
@@ -167,6 +167,7 @@ COUNTERPARTY_PERSON_NAME_START_TOKENS = {
     "SHAHARUDDIN", "SHAUFIAH", "SITI", "WAN",
 }
 COUNTERPARTY_EMBEDDED_NAME_ANCHORS: Tuple[Tuple[Tuple[str, ...], Tuple[Tuple[str, ...], ...]], ...] = (
+    (("SHAHARUDDIN", "SAM"), (("SHAHARUDDIN", "SAM"),)),
     (("KHAIRUL", "OTHMAN"), (("KHAIRUL", "OTHMAN"),)),
     (("NORAZIYAN", "OTH"), (("NORAZIYAN", "OTH"), ("NORAZIYAN", "OTHM"))),
 )

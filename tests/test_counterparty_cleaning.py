@@ -146,8 +146,27 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(clean_counterparty_name("SHAHARUDDIN SAMS HOUSE INSTALMENT"), "SHAHARUDDIN SAMS")
         self.assertEqual(clean_counterparty_name("SHAHARUDDIN SAMS INSTALMENT"), "SHAHARUDDIN SAMS")
         self.assertEqual(
+            clean_counterparty_name("BATAM INDONESIA SHAHARUDDIN SAM PESONA GOLF"),
+            "SHAHARUDDIN SAM",
+        )
+        self.assertEqual(
+            clean_counterparty_name("GOLF TOURS SHAHARUDDIN SAM ADDITIONAL PACKAGE"),
+            "SHAHARUDDIN SAM",
+        )
+        self.assertEqual(clean_counterparty_name("SHAHARUDDIN SAM KUCHING"), "SHAHARUDDIN SAM")
+        self.assertEqual(
             clean_counterparty_name("KETUA UNIT KESELAMAT DAYANG SURIATI BINT FAREWELL"),
             "DAYANG SURIATI",
+        )
+
+    def test_expands_sdn_from_transfer_description(self):
+        self.assertEqual(
+            clean_counterparty_name("TR IBG MUHAFIZ SECURITY SDN TRANSFER BACK TO MBB"),
+            "MUHAFIZ SECURITY SDN BHD",
+        )
+        self.assertEqual(
+            normalise_counterparty_for_ledger("MUHAFIZ SECURITY SDN."),
+            "MUHAFIZ SECURITY SDN BHD",
         )
 
     def test_ledger_groups_names_after_description_noise_stripping(self):
@@ -376,6 +395,34 @@ class CounterpartyCleaningTests(unittest.TestCase):
         row = merged["SHAHARUDDIN SAMSI"]
         self.assertEqual(row["total_debits"], 712737.41)
         self.assertEqual(row["transaction_count"], 38)
+
+    def test_shaharuddin_sam_wrapped_descriptions_merge(self):
+        groups = {
+            "BATAM INDONESIA SHAHARUDDIN SAM PESONA GOLF": {
+                "counterparty_name": "BATAM INDONESIA SHAHARUDDIN SAM PESONA GOLF",
+                "total_credits": 0.0,
+                "total_debits": 1800.0,
+                "transaction_count": 1,
+            },
+            "GOLF TOURS SHAHARUDDIN SAM ADDITIONAL PACKAGE": {
+                "counterparty_name": "GOLF TOURS SHAHARUDDIN SAM ADDITIONAL PACKAGE",
+                "total_credits": 0.0,
+                "total_debits": 4200.0,
+                "transaction_count": 1,
+            },
+            "SHAHARUDDIN SAM KUCHING": {
+                "counterparty_name": "SHAHARUDDIN SAM KUCHING",
+                "total_credits": 0.0,
+                "total_debits": 729647.41,
+                "transaction_count": 37,
+            },
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"SHAHARUDDIN SAM"})
+        row = merged["SHAHARUDDIN SAM"]
+        self.assertEqual(row["total_debits"], 735647.41)
+        self.assertEqual(row["transaction_count"], 39)
 
     def test_shaharuddin_abb_prefers_bin_variant(self):
         groups = {
