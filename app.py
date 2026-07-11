@@ -773,7 +773,7 @@ def generate_interactive_html(data):
                     'amount': credit,
                     'balance': t.get('balance', 0),
                     'type': 'CREDIT'
-                })
+                    })
             elif debit >= threshold_float:
                 large_txns.append({
                     'date': t.get('date', ''),
@@ -828,13 +828,21 @@ def generate_interactive_html(data):
     obs = normalize_observations(data.get('observations', {}))
     parsing = data.get('parsing_metadata', {})
     company_name = r.get('company_name', 'Company')
+    related_parties = r.get('related_parties', [])
+    report_counterparty_rows = None
 
     # Prepare top parties before feature detection; later rendering depends on it.
     top_parties = data.get('top_parties', {})
     cp_ledger_for_top = data.get('counterparty_ledger', {})
     if isinstance(cp_ledger_for_top, dict) and cp_ledger_for_top.get('counterparties'):
-        top_parties = _top_parties_from_counterparty_ledger(
+        report_counterparty_rows = build_report_counterparty_ledger_rows(
             cp_ledger_for_top,
+            related_parties=related_parties,
+            own_related=own_related,
+            company_name=company_name,
+        )
+        top_parties = _top_parties_from_counterparty_rows(
+            report_counterparty_rows,
             limit=None,
             company_name=company_name,
         )
@@ -1051,6 +1059,20 @@ def generate_interactive_html(data):
         name = rp.get('name', rp) if isinstance(rp, dict) else str(rp)
         rel = rp.get('relationship', '') if isinstance(rp, dict) else ''
         rp_html += f'<span class="rp-tag">{name} <small>({rel})</small></span>'
+
+    if isinstance(cp_ledger_for_top, dict) and cp_ledger_for_top.get('counterparties'):
+        report_counterparty_rows = build_report_counterparty_ledger_rows(
+            cp_ledger_for_top,
+            related_parties=related_parties,
+            own_related=own_related,
+            company_name=company_name,
+        )
+        top_parties = _top_parties_from_counterparty_rows(
+            report_counterparty_rows,
+            limit=None,
+            company_name=company_name,
+        )
+        data['top_parties'] = top_parties
 
     def _matched_related_party_name(counterparty_name, description):
         cp_upper = str(counterparty_name or '').upper()
@@ -1815,12 +1837,14 @@ def generate_interactive_html(data):
             val_fail_warning = '<div style="background:var(--amber-dim);border:1px solid var(--amber);color:var(--amber);margin:0.75rem 0;padding:0.75rem;border-radius:8px;display:flex;gap:0.5rem;align-items:center"><div>⚠️</div><div><div style="font-weight:600">Counterparty ledger cleaning failed validation</div><div style="font-size:0.85rem">Showing original parser output.</div></div></div>'
 
         raw_counterparties = cp_ledger.get('counterparties', []) or []
-        counterparties_sorted = build_report_counterparty_ledger_rows(
-            cp_ledger,
-            related_parties=related_parties,
-            own_related=own_related,
-            company_name=company_name,
-        )
+        counterparties_sorted = report_counterparty_rows
+        if counterparties_sorted is None:
+            counterparties_sorted = build_report_counterparty_ledger_rows(
+                cp_ledger,
+                related_parties=related_parties,
+                own_related=own_related,
+                company_name=company_name,
+            )
         if raw_counterparties and len(counterparties_sorted) != len(raw_counterparties):
             original_cp = original_cp or len(raw_counterparties)
             merges = merges or (len(raw_counterparties) - len(counterparties_sorted))
@@ -3518,6 +3542,77 @@ def _has_top_party_rows(top_parties: dict) -> bool:
     return bool(payers or payees)
 
 
+_REPORT_SPECIAL_COUNTERPARTY_BUCKETS = {
+    "UNIDENTIFIED",
+    "UNKNOWN",
+    "UNKNOWN PARTY",
+    "UNCATEGORIZED",
+    "CHEQUE",
+    "UNIDENTIFIED (CHEQUE)",
+    "UNIDENTIFIED (CASH)",
+    "CASH DEPOSIT",
+    "CASH WITHDRAWAL",
+    "BANK FEES",
+    "BANK FEE",
+    "SERVICE CHARGE",
+    "BULK SALARY",
+    "FD/INTEREST",
+    "FD INTEREST",
+    "INTEREST",
+    "PROFIT PAID",
+    "PROFIT CHARGED",
+    "LOAN REPAYMENT",
+    "LOAN DISBURSEMENT",
+    "KWSP",
+    "KUMPULAN WANG SIMPAN PEKERJA",
+    "KUMPULAN WANG SIMPANAN PEKERJA",
+    "SOCSO",
+    "LHDN",
+    "HRDF",
+    "TRANSFER FEE",
+    "OTHER TRANSFER FEE",
+    "REVERSAL",
+    "RETURNED CHEQUE",
+    "INWARD RETURN",
+    "APAYLATER",
+    "AUTOPAY CR",
+    "AUTOPAY DR",
+    "MTH END",
+    "MONTH END",
+    "OPENING BALANCE",
+    "CLOSING BALANCE",
+}
+
+_REPORT_RANKABLE_SPECIAL_BUCKETS = {"JANM"}
+
+
+def _report_counterparty_label(name) -> str:
+    text = re.sub(r"\s+", " ", str(name or "").strip().upper())
+    return text
+
+
+def _is_report_special_counterparty_bucket(name) -> bool:
+    upper = _report_counterparty_label(name)
+    if not upper:
+        return True
+    if upper in _REPORT_RANKABLE_SPECIAL_BUCKETS:
+        return False
+    if upper in _REPORT_SPECIAL_COUNTERPARTY_BUCKETS:
+        return True
+    return bool(
+        re.match(r"^UNIDENTIFIED(?:\s.*)?$", upper)
+        or re.match(r"^UNNAMED\s+.+?\s+TRANSFER\s*\((?:CR|DR)\)\s*$", upper)
+        or re.match(r"^UNNAMED\s+INTERNAL\s+PAYROLL\s*\((?:CR|DR)\)\s*$", upper)
+        or re.match(r"^CARD\s+POS\s*\([A-Z]+\)\s*$", upper)
+        or re.match(r"^(?:MTH|MONTH)\s+END(?:\s+.*)?$", upper)
+    )
+
+
+def _is_report_unknown_counterparty(name) -> bool:
+    upper = _report_counterparty_label(name)
+    return upper in {"", "UNKNOWN", "UNKNOWN PARTY", "UNIDENTIFIED", "UNCATEGORIZED"}
+
+
 def _ledger_monthly_breakdown(transactions: List[dict], side: str) -> List[dict]:
     buckets = {}
     side = side.upper()
@@ -3557,13 +3652,10 @@ def _ledger_monthly_breakdown(transactions: List[dict], side: str) -> List[dict]
     ]
 
 
-def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: Optional[int] = 10, company_name: str = "") -> dict:
-    if not isinstance(counterparty_ledger, dict):
-        return {"top_payers": [], "top_payees": []}
-
+def _top_parties_from_counterparty_rows(counterparty_rows: List[dict], limit: Optional[int] = 10, company_name: str = "") -> dict:
     payers = []
     payees = []
-    for cp in build_canonical_counterparty_ledger_rows(counterparty_ledger):
+    for cp in counterparty_rows or []:
         if not isinstance(cp, dict):
             continue
         name = (
@@ -3574,6 +3666,10 @@ def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: Opti
         )
         name = str(name).strip()
         if not name:
+            continue
+        if _is_report_unknown_counterparty(name) or _is_report_special_counterparty_bucket(name):
+            continue
+        if _is_ghost_party_bucket(name):
             continue
 
         transactions = cp.get("transactions") or []
@@ -3664,6 +3760,16 @@ def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: Opti
         "top_payers": [{**party, "rank": idx} for idx, party in enumerate(top_payers, 1)],
         "top_payees": [{**party, "rank": idx} for idx, party in enumerate(top_payees, 1)],
     }
+
+
+def _top_parties_from_counterparty_ledger(counterparty_ledger: dict, limit: Optional[int] = 10, company_name: str = "") -> dict:
+    if not isinstance(counterparty_ledger, dict):
+        return {"top_payers": [], "top_payees": []}
+    return _top_parties_from_counterparty_rows(
+        build_canonical_counterparty_ledger_rows(counterparty_ledger),
+        limit=limit,
+        company_name=company_name,
+    )
 
 
 def build_canonical_counterparty_ledger_rows(cp_ledger: dict) -> List[dict]:
@@ -3909,6 +4015,8 @@ def _report_related_party_entries(related_parties) -> List[tuple[str, str]]:
     for party in related_parties or []:
         name = _report_party_display_name(party)
         if not name:
+            continue
+        if _is_report_unknown_counterparty(name) or _is_report_special_counterparty_bucket(name):
             continue
         key = name.upper()
         if key in seen:
@@ -4472,10 +4580,18 @@ def prepare_top_parties_for_report(top_parties: dict, limit: int = 10, company_n
 
     payers_all = [_normalize_party_for_report(p, True) for p in raw_payers]
     payees_all = [_normalize_party_for_report(p, False) for p in raw_payees]
-    payers_suppressed = [p for p in payers_all if _is_ghost_party_bucket(p.get("party_name", ""))]
-    payees_suppressed = [p for p in payees_all if _is_ghost_party_bucket(p.get("party_name", ""))]
-    payers = [p for p in payers_all if not _is_ghost_party_bucket(p.get("party_name", ""))][:limit]
-    payees = [p for p in payees_all if not _is_ghost_party_bucket(p.get("party_name", ""))][:limit]
+    def _top_party_is_suppressed(party: dict) -> bool:
+        name = party.get("party_name", "")
+        return (
+            _is_report_unknown_counterparty(name)
+            or _is_report_special_counterparty_bucket(name)
+            or _is_ghost_party_bucket(name)
+        )
+
+    payers_suppressed = [p for p in payers_all if _top_party_is_suppressed(p)]
+    payees_suppressed = [p for p in payees_all if _top_party_is_suppressed(p)]
+    payers = [p for p in payers_all if not _top_party_is_suppressed(p)][:limit]
+    payees = [p for p in payees_all if not _top_party_is_suppressed(p)][:limit]
 
     for idx, party in enumerate(payers, 1):
         party["rank"] = idx
@@ -4558,10 +4674,18 @@ def build_top_party_view_from_counterparty_ledger(
     *,
     limit: int = 10,
     company_name: str = "",
+    related_parties=None,
+    own_related=None,
 ) -> dict:
     """Return the shared Top Parties view used by Streamlit, HTML, and Excel."""
-    top_parties = _top_parties_from_counterparty_ledger(
+    counterparty_rows = build_report_counterparty_ledger_rows(
         cp_ledger,
+        related_parties=related_parties,
+        own_related=own_related,
+        company_name=company_name,
+    )
+    top_parties = _top_parties_from_counterparty_rows(
+        counterparty_rows,
         limit=None,
         company_name=company_name,
     )
@@ -5239,10 +5363,21 @@ def build_report_data_from_analysis(
     adapted_data = adapt_to_v6(data)
     adapted_data['transactions'] = transactions
     
-    # Build top_parties from CP ledger for consistency with Railway UI
+    # Build top_parties from the same aligned CP ledger rows used by reports.
     cp_ledger = transaction_analysis.get('counterparty_ledger', {}) or build_track2_counterparty_ledger(transactions)
     company_name = st.session_state.get('company_name_override', '') or (transactions[0].get('company_name', '') if transactions else '')
-    adapted_data['top_parties'] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None, company_name=company_name)
+    related_parties = adapted_data.get("report_info", {}).get("related_parties", []) or []
+    own_related = adapted_data.get("own_related_transactions", {}) or {}
+    adapted_data['top_parties'] = _top_parties_from_counterparty_rows(
+        build_report_counterparty_ledger_rows(
+            cp_ledger,
+            related_parties=related_parties,
+            own_related=own_related,
+            company_name=company_name,
+        ),
+        limit=None,
+        company_name=company_name,
+    )
         
     # IMPORTANT: Build large transactions directly from transactions with correct threshold
     adapted_data['large_transactions'] = build_large_transactions(transactions, threshold)
@@ -5302,10 +5437,21 @@ def normalize_report_data_for_export(data: dict) -> dict:
     if not source.get("counterparty_ledger") and source.get("transactions"):
         source["counterparty_ledger"] = build_track2_counterparty_ledger(source.get("transactions", []))
     
-    # ALWAYS build top_parties from CP ledger for consistency with Railway UI
+    # ALWAYS build top_parties from the aligned CP ledger for consistency with the UI.
     cp_ledger = source.get("counterparty_ledger", {})
     company_name = source.get("report_info", {}).get("company_name", "")
-    source["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None, company_name=company_name)
+    related_parties = source.get("report_info", {}).get("related_parties", []) or []
+    own_related = source.get("own_related_transactions", {}) or {}
+    source["top_parties"] = _top_parties_from_counterparty_rows(
+        build_report_counterparty_ledger_rows(
+            cp_ledger,
+            related_parties=related_parties,
+            own_related=own_related,
+            company_name=company_name,
+        ),
+        limit=None,
+        company_name=company_name,
+    )
 
     if "monthly_analysis" not in source and "transactions" in source:
         normalized = adapt_to_v6(source)
@@ -5335,10 +5481,21 @@ def normalize_report_data_for_export(data: dict) -> dict:
     normalized.setdefault("observations", {"positive": [], "concerns": []})
     normalized.setdefault("counterparty_ledger", {})
     normalized.setdefault("parsing_metadata", {})
-     # Ensure top_parties is from CP ledger
-    if not _has_top_party_rows(normalized.get("top_parties")):
-        cp_ledger = normalized.get("counterparty_ledger", {})
-        normalized["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None)
+    # Ensure top_parties remains from the aligned CP ledger.
+    cp_ledger = normalized.get("counterparty_ledger", {})
+    company_name = normalized.get("report_info", {}).get("company_name", "")
+    related_parties = normalized.get("report_info", {}).get("related_parties", []) or []
+    own_related = normalized.get("own_related_transactions", {}) or {}
+    normalized["top_parties"] = _top_parties_from_counterparty_rows(
+        build_report_counterparty_ledger_rows(
+            cp_ledger,
+            related_parties=related_parties,
+            own_related=own_related,
+            company_name=company_name,
+        ),
+        limit=None,
+        company_name=company_name,
+    )
 
     threshold = safe_float(
         normalized.get("consolidated", {}).get("high_value_threshold")
@@ -5451,10 +5608,19 @@ def build_shared_report_data(
             )
             data.setdefault("counterparty_ledger", cp_ledger)
             
-            # CRITICAL FIX: Build top_parties from the CP ledger with company name
+            # Build top_parties from the same aligned CP ledger rows rendered in reports.
             # Get company name from override or first transaction
             company_name = override or (company_names[0] if company_names else '')
-            data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None, company_name=company_name)
+            data["top_parties"] = _top_parties_from_counterparty_rows(
+                build_report_counterparty_ledger_rows(
+                    cp_ledger,
+                    related_parties=data.get("report_info", {}).get("related_parties", []) or [],
+                    own_related=data.get("own_related_transactions", {}) or {},
+                    company_name=company_name,
+                ),
+                limit=None,
+                company_name=company_name,
+            )
             
             return _finalize_shared_report_data(
                 data,
@@ -5482,13 +5648,22 @@ def build_shared_report_data(
     )
     report_data["pdf_integrity"] = pdf_integrity
     
-    # Build top_parties from CP ledger for legacy fallback too
+    # Build top_parties from the aligned CP ledger for legacy fallback too
     cp_ledger = build_track2_counterparty_ledger(transactions)
     # Get company name from session state or transactions
     company_name = st.session_state.get("company_name_override", "") or (
         transactions[0].get("company_name", "") if transactions else ""
     )
-    report_data["top_parties"] = _top_parties_from_counterparty_ledger(cp_ledger, limit=None, company_name=company_name)
+    report_data["top_parties"] = _top_parties_from_counterparty_rows(
+        build_report_counterparty_ledger_rows(
+            cp_ledger,
+            related_parties=report_data.get("report_info", {}).get("related_parties", []) or [],
+            own_related=report_data.get("own_related_transactions", {}) or {},
+            company_name=company_name,
+        ),
+        limit=None,
+        company_name=company_name,
+    )
     report_data["counterparty_ledger"] = cp_ledger
         
     return _finalize_shared_report_data(
@@ -5994,9 +6169,14 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         report_data["counterparty_ledger"] = cp_ledger
     report_info = report_data.get("report_info", {}) or {}
     
-    # Build top_parties from CP ledger
-    top_parties = _top_parties_from_counterparty_ledger(
-        cp_ledger,
+    # Build top_parties from the same aligned CP ledger rows used by the Counterparty sheets.
+    top_parties = _top_parties_from_counterparty_rows(
+        build_report_counterparty_ledger_rows(
+            cp_ledger,
+            related_parties=report_info.get("related_parties", []) or [],
+            own_related=own_related,
+            company_name=report_info.get("company_name", ""),
+        ),
         limit=None,
         company_name=report_info.get("company_name", ""),
     )
@@ -6008,22 +6188,6 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     monthly_analysis = report_data.get("monthly_analysis", []) or []
     accounts = report_data.get("accounts", []) or []
     top_parties = report_data.get("top_parties", {}) or {}
-
-    if not _has_top_party_rows(top_parties):
-        ledger_top_parties = _top_parties_from_counterparty_ledger(
-            cp_ledger,
-            limit=None,
-            company_name=report_info.get("company_name", ""),
-        )
-        if _has_top_party_rows(ledger_top_parties):
-            top_parties = ledger_top_parties
-            report_data["top_parties"] = top_parties
-
-    if not _has_top_party_rows(top_parties):
-        analysis_top_parties = _top_parties_from_transaction_analysis(transaction_analysis or {})
-        if _has_top_party_rows(analysis_top_parties):
-            top_parties = analysis_top_parties
-            report_data["top_parties"] = top_parties
 
     statutory_compliance = consolidated.get("statutory_compliance", {}) or {}
     observations = normalize_observations(report_data.get("observations", {}) or {})
@@ -7515,50 +7679,13 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
     """
     from collections import defaultdict
 
-    special_buckets = {
-        "UNIDENTIFIED",
-        "UNCATEGORIZED",
-        "CHEQUE",
-        "UNIDENTIFIED (CHEQUE)",
-        "CASH DEPOSIT",
-        "CASH WITHDRAWAL",
-        "BANK FEES",
-        "BULK SALARY",
-        "FD/INTEREST",
-        "LOAN REPAYMENT",
-        "LOAN DISBURSEMENT",
-        "KWSP",
-        "KUMPULAN WANG SIMPAN PEKERJA",
-        "KUMPULAN WANG SIMPANAN PEKERJA",
-        "SOCSO",
-        "LHDN",
-        "HRDF",
-        "TRANSFER FEE",
-        "OTHER TRANSFER FEE",
-        "REVERSAL",
-        "RETURNED CHEQUE",
-        "INWARD RETURN",
-        "JANM",
-        "APAYLATER",
-        "AUTOPAY CR",
-        "AUTOPAY DR",
-    }
-
     def _clean_name(value) -> str:
         if value is None:
             return ""
         return re.sub(r"\s+", " ", str(value).strip()).upper()
 
     def _is_special_bucket(name: str) -> bool:
-        upper = _clean_name(name)
-        if upper in special_buckets:
-            return True
-        return bool(
-            re.match(r"^UNIDENTIFIED(?:\s.*)?$", upper)
-            or re.match(r"^UNNAMED\s+.+?\s+TRANSFER\s*\((?:CR|DR)\)\s*$", upper)
-            or re.match(r"^UNNAMED\s+INTERNAL\s+PAYROLL\s*\((?:CR|DR)\)\s*$", upper)
-            or re.match(r"^CARD\s+POS\s*\([A-Z]+\)\s*$", upper)
-        )
+        return _is_report_special_counterparty_bucket(name)
 
     def _method_for_name(name: str, matched_parser_pattern: bool) -> str:
         if _is_special_bucket(name):
@@ -9298,8 +9425,12 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
         own_related={},
         company_name=company_name_for_top,
     )
-    top_party_view = build_top_party_view_from_counterparty_ledger(
-        display_cp_ledger,
+    top_party_view = prepare_top_parties_for_report(
+        _top_parties_from_counterparty_rows(
+            canonical_cp_rows,
+            limit=None,
+            company_name=company_name_for_top,
+        ),
         limit=10,
         company_name=company_name_for_top,
     )
@@ -9482,6 +9613,8 @@ def detect_related_party_candidates(
             or name in confirmed_names
             or name in dismissed
             or name in _NOISE
+            or _is_report_unknown_counterparty(display_name)
+            or _is_report_special_counterparty_bucket(display_name)
             or any(
                 _report_party_names_equivalent(display_name, confirmed_name)
                 for confirmed_name in confirmed_name_list
@@ -9601,6 +9734,11 @@ def render_related_party_manager(
 
     # ── Working copies ──
     confirmed_rps: list = list(st.session_state.get("related_parties_override", []) or [])
+    confirmed_rps = [
+        rp for rp in confirmed_rps
+        if not _is_report_unknown_counterparty(rp.get("name") if isinstance(rp, dict) else rp)
+        and not _is_report_special_counterparty_bucket(rp.get("name") if isinstance(rp, dict) else rp)
+    ]
     dismissed: set = set(st.session_state.get("related_party_candidates_dismissed", set()))
 
     confirmed_names = {
@@ -9624,7 +9762,9 @@ def render_related_party_manager(
         a3.write("")
         if a3.button("Add", key="_rp_add_btn", use_container_width=True):
             clean = new_name.strip()
-            if clean and clean.upper() not in confirmed_names:
+            if _is_report_unknown_counterparty(clean) or _is_report_special_counterparty_bucket(clean):
+                st.warning("Special buckets and unknown/parser labels cannot be added as related parties.")
+            elif clean and clean.upper() not in confirmed_names:
                 confirmed_rps.append({"name": clean, "relationship": new_rel.strip()})
                 _save(confirmed_rps, dismissed)
                 changed = True
@@ -9720,11 +9860,15 @@ def render_related_party_manager(
             act, idx = action
             cand = candidates[idx]
             if act == "confirm":
-                confirmed_rps.append({
-                    "name": cand["name"],
-                    "relationship": "Analyst-confirmed — review required",
-                })
-                dismissed.discard(cand["name"].upper())
+                if not (
+                    _is_report_unknown_counterparty(cand["name"])
+                    or _is_report_special_counterparty_bucket(cand["name"])
+                ):
+                    confirmed_rps.append({
+                        "name": cand["name"],
+                        "relationship": "Analyst-confirmed - review required",
+                    })
+                    dismissed.discard(cand["name"].upper())
             else:
                 dismissed.add(cand["name"].upper())
             _save(confirmed_rps, dismissed)

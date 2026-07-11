@@ -695,6 +695,8 @@ class RelatedPartyCandidateTests(unittest.TestCase):
 
     def test_synthetic_names_are_excluded_even_from_related_party_overrides(self):
         self.assertTrue(_is_excluded_related_party_name({"name": "TRANSFER FEE"}))
+        self.assertTrue(_is_excluded_related_party_name({"name": "UNKNOWN"}))
+        self.assertTrue(_is_excluded_related_party_name({"name": "MTH END"}))
         self.assertTrue(
             _is_excluded_related_party_name(
                 {"name": "KUMPULAN WANG SIMPANAN PEKERJA"}

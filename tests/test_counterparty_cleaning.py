@@ -1,6 +1,12 @@
 import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
+from app import (
+    _report_related_party_entries,
+    _top_parties_from_counterparty_rows,
+    build_report_counterparty_ledger_rows,
+    prepare_top_parties_for_report,
+)
 from kredit_lab_classify_track2 import _build_own_related_transactions_list_track2
 from party_utils import (
     _merge_counterparty_groups,
@@ -591,6 +597,69 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(rows[0]["party_name"], "DAYANG SITI RAUDZAH")
         self.assertEqual(rows[1]["party_name"], "SHAHARUDDIN SAMS")
         self.assertEqual(rows[2]["party_name"], "CLOSE")
+
+    def test_report_top_parties_use_visible_ledger_rows_and_drop_parser_buckets(self):
+        cp_ledger = {
+            "counterparties": [
+                {
+                    "counterparty_name": "MTH END",
+                    "transaction_count": 1,
+                    "credit_count": 1,
+                    "debit_count": 0,
+                    "total_credits": 999999.0,
+                    "total_debits": 0.0,
+                    "transactions": [],
+                },
+                {
+                    "counterparty_name": "UNKNOWN",
+                    "transaction_count": 1,
+                    "credit_count": 1,
+                    "debit_count": 0,
+                    "total_credits": 888888.0,
+                    "total_debits": 0.0,
+                    "transactions": [],
+                },
+                {
+                    "counterparty_name": "ALPHA CUSTOMER",
+                    "transaction_count": 1,
+                    "credit_count": 1,
+                    "debit_count": 0,
+                    "total_credits": 1000.0,
+                    "total_debits": 0.0,
+                    "transactions": [],
+                },
+                {
+                    "counterparty_name": "SHAHARUDDIN BIN SAM",
+                    "transaction_count": 1,
+                    "credit_count": 0,
+                    "debit_count": 1,
+                    "total_credits": 0.0,
+                    "total_debits": 500.0,
+                    "transactions": [],
+                },
+            ]
+        }
+
+        ledger_rows = build_report_counterparty_ledger_rows(
+            cp_ledger,
+            related_parties=[{"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"}],
+        )
+        top_parties = _top_parties_from_counterparty_rows(ledger_rows, limit=None)
+        party_view = prepare_top_parties_for_report(top_parties, limit=10)
+
+        self.assertEqual([p["party_name"] for p in party_view["payers"]], ["ALPHA CUSTOMER"])
+        self.assertEqual([p["party_name"] for p in party_view["payees"]], ["SHAHARUDDIN SAMS"])
+        self.assertTrue(party_view["payees"][0]["is_related_party"])
+
+    def test_special_buckets_are_not_report_related_parties(self):
+        self.assertEqual(
+            _report_related_party_entries([
+                {"name": "TRANSFER FEE", "relationship": "Affiliate"},
+                {"name": "UNKNOWN", "relationship": "Affiliate"},
+                {"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"},
+            ]),
+            [("SHAHARUDDIN SAMS", "Affiliate")],
+        )
 
 
 if __name__ == "__main__":

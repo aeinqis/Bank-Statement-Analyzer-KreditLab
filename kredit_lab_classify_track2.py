@@ -7242,12 +7242,23 @@ def classify_transactions(
 _SYNTHETIC_COUNTERPARTY_LABELS: frozenset[str] = frozenset(
     {
         "UNIDENTIFIED",
+        "UNKNOWN",
+        "UNKNOWN PARTY",
         "UNCATEGORIZED",
+        "CHEQUE",
+        "UNIDENTIFIED (CHEQUE)",
+        "UNIDENTIFIED (CASH)",
         "CASH DEPOSIT",
         "CASH WITHDRAWAL",
         "BANK FEES",
+        "BANK FEE",
+        "SERVICE CHARGE",
         "BULK SALARY",
         "FD/INTEREST",
+        "FD INTEREST",
+        "INTEREST",
+        "PROFIT PAID",
+        "PROFIT CHARGED",
         "LOAN REPAYMENT",
         "LOAN DISBURSEMENT",
         "KWSP",
@@ -7263,6 +7274,12 @@ _SYNTHETIC_COUNTERPARTY_LABELS: frozenset[str] = frozenset(
         "INWARD RETURN",
         "JANM",
         "APAYLATER",
+        "AUTOPAY CR",
+        "AUTOPAY DR",
+        "MTH END",
+        "MONTH END",
+        "OPENING BALANCE",
+        "CLOSING BALANCE",
     }
 )
 
@@ -7288,6 +7305,7 @@ _SYNTHETIC_COUNTERPARTY_RE = re.compile(
     r"|^UNNAMED\s+INTERNAL\s+PAYROLL\s*\((?:CR|DR)\)\s*$"
     r"|^CARD\s+POS\s*\([A-Z]+\)\s*$"
     r"|^UNIDENTIFIED(?:\s.*)?$"
+    r"|^(?:MTH|MONTH)\s+END(?:\s+.*)?$"
     r"|^Unidentified\s+\(Cheque\)\s*$",
     re.IGNORECASE,
 )
