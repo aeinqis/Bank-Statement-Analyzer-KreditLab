@@ -1952,6 +1952,7 @@ _RP_ROUND_HITS_MIN = 2
 # "≥2 round DRs" tier for one-off vendor refunds.
 _RP_ROUND_SUSTAINED_HITS_MIN = 5
 _RP_ROUND_SUSTAINED_MONTHS_MIN = 4
+_RP_SUSTAINED_PERSONAL_DRAW_MIN_DR = 50_000.0
 
 # Synthetic / pattern-fallback labels that must never be treated as
 # personal names. Equals Track 1's ``_RP_EXCLUDE_NAMES ∪ BUCKET_TO_CATEGORY.keys()``
@@ -2921,7 +2922,12 @@ def advisory_rp_candidates(
     ``HIGH`` person visible instead of letting it disappear from both Known
     and Possible Related Parties.
     """
-    eff = {str(r).upper() for r in (effective_related_parties or [])}
+    eff_names = [
+        _related_party_display_name(r)
+        for r in (effective_related_parties or [])
+        if _related_party_display_name(r)
+    ]
+    eff = {name.upper() for name in eff_names}
     own_roots = [
         _company_root(c) for c in (company_names or []) if c and len(_company_root(c)) >= 5
     ]
@@ -2931,7 +2937,10 @@ def advisory_rp_candidates(
         up = nm.upper()
         if c.get("confidence") not in ("HIGH", "MEDIUM", "LOW"):
             continue
-        if up in eff:
+        if up in eff or any(
+            _related_party_names_equivalent(nm, related_name)
+            for related_name in eff_names
+        ):
             continue
         if not (has_natural_person_marker(nm) or _looks_like_personal_name(nm)):
             continue
@@ -3227,10 +3236,20 @@ def _compute_rp_signals(
     # cash claimant like MARIANA AHMAT to HIGH, which removes her from the
     # analyst-facing Possible Related Parties list before review.
     _concentration_is_anchor = _concentration_fired and has_bidirectional
+    signal_names = {signal for signal, _, _ in signals}
+    has_sustained_personal_draw_anchor = all(
+        sig in signal_names
+        for sig in (
+            "personal_keyword_sweep",
+            "monthly_recurrence",
+            "round_amount_sustained",
+        )
+    ) and total_dr >= _RP_SUSTAINED_PERSONAL_DRAW_MIN_DR
     has_hard_anchor = (
         has_bidirectional
         or any(sig == "director_benefit" for sig, _, _ in signals)
         or _concentration_is_anchor
+        or has_sustained_personal_draw_anchor
     )
 
     if force_low_ambiguous:
@@ -8308,6 +8327,81 @@ def _related_party_display_name(party: Any) -> str:
     return re.sub(r"\s+", " ", str(raw).strip())
 
 
+_RELATED_PARTY_ALIAS_CONNECTORS = frozenset({
+    "BIN", "BINTI", "BINTE", "BT", "BTE", "B", "A/L", "A/P", "ANAK",
+})
+
+
+def _related_party_alias_tokens(name: Any) -> list[str]:
+    text = str(name or "").upper()
+    text = re.sub(r"\bA\s*/\s*L\b", "A/L", text)
+    text = re.sub(r"\bA\s*/\s*P\b", "A/P", text)
+    tokens = re.findall(r"[A-Z0-9/]+", text)
+    return [
+        token for token in tokens
+        if token and token not in _RELATED_PARTY_ALIAS_CONNECTORS
+    ]
+
+
+def _related_party_alias_token_compatible(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    if not (left.isalpha() and right.isalpha()):
+        return False
+    shorter, longer = sorted((left, right), key=len)
+    return (
+        len(shorter) >= 3
+        and longer.startswith(shorter)
+        and len(longer) - len(shorter) <= 2
+    )
+
+
+def _related_party_tokens_ordered_match(
+    needle_tokens: list[str],
+    haystack_tokens: list[str],
+) -> bool:
+    if len(needle_tokens) < 2 or len(haystack_tokens) < len(needle_tokens):
+        return False
+    search_start = 0
+    for needle in needle_tokens:
+        found_at = None
+        for idx in range(search_start, len(haystack_tokens)):
+            if _related_party_alias_token_compatible(needle, haystack_tokens[idx]):
+                found_at = idx
+                break
+        if found_at is None:
+            return False
+        search_start = found_at + 1
+    return True
+
+
+def _related_party_names_equivalent(left: Any, right: Any) -> bool:
+    left_name = _related_party_display_name(left)
+    right_name = _related_party_display_name(right)
+    if not left_name or not right_name:
+        return False
+    if left_name.upper() == right_name.upper():
+        return True
+    left_tokens = _related_party_alias_tokens(left_name)
+    right_tokens = _related_party_alias_tokens(right_name)
+    return (
+        _related_party_tokens_ordered_match(left_tokens, right_tokens)
+        or _related_party_tokens_ordered_match(right_tokens, left_tokens)
+    )
+
+
+def _dedup_related_party_display_names(parties: list[Any] | None) -> list[str]:
+    display_names: list[str] = []
+    for party in parties or []:
+        name = _related_party_display_name(party)
+        if not name or _is_excluded_related_party_name(name):
+            continue
+        if any(_related_party_names_equivalent(name, existing) for existing in display_names):
+            continue
+        display_names.append(name)
+    return display_names
+
+
 def _is_excluded_related_party_name(party: Any) -> bool:
     name = _related_party_display_name(party)
     if not name:
@@ -8929,6 +9023,9 @@ def build_track2_result(
     _advisory_rp = advisory_rp_candidates(
         rp_candidates, effective_related_parties, company_names
     )
+    display_related_parties = _dedup_related_party_display_names(
+        effective_related_parties
+    )
 
     report_info = {
         "schema_version": _TRACK2_SCHEMA_VERSION,
@@ -8949,7 +9046,7 @@ def build_track2_result(
         # Principal Gas Tier-4 smoke caught the gap.
         "related_parties": [
             {"name": str(rp), "relationship": "Affiliate"}
-            for rp in (effective_related_parties or [])
+            for rp in display_related_parties
             if rp
         ],
         # Advisory only — MEDIUM/LOW RP3 candidates that did NOT auto-confirm

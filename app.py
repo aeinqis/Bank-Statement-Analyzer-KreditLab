@@ -1030,6 +1030,27 @@ def generate_interactive_html(data):
         name for name in (_related_party_display_name(rp) for rp in related_parties)
         if name
     ]
+    deduped_related_parties = []
+    for rp in related_parties:
+        name = _related_party_display_name(rp)
+        if not name:
+            continue
+        if any(
+            _report_party_names_equivalent(name, _related_party_display_name(existing))
+            for existing in deduped_related_parties
+        ):
+            continue
+        deduped_related_parties.append(rp)
+    related_parties = deduped_related_parties
+    related_party_names = [
+        name for name in (_related_party_display_name(rp) for rp in related_parties)
+        if name
+    ]
+    rp_html = ""
+    for rp in related_parties:
+        name = rp.get('name', rp) if isinstance(rp, dict) else str(rp)
+        rel = rp.get('relationship', '') if isinstance(rp, dict) else ''
+        rp_html += f'<span class="rp-tag">{name} <small>({rel})</small></span>'
 
     def _matched_related_party_name(counterparty_name, description):
         cp_upper = str(counterparty_name or '').upper()
@@ -1075,7 +1096,14 @@ def generate_interactive_html(data):
                 return
             display_name = re.sub(r'\s+', ' ', str(candidate.get('name') or '').strip())
             key = display_name.upper()
-            if not key or key in confirmed_upper:
+            if (
+                not key
+                or key in confirmed_upper
+                or any(
+                    _report_party_names_equivalent(display_name, confirmed_name)
+                    for confirmed_name in related_party_names
+                )
+            ):
                 return
 
             current = {
@@ -1090,6 +1118,18 @@ def generate_interactive_html(data):
                 'debit_month_count': candidate.get('debit_month_count', 0),
                 'signals': candidate.get('signals', []),
             }
+            alias_key = next(
+                (
+                    existing_key for existing_key, existing_candidate in by_name.items()
+                    if _report_party_names_equivalent(
+                        display_name,
+                        existing_candidate.get('name', ''),
+                    )
+                ),
+                None,
+            )
+            if alias_key is not None:
+                key = alias_key
             existing = by_name.get(key)
             if existing is not None:
                 previous_total_dr = safe_float(existing.get('total_dr', 0))
@@ -4122,16 +4162,25 @@ def build_related_party_summary_rows_for_report(
 _REPORT_LEGAL_SUFFIX_TOKENS = {
     "SDN", "BHD", "BERHAD", "PLT", "LLP", "LTD", "LIMITED"
 }
+_REPORT_PERSON_CONNECTOR_TOKENS = {
+    "BIN", "BINTI", "BINTE", "BT", "BTE", "B", "A/L", "A/P", "ANAK"
+}
 
 
 def _report_match_tokens(value) -> List[str]:
-    text = re.sub(r"[^A-Z0-9\s]", " ", str(value or "").upper())
+    text = re.sub(r"[^A-Z0-9/\s]", " ", str(value or "").upper())
     return [token for token in re.sub(r"\s+", " ", text).strip().split() if token]
 
 
 def _report_party_core_tokens(name) -> List[str]:
     tokens = _report_match_tokens(name)
     core = [token for token in tokens if token not in _REPORT_LEGAL_SUFFIX_TOKENS]
+    return core or tokens
+
+
+def _report_party_alias_core_tokens(name) -> List[str]:
+    tokens = _report_party_core_tokens(name)
+    core = [token for token in tokens if token not in _REPORT_PERSON_CONNECTOR_TOKENS]
     return core or tokens
 
 
@@ -4142,23 +4191,42 @@ def _report_token_compatible(left: str, right: str) -> bool:
     return len(shorter) >= 3 and longer.startswith(shorter) and len(longer) - len(shorter) <= 2
 
 
-def _report_candidate_contains_party_tokens(candidate, party_name) -> bool:
-    party_tokens = _report_party_core_tokens(party_name)
-    candidate_tokens = _report_match_tokens(candidate)
-    if len(party_tokens) < 2 or len(candidate_tokens) < len(party_tokens):
+def _report_tokens_ordered_match(needle_tokens: List[str], haystack_tokens: List[str]) -> bool:
+    if len(needle_tokens) < 2 or len(haystack_tokens) < len(needle_tokens):
         return False
 
     search_start = 0
-    for party_token in party_tokens:
+    for needle_token in needle_tokens:
         found_at = None
-        for idx in range(search_start, len(candidate_tokens)):
-            if _report_token_compatible(party_token, candidate_tokens[idx]):
+        for idx in range(search_start, len(haystack_tokens)):
+            if _report_token_compatible(needle_token, haystack_tokens[idx]):
                 found_at = idx
                 break
         if found_at is None:
             return False
         search_start = found_at + 1
     return True
+
+
+def _report_party_names_equivalent(left, right) -> bool:
+    left_name = _report_party_display_name(left)
+    right_name = _report_party_display_name(right)
+    if not left_name or not right_name:
+        return False
+    if left_name.upper() == right_name.upper():
+        return True
+    left_tokens = _report_party_alias_core_tokens(left_name)
+    right_tokens = _report_party_alias_core_tokens(right_name)
+    return (
+        _report_tokens_ordered_match(left_tokens, right_tokens)
+        or _report_tokens_ordered_match(right_tokens, left_tokens)
+    )
+
+
+def _report_candidate_contains_party_tokens(candidate, party_name) -> bool:
+    party_tokens = _report_party_core_tokens(party_name)
+    candidate_tokens = _report_match_tokens(candidate)
+    return _report_tokens_ordered_match(party_tokens, candidate_tokens)
 
 
 def _counterparty_row_report_match_sources(cp: dict) -> List[str]:
@@ -9403,6 +9471,31 @@ def detect_related_party_candidates(
     }
     candidates_by_name: dict = {}
     t2_cands = []
+    confirmed_name_list = [
+        str(name or "").strip() for name in (confirmed_names or set()) if name
+    ]
+
+    def _candidate_is_blocked(display_name: str) -> bool:
+        name = str(display_name or "").strip().upper()
+        return (
+            not name
+            or name in confirmed_names
+            or name in dismissed
+            or name in _NOISE
+            or any(
+                _report_party_names_equivalent(display_name, confirmed_name)
+                for confirmed_name in confirmed_name_list
+            )
+        )
+
+    def _candidate_store_key(display_name: str) -> str:
+        for existing_key, existing_candidate in candidates_by_name.items():
+            if _report_party_names_equivalent(
+                display_name,
+                existing_candidate.get("name", existing_key),
+            ):
+                return existing_key
+        return str(display_name or "").strip().upper()
 
     # ── Source 1: Track 2 candidates ──
     if isinstance(shared_report_data, dict):
@@ -9412,11 +9505,12 @@ def detect_related_party_candidates(
         for c in t2_cands:
             if not isinstance(c, dict):
                 continue
-            name = str(c.get("name", "") or "").strip().upper()
-            if not name or name in confirmed_names or name in dismissed or name in _NOISE:
+            display_name = str(c.get("name", "") or "").strip()
+            if _candidate_is_blocked(display_name):
                 continue
+            name = _candidate_store_key(display_name)
             candidates_by_name[name] = {
-                "name": c.get("name", "").strip(),
+                "name": display_name,
                 "confidence": str(c.get("confidence", "MEDIUM")).upper(),
                 "evidence": c.get("evidence", "Flagged by Track 2 engine"),
                 "total_cr": safe_float(c.get("total_cr", 0)),
@@ -9461,9 +9555,9 @@ def detect_related_party_candidates(
                 if not isinstance(c, dict):
                     continue
                 display_name = str(c.get("name", "") or "").strip()
-                name = display_name.upper()
-                if not name or name in confirmed_names or name in dismissed or name in _NOISE:
+                if _candidate_is_blocked(display_name):
                     continue
+                name = _candidate_store_key(display_name)
                 candidates_by_name[name] = {
                     "name": display_name,
                     "confidence": str(c.get("confidence", "MEDIUM")).upper(),

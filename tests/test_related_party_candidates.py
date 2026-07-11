@@ -550,6 +550,71 @@ class RelatedPartyCandidateTests(unittest.TestCase):
             [],
         )
 
+    def test_confirmed_alias_suppresses_sustained_personal_draw_candidate(self):
+        shaharuddin = {
+            "counterparty_name": "SHAHARUDDIN BIN SAM",
+            "transaction_count": 11,
+            "credit_count": 0,
+            "debit_count": 11,
+            "total_credits": 0.0,
+            "total_debits": 370000.0,
+            "transactions": [
+                _debit("2025-09-02", "TR TO SHAHARUDDIN BIN SAM PETTY CASH", 50000.0),
+                _debit("2025-09-18", "TR TO SHAHARUDDIN BIN SAM CLAIM", 12000.0),
+                _debit("2025-10-05", "TR TO SHAHARUDDIN BIN SAM LOAN", 60000.0),
+                _debit("2025-10-28", "TR TO SHAHARUDDIN BIN SAM", 10000.0),
+                _debit("2025-11-07", "TR TO SHAHARUDDIN BIN SAM CREDIT CARD", 75000.0),
+                _debit("2025-11-25", "TR TO SHAHARUDDIN BIN SAM", 15000.0),
+                _debit("2025-12-08", "TR TO SHAHARUDDIN BIN SAM PETTY", 40000.0),
+                _debit("2025-12-20", "TR TO SHAHARUDDIN BIN SAM", 20000.0),
+                _debit("2026-01-11", "TR TO SHAHARUDDIN BIN SAM CLAIM", 30000.0),
+                _debit("2026-01-30", "TR TO SHAHARUDDIN BIN SAM", 20000.0),
+                _debit("2026-02-14", "TR TO SHAHARUDDIN BIN SAM BONUS", 38000.0),
+            ],
+        }
+        gross_dr_anchor = {
+            "counterparty_name": "BETA TRADING SDN BHD",
+            "transaction_count": 1,
+            "credit_count": 0,
+            "debit_count": 1,
+            "total_credits": 0.0,
+            "total_debits": 10_000_000.0,
+            "transactions": [
+                _debit("2026-02-01", "PAYMENT BETA TRADING SDN BHD", 10_000_000.0),
+            ],
+        }
+        ledger = {"counterparties": [shaharuddin, gross_dr_anchor]}
+
+        candidates = scan_related_party_candidates(ledger)
+        candidate = next(c for c in candidates if c["name"] == "SHAHARUDDIN BIN SAM")
+
+        self.assertEqual(candidate["confidence"], "HIGH")
+        self.assertIn("personal_keyword_sweep", candidate["signals"])
+        self.assertIn("monthly_recurrence", candidate["signals"])
+        self.assertIn("round_amount_sustained", candidate["signals"])
+        self.assertEqual(
+            advisory_rp_candidates(
+                candidates,
+                effective_related_parties=["SHAHARUDDIN SAMS"],
+            ),
+            [],
+        )
+
+        report = build_track2_result(
+            transactions=[],
+            counterparty_ledger=ledger,
+            related_parties=["SHAHARUDDIN SAMS"],
+            company_names=["BETA TRADING SDN BHD"],
+        )
+        self.assertEqual(
+            [rp["name"] for rp in report["report_info"]["related_parties"]],
+            ["SHAHARUDDIN SAMS"],
+        )
+        self.assertNotIn(
+            "SHAHARUDDIN BIN SAM",
+            [c["name"] for c in report["report_info"]["related_party_candidates"]],
+        )
+
     def test_personal_keyword_sweep_rescues_person_from_synthetic_bucket(self):
         ledger = {
             "counterparties": [
