@@ -829,13 +829,16 @@ def generate_interactive_html(data):
     parsing = data.get('parsing_metadata', {})
     company_name = r.get('company_name', 'Company')
     related_parties = r.get('related_parties', [])
-    report_counterparty_rows = None
+    report_counterparty_rows = copy_report_counterparty_rows(
+        data.get('report_counterparty_rows') or data.get('counterparty_ledger_rows')
+    )
 
     # Prepare top parties before feature detection; later rendering depends on it.
     top_parties = data.get('top_parties', {})
     cp_ledger_for_top = data.get('counterparty_ledger', {})
     if isinstance(cp_ledger_for_top, dict) and cp_ledger_for_top.get('counterparties'):
-        report_counterparty_rows = build_report_counterparty_ledger_rows(
+        report_counterparty_rows = get_report_counterparty_rows_from_data(
+            data,
             cp_ledger_for_top,
             related_parties=related_parties,
             own_related=own_related,
@@ -1061,7 +1064,8 @@ def generate_interactive_html(data):
         rp_html += f'<span class="rp-tag">{name} <small>({rel})</small></span>'
 
     if isinstance(cp_ledger_for_top, dict) and cp_ledger_for_top.get('counterparties'):
-        report_counterparty_rows = build_report_counterparty_ledger_rows(
+        report_counterparty_rows = get_report_counterparty_rows_from_data(
+            data,
             cp_ledger_for_top,
             related_parties=related_parties,
             own_related=own_related,
@@ -1838,8 +1842,9 @@ def generate_interactive_html(data):
 
         raw_counterparties = cp_ledger.get('counterparties', []) or []
         counterparties_sorted = report_counterparty_rows
-        if counterparties_sorted is None:
-            counterparties_sorted = build_report_counterparty_ledger_rows(
+        if not counterparties_sorted:
+            counterparties_sorted = get_report_counterparty_rows_from_data(
+                data,
                 cp_ledger,
                 related_parties=related_parties,
                 own_related=own_related,
@@ -4514,6 +4519,78 @@ def build_report_counterparty_ledger_rows(
     return output
 
 
+def copy_report_counterparty_rows(rows) -> List[dict]:
+    """Copy already-finalized UI ledger rows without re-running name cleaning."""
+    output: List[dict] = []
+    if not isinstance(rows, list):
+        return output
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = re.sub(r"\s+", " ", str(row.get("counterparty_name") or row.get("counterparty") or "UNKNOWN").strip()) or "UNKNOWN"
+        copied = dict(row)
+        copied["counterparty_name"] = name
+        copied["total_credits"] = round(safe_float(copied.get("total_credits", copied.get("total_credit", 0))), 2)
+        copied["total_debits"] = round(safe_float(copied.get("total_debits", copied.get("total_debit", 0))), 2)
+        copied["credit_count"] = int(safe_float(copied.get("credit_count", copied.get("credit_tx_count", 0))))
+        copied["debit_count"] = int(safe_float(copied.get("debit_count", copied.get("debit_tx_count", 0))))
+        copied["transaction_count"] = int(
+            safe_float(
+                copied.get("transaction_count")
+                or copied["credit_count"] + copied["debit_count"]
+            )
+        )
+        copied["net_position"] = round(copied["total_credits"] - copied["total_debits"], 2)
+
+        raw_names = copied.get("raw_names", [])
+        if isinstance(raw_names, (set, tuple)):
+            raw_names = list(raw_names)
+        elif raw_names and not isinstance(raw_names, list):
+            raw_names = [raw_names]
+        copied["raw_names"] = sorted(str(value) for value in (raw_names or []) if value)
+
+        transactions = []
+        for txn in copied.get("transactions", []) or []:
+            if not isinstance(txn, dict):
+                continue
+            txn_copy = dict(txn)
+            txn_copy["counterparty_name"] = name
+            txn_copy["counterparty_name_clean"] = name
+            txn_copy["party_name"] = name
+            transactions.append(txn_copy)
+        copied["transactions"] = sorted(
+            transactions,
+            key=lambda tx: (str(tx.get("date") or ""), str(tx.get("description") or "")),
+        )
+        output.append(copied)
+
+    output.sort(key=lambda cp: str(cp.get("counterparty_name", "") or "").casefold())
+    return output
+
+
+def get_report_counterparty_rows_from_data(
+    data: dict,
+    cp_ledger: dict,
+    related_parties=None,
+    own_related=None,
+    company_name: str = "",
+) -> List[dict]:
+    """Return exported ledger rows, preferring the exact rows rendered by Streamlit."""
+    if isinstance(data, dict):
+        for key in ("report_counterparty_rows", "counterparty_ledger_rows"):
+            rows = copy_report_counterparty_rows(data.get(key))
+            if rows:
+                return rows
+
+    return build_report_counterparty_ledger_rows(
+        cp_ledger,
+        related_parties=related_parties,
+        own_related=own_related,
+        company_name=company_name,
+    )
+
+
 _PARTY_GHOST_STOPWORDS = {
     "TRANSFER", "PAYMENT", "IBG", "IB2G", "IBFT", "IBK", "CR", "DR", "CREDIT", "DEBIT",
     "TO", "FR", "FROM", "A/C", "C/A", "ACCOUNT", "ACCT", "INTER", "BANK", "BANKING", "INTO",
@@ -5368,13 +5445,15 @@ def build_report_data_from_analysis(
     company_name = st.session_state.get('company_name_override', '') or (transactions[0].get('company_name', '') if transactions else '')
     related_parties = adapted_data.get("report_info", {}).get("related_parties", []) or []
     own_related = adapted_data.get("own_related_transactions", {}) or {}
+    report_counterparty_rows = build_report_counterparty_ledger_rows(
+        cp_ledger,
+        related_parties=related_parties,
+        own_related=own_related,
+        company_name=company_name,
+    )
+    adapted_data["report_counterparty_rows"] = report_counterparty_rows
     adapted_data['top_parties'] = _top_parties_from_counterparty_rows(
-        build_report_counterparty_ledger_rows(
-            cp_ledger,
-            related_parties=related_parties,
-            own_related=own_related,
-            company_name=company_name,
-        ),
+        report_counterparty_rows,
         limit=None,
         company_name=company_name,
     )
@@ -5442,13 +5521,17 @@ def normalize_report_data_for_export(data: dict) -> dict:
     company_name = source.get("report_info", {}).get("company_name", "")
     related_parties = source.get("report_info", {}).get("related_parties", []) or []
     own_related = source.get("own_related_transactions", {}) or {}
+    report_counterparty_rows = get_report_counterparty_rows_from_data(
+        source,
+        cp_ledger,
+        related_parties=related_parties,
+        own_related=own_related,
+        company_name=company_name,
+    )
+    if report_counterparty_rows:
+        source["report_counterparty_rows"] = report_counterparty_rows
     source["top_parties"] = _top_parties_from_counterparty_rows(
-        build_report_counterparty_ledger_rows(
-            cp_ledger,
-            related_parties=related_parties,
-            own_related=own_related,
-            company_name=company_name,
-        ),
+        report_counterparty_rows,
         limit=None,
         company_name=company_name,
     )
@@ -5456,6 +5539,10 @@ def normalize_report_data_for_export(data: dict) -> dict:
     if "monthly_analysis" not in source and "transactions" in source:
         normalized = adapt_to_v6(source)
         normalized["transactions"] = source.get("transactions", [])
+        if source.get("report_counterparty_rows"):
+            normalized["report_counterparty_rows"] = source.get("report_counterparty_rows")
+        if source.get("counterparty_ledger_rows"):
+            normalized["counterparty_ledger_rows"] = source.get("counterparty_ledger_rows")
     else:
         normalized = dict(source)
 
@@ -5486,13 +5573,17 @@ def normalize_report_data_for_export(data: dict) -> dict:
     company_name = normalized.get("report_info", {}).get("company_name", "")
     related_parties = normalized.get("report_info", {}).get("related_parties", []) or []
     own_related = normalized.get("own_related_transactions", {}) or {}
+    report_counterparty_rows = get_report_counterparty_rows_from_data(
+        normalized,
+        cp_ledger,
+        related_parties=related_parties,
+        own_related=own_related,
+        company_name=company_name,
+    )
+    if report_counterparty_rows:
+        normalized["report_counterparty_rows"] = report_counterparty_rows
     normalized["top_parties"] = _top_parties_from_counterparty_rows(
-        build_report_counterparty_ledger_rows(
-            cp_ledger,
-            related_parties=related_parties,
-            own_related=own_related,
-            company_name=company_name,
-        ),
+        report_counterparty_rows,
         limit=None,
         company_name=company_name,
     )
@@ -5611,13 +5702,15 @@ def build_shared_report_data(
             # Build top_parties from the same aligned CP ledger rows rendered in reports.
             # Get company name from override or first transaction
             company_name = override or (company_names[0] if company_names else '')
+            report_counterparty_rows = build_report_counterparty_ledger_rows(
+                cp_ledger,
+                related_parties=data.get("report_info", {}).get("related_parties", []) or [],
+                own_related=data.get("own_related_transactions", {}) or {},
+                company_name=company_name,
+            )
+            data["report_counterparty_rows"] = report_counterparty_rows
             data["top_parties"] = _top_parties_from_counterparty_rows(
-                build_report_counterparty_ledger_rows(
-                    cp_ledger,
-                    related_parties=data.get("report_info", {}).get("related_parties", []) or [],
-                    own_related=data.get("own_related_transactions", {}) or {},
-                    company_name=company_name,
-                ),
+                report_counterparty_rows,
                 limit=None,
                 company_name=company_name,
             )
@@ -5654,13 +5747,15 @@ def build_shared_report_data(
     company_name = st.session_state.get("company_name_override", "") or (
         transactions[0].get("company_name", "") if transactions else ""
     )
+    report_counterparty_rows = build_report_counterparty_ledger_rows(
+        cp_ledger,
+        related_parties=report_data.get("report_info", {}).get("related_parties", []) or [],
+        own_related=report_data.get("own_related_transactions", {}) or {},
+        company_name=company_name,
+    )
+    report_data["report_counterparty_rows"] = report_counterparty_rows
     report_data["top_parties"] = _top_parties_from_counterparty_rows(
-        build_report_counterparty_ledger_rows(
-            cp_ledger,
-            related_parties=report_data.get("report_info", {}).get("related_parties", []) or [],
-            own_related=report_data.get("own_related_transactions", {}) or {},
-            company_name=company_name,
-        ),
+        report_counterparty_rows,
         limit=None,
         company_name=company_name,
     )
@@ -6170,13 +6265,17 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     report_info = report_data.get("report_info", {}) or {}
     
     # Build top_parties from the same aligned CP ledger rows used by the Counterparty sheets.
+    report_counterparty_rows = get_report_counterparty_rows_from_data(
+        report_data,
+        cp_ledger,
+        related_parties=report_info.get("related_parties", []) or [],
+        own_related=own_related,
+        company_name=report_info.get("company_name", ""),
+    )
+    if report_counterparty_rows:
+        report_data["report_counterparty_rows"] = report_counterparty_rows
     top_parties = _top_parties_from_counterparty_rows(
-        build_report_counterparty_ledger_rows(
-            cp_ledger,
-            related_parties=report_info.get("related_parties", []) or [],
-            own_related=own_related,
-            company_name=report_info.get("company_name", ""),
-        ),
+        report_counterparty_rows,
         limit=None,
         company_name=report_info.get("company_name", ""),
     )
@@ -6398,7 +6497,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Build cp_sorted HERE so it's available for both Counterparty and CP Ledger sheets
     related_parties = report_info.get("related_parties", []) or []
     company_name = report_info.get("company_name", "")
-    cp_sorted = build_report_counterparty_ledger_rows(
+    cp_sorted = get_report_counterparty_rows_from_data(
+        report_data,
         cp_ledger,
         related_parties=related_parties,
         own_related=own_related,
@@ -9368,13 +9468,13 @@ def build_counterparty_ledger_from_transactions(df: pd.DataFrame) -> pd.DataFram
     return summary_df
 
 
-def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
+def render_counterparty_ledger_table(df: pd.DataFrame) -> dict:
     """
     Render counterparty ledger as a table with transaction details on selection
     """
     if df.empty:
         st.info("No counterparty data available.")
-        return
+        return {}
     
     st.markdown("## Counterparty Ledger")
 
@@ -9451,7 +9551,7 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
     
     if counterparty_summary.empty:
         st.info("No counterparty data available.")
-        return
+        return {}
 
     with download_col:
         cp_payload = _build_counterparty_json_payload(prepared_df, counterparty_summary)
@@ -9580,6 +9680,18 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> None:
             use_container_width=True,
             hide_index=True,
         )
+
+    return {
+        "prepared_transactions": prepared_df.to_dict("records"),
+        "counterparty_ledger": display_cp_ledger,
+        "report_counterparty_rows": copy_report_counterparty_rows(canonical_cp_rows),
+        "top_parties": _top_parties_from_counterparty_rows(
+            canonical_cp_rows,
+            limit=None,
+            company_name=company_name_for_top,
+        ),
+        "company_name": company_name_for_top,
+    }
 
 def detect_related_party_candidates(
     cp_ledger: dict,
@@ -11307,7 +11419,7 @@ if st.session_state.results:
         # Display Counterparty Ledger Table
         # Display Counterparty Ledger Table
         st.markdown("---")
-        render_counterparty_ledger_table(df)
+        counterparty_report_context = render_counterparty_ledger_table(df) or {}
 
         # ── Define make_json_serializable here so it's available to both
         # the Related Party Manager and the download buttons below ──
@@ -11340,7 +11452,10 @@ if st.session_state.results:
 
         # Build serialized inputs and shared_report_data EARLY so the
         # Related Party Manager and download buttons all use the same object.
-        serialized_transactions = make_json_serializable(st.session_state.results)
+        serialized_transactions = make_json_serializable(
+            counterparty_report_context.get("prepared_transactions")
+            or st.session_state.results
+        )
         serialized_monthly_summary = make_json_serializable(monthly_summary)
         serialized_transaction_analysis = make_json_serializable(transaction_analysis_report)
         shared_report_data = build_shared_report_data(
@@ -11349,6 +11464,34 @@ if st.session_state.results:
             serialized_transaction_analysis,
             high_value_threshold,
         ) if serialized_transactions else {}
+
+        def _attach_counterparty_report_context(report_payload: dict) -> dict:
+            if not isinstance(report_payload, dict) or not counterparty_report_context:
+                return report_payload
+
+            cp_ledger_override = counterparty_report_context.get("counterparty_ledger")
+            if isinstance(cp_ledger_override, dict) and cp_ledger_override.get("counterparties"):
+                report_payload["counterparty_ledger"] = cp_ledger_override
+
+            cp_rows = copy_report_counterparty_rows(
+                counterparty_report_context.get("report_counterparty_rows")
+            )
+            if cp_rows:
+                report_payload["report_counterparty_rows"] = cp_rows
+                report_payload["counterparty_ledger_rows"] = cp_rows
+                company_name_for_top = (
+                    report_payload.get("report_info", {}).get("company_name")
+                    or counterparty_report_context.get("company_name")
+                    or ""
+                )
+                report_payload["top_parties"] = _top_parties_from_counterparty_rows(
+                    cp_rows,
+                    limit=None,
+                    company_name=company_name_for_top,
+                )
+            return report_payload
+
+        shared_report_data = _attach_counterparty_report_context(shared_report_data)
 
         # Related Party Manager — runs after shared_report_data is ready
         st.markdown("---")
@@ -11364,6 +11507,7 @@ if st.session_state.results:
                 serialized_transaction_analysis,
                 high_value_threshold,
             )
+            shared_report_data = _attach_counterparty_report_context(shared_report_data)
 
     else:
         st.info("No line-item transactions extracted.")

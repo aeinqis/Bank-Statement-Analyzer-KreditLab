@@ -5,6 +5,7 @@ from app import (
     _report_related_party_entries,
     _top_parties_from_counterparty_rows,
     build_report_counterparty_ledger_rows,
+    get_report_counterparty_rows_from_data,
     prepare_top_parties_for_report,
 )
 from kredit_lab_classify_track2 import _build_own_related_transactions_list_track2
@@ -660,6 +661,72 @@ class CounterpartyCleaningTests(unittest.TestCase):
             ]),
             [("SHAHARUDDIN SAMS", "Affiliate")],
         )
+
+    def test_reports_prefer_streamlit_counterparty_rows_over_raw_ledger(self):
+        cp_ledger = {
+            "counterparties": [
+                {
+                    "counterparty_name": "MUHAFIZ PRIMA SDN BHD",
+                    "transaction_count": 3,
+                    "credit_count": 2,
+                    "debit_count": 1,
+                    "total_credits": 39600.0,
+                    "total_debits": 900000.0,
+                    "transactions": [],
+                },
+                {
+                    "counterparty_name": "MUHAFIZ SECURITY SDN.",
+                    "transaction_count": 70,
+                    "credit_count": 14,
+                    "debit_count": 56,
+                    "total_credits": 2784136.22,
+                    "total_debits": 872136.0,
+                    "transactions": [],
+                },
+                {
+                    "counterparty_name": "MUHAFIZ TECHNOLOGY",
+                    "transaction_count": 3,
+                    "credit_count": 0,
+                    "debit_count": 3,
+                    "total_credits": 0.0,
+                    "total_debits": 1130000.0,
+                    "transactions": [],
+                },
+            ]
+        }
+        ui_rows = [
+            {
+                "counterparty_name": "MUHAFIZ PRIMA SDN BHD",
+                "transaction_count": 3,
+                "credit_count": 2,
+                "debit_count": 1,
+                "total_credits": 39600.0,
+                "total_debits": 900000.0,
+                "transactions": [],
+            },
+            {
+                "counterparty_name": "MUHAFIZ SECURITY SDN. BHD.",
+                "transaction_count": 70,
+                "credit_count": 14,
+                "debit_count": 56,
+                "total_credits": 2784136.22,
+                "total_debits": 872136.0,
+                "transactions": [],
+            },
+        ]
+
+        rows = get_report_counterparty_rows_from_data(
+            {"counterparty_ledger": cp_ledger, "report_counterparty_rows": ui_rows},
+            cp_ledger,
+        )
+
+        self.assertEqual(
+            [row["counterparty_name"] for row in rows],
+            ["MUHAFIZ PRIMA SDN BHD", "MUHAFIZ SECURITY SDN. BHD."],
+        )
+        self.assertNotIn("MUHAFIZ TECHNOLOGY", {row["counterparty_name"] for row in rows})
+        self.assertEqual(rows[1]["total_credits"], 2784136.22)
+        self.assertEqual(rows[1]["total_debits"], 872136.0)
 
 
 if __name__ == "__main__":
