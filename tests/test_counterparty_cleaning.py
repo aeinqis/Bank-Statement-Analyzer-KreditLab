@@ -2,9 +2,11 @@ import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
 from app import (
+    build_own_related_party_groups_for_report,
     _report_related_party_entries,
     _top_parties_from_counterparty_rows,
     build_report_counterparty_ledger_rows,
+    filter_report_related_parties,
     get_report_counterparty_rows_from_data,
     prepare_top_parties_for_report,
 )
@@ -704,10 +706,70 @@ class CounterpartyCleaningTests(unittest.TestCase):
             _report_related_party_entries([
                 {"name": "TRANSFER FEE", "relationship": "Affiliate"},
                 {"name": "UNKNOWN", "relationship": "Affiliate"},
+                {"name": "SPECIAL_BUCKET", "relationship": "Affiliate"},
+                {"name": "SPECIAL BUCKET", "relationship": "Affiliate"},
                 {"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"},
             ]),
             [("SHAHARUDDIN SAMS", "Affiliate")],
         )
+        self.assertEqual(
+            filter_report_related_parties([
+                {"name": "SPECIAL_BUCKET", "relationship": "Affiliate"},
+                {"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"},
+            ]),
+            [{"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"}],
+        )
+
+    def test_own_related_groups_use_matching_counterparty_ledger_transactions(self):
+        own_related = {
+            "transactions": [
+                {
+                    "date": "2025-09-01",
+                    "description": "TR IBG SHAHARUDDIN SAMS ONE",
+                    "amount": 100.0,
+                    "type": "DEBIT",
+                    "party_type": "RELATED",
+                    "party_name": "SHAHARUDDIN SAMS",
+                }
+            ]
+        }
+        cp_rows = [
+            {
+                "counterparty_name": "SHAHARUDDIN SAMS",
+                "total_credits": 0.0,
+                "total_debits": 300.0,
+                "credit_count": 0,
+                "debit_count": 2,
+                "transaction_count": 2,
+                "transactions": [
+                    {
+                        "date": "2025-09-01",
+                        "description": "TR IBG SHAHARUDDIN SAMS ONE",
+                        "amount": 100.0,
+                        "type": "DEBIT",
+                        "balance": 900.0,
+                    },
+                    {
+                        "date": "2025-09-02",
+                        "description": "TR IBG SHAHARUDDIN SAMS TWO",
+                        "amount": 200.0,
+                        "type": "DEBIT",
+                        "balance": 700.0,
+                    },
+                ],
+            }
+        ]
+
+        groups = build_own_related_party_groups_for_report(
+            own_related,
+            related_parties=[{"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"}],
+            counterparty_rows=cp_rows,
+        )
+
+        shah_group = next(group for group in groups if group["party_name"] == "SHAHARUDDIN SAMS")
+        self.assertEqual(shah_group["debit_count"], 2)
+        self.assertEqual(shah_group["debits"], 300.0)
+        self.assertEqual(len(shah_group["transactions"]), 2)
 
     def test_reports_prefer_streamlit_counterparty_rows_over_raw_ledger(self):
         cp_ledger = {
@@ -769,7 +831,7 @@ class CounterpartyCleaningTests(unittest.TestCase):
 
         self.assertEqual(
             [row["counterparty_name"] for row in rows],
-            ["MUHAFIZ PRIMA SDN BHD", "MUHAFIZ SECURITY SDN. BHD."],
+            ["MUHAFIZ PRIMA SDN BHD", "MUHAFIZ SECURITY SDN BHD"],
         )
         self.assertNotIn("MUHAFIZ TECHNOLOGY", {row["counterparty_name"] for row in rows})
         self.assertEqual(rows[1]["total_credits"], 2784136.22)

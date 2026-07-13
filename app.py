@@ -828,7 +828,7 @@ def generate_interactive_html(data):
     obs = normalize_observations(data.get('observations', {}))
     parsing = data.get('parsing_metadata', {})
     company_name = r.get('company_name', 'Company')
-    related_parties = r.get('related_parties', [])
+    related_parties = filter_report_related_parties(r.get('related_parties', []))
     report_counterparty_rows = copy_report_counterparty_rows(
         data.get('report_counterparty_rows') or data.get('counterparty_ledger_rows')
     )
@@ -915,7 +915,7 @@ def generate_interactive_html(data):
     period_start = r.get('period_start', '')
     period_end = r.get('period_end', '')
     total_months = r.get('total_months', 0)
-    related_parties = r.get('related_parties', [])
+    related_parties = filter_report_related_parties(r.get('related_parties', []))
 
     # ── Date format: convert from YYYY-MM-DD to YYYY-MM ──
     def _format_to_year_month(date_str):
@@ -1761,6 +1761,7 @@ def generate_interactive_html(data):
         own_related,
         related_parties=related_parties,
         company_name=company_name,
+        counterparty_rows=report_counterparty_rows,
     )
     for idx, group in enumerate(rp_group_list):
         badge_cls = 'op-badge' if group['badge_type'] == 'OP' else 'rp-badge'
@@ -1850,6 +1851,7 @@ def generate_interactive_html(data):
                 own_related=own_related,
                 company_name=company_name,
             )
+        report_counterparty_rows = counterparties_sorted
         if raw_counterparties and len(counterparties_sorted) != len(raw_counterparties):
             original_cp = original_cp or len(raw_counterparties)
             merges = merges or (len(raw_counterparties) - len(counterparties_sorted))
@@ -3586,13 +3588,14 @@ _REPORT_SPECIAL_COUNTERPARTY_BUCKETS = {
     "MONTH END",
     "OPENING BALANCE",
     "CLOSING BALANCE",
+    "SPECIAL BUCKET",
 }
 
 _REPORT_RANKABLE_SPECIAL_BUCKETS = {"JANM"}
 
 
 def _report_counterparty_label(name) -> str:
-    text = re.sub(r"\s+", " ", str(name or "").strip().upper())
+    text = re.sub(r"[_\s]+", " ", str(name or "").strip().upper())
     return text
 
 
@@ -3879,7 +3882,7 @@ def _report_party_relationship(party) -> str:
 
 def _matched_report_related_party_name(counterparty_name, description, related_parties) -> str:
     related_party_names = [
-        name for name in (_report_party_display_name(party) for party in (related_parties or []))
+        name for name, _relationship in _report_related_party_entries(related_parties)
         if name
     ]
     cp_upper = str(counterparty_name or "").upper()
@@ -4031,6 +4034,28 @@ def _report_related_party_entries(related_parties) -> List[tuple[str, str]]:
     return entries
 
 
+def filter_report_related_parties(related_parties) -> List:
+    """Return analyst-confirmed related parties excluding synthetic buckets."""
+    filtered: List = []
+    for name, relationship in _report_related_party_entries(related_parties):
+        original = next(
+            (
+                party for party in (related_parties or [])
+                if _report_party_names_equivalent(name, _report_party_display_name(party))
+            ),
+            None,
+        )
+        if isinstance(original, dict):
+            item = dict(original)
+            item["name"] = name
+            if relationship:
+                item["relationship"] = relationship
+            filtered.append(item)
+        else:
+            filtered.append({"name": name, "relationship": relationship})
+    return filtered
+
+
 def _report_transaction_amount(txn: dict) -> float:
     amount = safe_float(txn.get("amount", 0))
     if amount:
@@ -4053,10 +4078,23 @@ def _report_transaction_side(txn: dict) -> str:
     return "DEBIT" if _report_transaction_amount(txn) < 0 else "CREDIT"
 
 
+def _canonical_report_counterparty_display_name(value) -> str:
+    raw = re.sub(r"\s+", " ", str(value or "").strip())
+    if not raw:
+        return "UNKNOWN"
+    try:
+        canonical = normalise_counterparty_for_ledger(raw)
+    except Exception:
+        canonical = clean_counterparty_name(raw)
+    canonical = re.sub(r"\s+", " ", str(canonical or "").strip())
+    return canonical or raw
+
+
 def build_own_related_party_groups_for_report(
     own_related,
     related_parties=None,
     company_name: str = "",
+    counterparty_rows: List[dict] | None = None,
 ) -> List[dict]:
     """Group C01-C04 rows the same way the HTML Own/RP report presents them."""
     if isinstance(own_related, list):
@@ -4133,6 +4171,61 @@ def build_own_related_party_groups_for_report(
         txn_copy["amount"] = amount
         group["transactions"].append(txn_copy)
 
+    if counterparty_rows:
+        def _replace_group_from_counterparty_rows(group: dict) -> None:
+            party_name = str(group.get("party_name") or "").strip()
+            if not party_name:
+                return
+            matches = [
+                cp for cp in counterparty_rows
+                if isinstance(cp, dict) and _counterparty_row_matches_report_party(cp, party_name)
+            ]
+            if not matches:
+                return
+
+            badge_type = group.get("badge_type")
+            party_type = "OWN" if badge_type == "OP" else "RELATED"
+            transactions = []
+            credits = debits = 0.0
+            credit_count = debit_count = 0
+
+            for cp in matches:
+                for txn in cp.get("transactions", []) or []:
+                    if not isinstance(txn, dict):
+                        continue
+                    txn_type = _report_transaction_side(txn)
+                    amount = abs(_report_transaction_amount(txn))
+                    if amount <= 0:
+                        continue
+                    if txn_type == "CREDIT":
+                        credits += amount
+                        credit_count += 1
+                    else:
+                        debits += amount
+                        debit_count += 1
+
+                    txn_copy = dict(txn)
+                    txn_copy["party_name"] = party_name
+                    txn_copy["party_type"] = party_type
+                    txn_copy["type"] = txn_type
+                    txn_copy["amount"] = round(amount, 2)
+                    transactions.append(txn_copy)
+
+            if not transactions:
+                return
+            group["party_type"] = party_type
+            group["transactions"] = sorted(
+                transactions,
+                key=lambda tx: (str(tx.get("date") or ""), str(tx.get("description") or "")),
+            )
+            group["credits"] = round(credits, 2)
+            group["debits"] = round(debits, 2)
+            group["credit_count"] = credit_count
+            group["debit_count"] = debit_count
+
+        for group in groups.values():
+            _replace_group_from_counterparty_rows(group)
+
     if own_party_name:
         groups.setdefault(
             _group_key(own_party_name, "OP"),
@@ -4200,6 +4293,7 @@ def build_related_party_summary_rows_for_report(
             own_related,
             related_parties=related_parties,
             company_name=company_name,
+            counterparty_rows=cp_rows,
         )
         if group.get("badge_type") == "RP"
     ]
@@ -4222,11 +4316,7 @@ def build_related_party_summary_rows_for_report(
 
     rows = []
     seen = set()
-    for party in related_parties or []:
-        name = _report_party_display_name(party)
-        if not name:
-            continue
-        relationship = _report_party_relationship(party)
+    for name, relationship in _report_related_party_entries(related_parties):
         group = _matching_group(name)
         group_transactions = group.get("transactions", []) if group else []
         fallback = (
@@ -4386,7 +4476,13 @@ def _report_counterparty_alignment_targets(
     def add_target(name: str, is_related_party: bool = False) -> None:
         display_name = re.sub(r"\s+", " ", str(name or "").strip())
         key = display_name.upper()
-        if not key or key in seen or len(_report_party_core_tokens(display_name)) < 2:
+        if (
+            not key
+            or key in seen
+            or _is_report_unknown_counterparty(display_name)
+            or _is_report_special_counterparty_bucket(display_name)
+            or len(_report_party_core_tokens(display_name)) < 2
+        ):
             return
         targets.append({"name": display_name, "is_related_party": is_related_party})
         seen.add(key)
@@ -4520,7 +4616,7 @@ def build_report_counterparty_ledger_rows(
 
 
 def copy_report_counterparty_rows(rows) -> List[dict]:
-    """Copy already-finalized UI ledger rows without re-running name cleaning."""
+    """Copy finalized UI ledger rows and normalize display legal suffixes."""
     output: List[dict] = []
     if not isinstance(rows, list):
         return output
@@ -4528,7 +4624,9 @@ def copy_report_counterparty_rows(rows) -> List[dict]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        name = re.sub(r"\s+", " ", str(row.get("counterparty_name") or row.get("counterparty") or "UNKNOWN").strip()) or "UNKNOWN"
+        name = _canonical_report_counterparty_display_name(
+            row.get("counterparty_name") or row.get("counterparty") or "UNKNOWN"
+        )
         copied = dict(row)
         copied["counterparty_name"] = name
         copied["total_credits"] = round(safe_float(copied.get("total_credits", copied.get("total_credit", 0))), 2)
@@ -5443,7 +5541,9 @@ def build_report_data_from_analysis(
     # Build top_parties from the same aligned CP ledger rows used by reports.
     cp_ledger = transaction_analysis.get('counterparty_ledger', {}) or build_track2_counterparty_ledger(transactions)
     company_name = st.session_state.get('company_name_override', '') or (transactions[0].get('company_name', '') if transactions else '')
-    related_parties = adapted_data.get("report_info", {}).get("related_parties", []) or []
+    related_parties = filter_report_related_parties(
+        adapted_data.get("report_info", {}).get("related_parties", []) or []
+    )
     own_related = adapted_data.get("own_related_transactions", {}) or {}
     report_counterparty_rows = build_report_counterparty_ledger_rows(
         cp_ledger,
@@ -5519,7 +5619,9 @@ def normalize_report_data_for_export(data: dict) -> dict:
     # ALWAYS build top_parties from the aligned CP ledger for consistency with the UI.
     cp_ledger = source.get("counterparty_ledger", {})
     company_name = source.get("report_info", {}).get("company_name", "")
-    related_parties = source.get("report_info", {}).get("related_parties", []) or []
+    related_parties = filter_report_related_parties(
+        source.get("report_info", {}).get("related_parties", []) or []
+    )
     own_related = source.get("own_related_transactions", {}) or {}
     report_counterparty_rows = get_report_counterparty_rows_from_data(
         source,
@@ -5571,7 +5673,9 @@ def normalize_report_data_for_export(data: dict) -> dict:
     # Ensure top_parties remains from the aligned CP ledger.
     cp_ledger = normalized.get("counterparty_ledger", {})
     company_name = normalized.get("report_info", {}).get("company_name", "")
-    related_parties = normalized.get("report_info", {}).get("related_parties", []) or []
+    related_parties = filter_report_related_parties(
+        normalized.get("report_info", {}).get("related_parties", []) or []
+    )
     own_related = normalized.get("own_related_transactions", {}) or {}
     report_counterparty_rows = get_report_counterparty_rows_from_data(
         normalized,
@@ -5685,7 +5789,9 @@ def build_shared_report_data(
 
             determinations = st.session_state.get("account_type_determinations") or []
             account_meta = account_meta_from_determinations(determinations)
-            related_parties = st.session_state.get("related_parties_override") or []
+            related_parties = filter_report_related_parties(
+                st.session_state.get("related_parties_override") or []
+            )
             factoring_entities = st.session_state.get("factoring_entities_override") or []
 
             data = build_track2_result(
@@ -5704,7 +5810,9 @@ def build_shared_report_data(
             company_name = override or (company_names[0] if company_names else '')
             report_counterparty_rows = build_report_counterparty_ledger_rows(
                 cp_ledger,
-                related_parties=data.get("report_info", {}).get("related_parties", []) or [],
+                related_parties=filter_report_related_parties(
+                    data.get("report_info", {}).get("related_parties", []) or []
+                ),
                 own_related=data.get("own_related_transactions", {}) or {},
                 company_name=company_name,
             )
@@ -5749,7 +5857,9 @@ def build_shared_report_data(
     )
     report_counterparty_rows = build_report_counterparty_ledger_rows(
         cp_ledger,
-        related_parties=report_data.get("report_info", {}).get("related_parties", []) or [],
+        related_parties=filter_report_related_parties(
+            report_data.get("report_info", {}).get("related_parties", []) or []
+        ),
         own_related=report_data.get("own_related_transactions", {}) or {},
         company_name=company_name,
     )
@@ -6268,7 +6378,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     report_counterparty_rows = get_report_counterparty_rows_from_data(
         report_data,
         cp_ledger,
-        related_parties=report_info.get("related_parties", []) or [],
+        related_parties=filter_report_related_parties(report_info.get("related_parties", []) or []),
         own_related=own_related,
         company_name=report_info.get("company_name", ""),
     )
@@ -6495,7 +6605,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(recon_lookup)
 
     # Build cp_sorted HERE so it's available for both Counterparty and CP Ledger sheets
-    related_parties = report_info.get("related_parties", []) or []
+    related_parties = filter_report_related_parties(report_info.get("related_parties", []) or [])
     company_name = report_info.get("company_name", "")
     cp_sorted = get_report_counterparty_rows_from_data(
         report_data,
@@ -7256,7 +7366,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws5.column_dimensions["F"].width = 14  # Transactions
 
     rp_row_start = row + 1
-    related_parties = report_info.get("related_parties", []) or []
+    related_parties = filter_report_related_parties(report_info.get("related_parties", []) or [])
     related_party_rows = build_related_party_summary_rows_for_report(
         related_parties,
         own_related,
@@ -7269,6 +7379,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
             own_related,
             related_parties=related_parties,
             company_name=company_name,
+            counterparty_rows=cp_sorted,
         )
         for txn in (group.get("transactions", []) or [])
     ]
@@ -9521,7 +9632,9 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> dict:
         company_name_for_top = company_names[0] if company_names else ""
     canonical_cp_rows = build_report_counterparty_ledger_rows(
         display_cp_ledger,
-        related_parties=st.session_state.get("related_parties_override", []) or [],
+        related_parties=filter_report_related_parties(
+            st.session_state.get("related_parties_override", []) or []
+        ),
         own_related={},
         company_name=company_name_for_top,
     )

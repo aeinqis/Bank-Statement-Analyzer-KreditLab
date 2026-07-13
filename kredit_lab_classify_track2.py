@@ -1988,6 +1988,7 @@ _RP_EXCLUDE_NAMES = frozenset({
     "SOCSO", "LHDN", "HRDF",
     "TRANSFER FEE", "OTHER TRANSFER FEE",
     "CHEQUE DEPOSIT", "CHEQUE ISSUE",
+    "SPECIAL BUCKET",
 })
 
 # Memo / rail / facility synthetic-bucket labels that must never auto-confirm
@@ -7280,6 +7281,7 @@ _SYNTHETIC_COUNTERPARTY_LABELS: frozenset[str] = frozenset(
         "MONTH END",
         "OPENING BALANCE",
         "CLOSING BALANCE",
+        "SPECIAL BUCKET",
     }
 )
 
@@ -7319,7 +7321,8 @@ def _is_synthetic_counterparty_label(name: Any) -> bool:
     stripped = name.strip()
     if not stripped:
         return True
-    if stripped.upper() in _SYNTHETIC_COUNTERPARTY_LABELS:
+    upper = re.sub(r"[_\s]+", " ", stripped.upper())
+    if upper in _SYNTHETIC_COUNTERPARTY_LABELS:
         return True
     if _SYNTHETIC_COUNTERPARTY_RE.match(stripped):
         return True
@@ -8424,7 +8427,8 @@ def _is_excluded_related_party_name(party: Any) -> bool:
     name = _related_party_display_name(party)
     if not name:
         return True
-    return _is_synthetic_counterparty_label(name) or name.upper() in _RP_EXCLUDE_NAMES
+    upper = re.sub(r"[_\s]+", " ", name.upper())
+    return _is_synthetic_counterparty_label(name) or upper in _RP_EXCLUDE_NAMES
 
 
 def _matched_related_party_name(
