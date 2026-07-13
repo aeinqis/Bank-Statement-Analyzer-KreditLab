@@ -9638,6 +9638,7 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> dict:
         own_related={},
         company_name=company_name_for_top,
     )
+    canonical_cp_rows = copy_report_counterparty_rows(canonical_cp_rows)
     top_party_view = prepare_top_parties_for_report(
         _top_parties_from_counterparty_rows(
             canonical_cp_rows,
