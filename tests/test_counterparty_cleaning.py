@@ -8,6 +8,7 @@ from app import (
     _top_parties_from_counterparty_rows,
     build_report_counterparty_ledger_rows,
     filter_report_related_parties,
+    generate_excel_report,
     get_report_counterparty_rows_from_data,
     partition_related_party_candidates_for_manager,
     prepare_top_parties_for_report,
@@ -975,6 +976,60 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(own_group["credits"], 2_784_136.22)
         self.assertEqual(own_group["debits"], 872_136.0)
         self.assertEqual(len(own_group["transactions"]), 2)
+
+    def test_excel_counterparty_own_party_count_matches_cp_ledger(self):
+        import openpyxl
+
+        cp_transactions = [
+            {
+                "date": f"2025-09-{(idx % 28) + 1:02d}",
+                "description": f"OWN PARTY TRANSFER {idx + 1}",
+                "amount": 100.0,
+                "type": "DEBIT",
+                "balance": 1000.0 - idx,
+            }
+            for idx in range(70)
+        ]
+        cp_row = {
+            "counterparty_name": "MUHAFIZ SECURITY SDN BHD",
+            "total_credits": 1400.0,
+            "total_debits": 5600.0,
+            "credit_count": 14,
+            "debit_count": 56,
+            "transaction_count": 70,
+            "transactions": cp_transactions,
+        }
+        own_related_rows = [
+            {
+                "date": f"2025-09-{(idx % 28) + 1:02d}",
+                "description": f"RAW OWN PARTY TRANSFER {idx + 1}",
+                "amount": 100.0,
+                "type": "DEBIT",
+                "party_type": "OWN",
+                "party_name": "MUHAFIZ SECURITY",
+            }
+            for idx in range(60)
+        ]
+        workbook_bytes = generate_excel_report(
+            {
+                "report_info": {
+                    "company_name": "MUHAFIZ SECURITY SDN. BHD.",
+                    "related_parties": [],
+                },
+                "own_related_transactions": {"transactions": own_related_rows, "summary": {}},
+                "counterparty_ledger": {"counterparties": [cp_row]},
+                "report_counterparty_rows": [cp_row],
+                "transactions": [],
+                "consolidated": {},
+                "monthly_analysis": [],
+                "accounts": [],
+            }
+        )
+
+        wb = openpyxl.load_workbook(workbook_bytes, data_only=True)
+        ws = wb["Counterparty"]
+
+        self.assertEqual(ws.cell(row=5, column=6).value, 70)
 
     def test_reports_prefer_streamlit_counterparty_rows_over_raw_ledger(self):
         cp_ledger = {

@@ -7386,6 +7386,21 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     # Counterparty - MODIFIED: Combined with Related Parties content
     ws5 = wb.create_sheet("Counterparty")
     ws5.cell(row=1, column=1, value="COUNTERPARTY TRANSACTIONS").font = title_font
+    own_related_groups_for_counterparty = build_own_related_party_groups_for_report(
+        own_related,
+        related_parties=related_parties,
+        company_name=company_name,
+        counterparty_rows=cp_sorted,
+    )
+    own_party_group = next(
+        (group for group in own_related_groups_for_counterparty if group.get("badge_type") == "OP"),
+        {},
+    )
+    own_related_display_transactions = [
+        txn
+        for group in own_related_groups_for_counterparty
+        for txn in (group.get("transactions", []) or [])
+    ]
 
    # ============================================================
     # OWN PARTY TABLE (Added above Related Parties - Single row only)
@@ -7407,23 +7422,15 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws5.column_dimensions["E"].width = 16  # Total Debits
     ws5.column_dimensions["F"].width = 14  # Transactions
 
-    # Calculate Own Party totals from own_related transactions
-    own_party_total_credits = 0.0
-    own_party_total_debits = 0.0
-    own_party_transaction_count = 0
-    own_party_name = report_info.get("company_name", "Own Party")
-
-    for txn in own_related.get("transactions", []) or []:
-        if str(txn.get("party_type", "")).upper().startswith("OWN"):
-            amount = safe_float(txn.get("amount", 0))
-            txn_type = str(txn.get("type", "")).upper()
-            
-            if txn_type == "CREDIT":
-                own_party_total_credits += amount
-            else:
-                own_party_total_debits += amount
-            
-            own_party_transaction_count += 1
+    # Use the same OP group as the CP Ledger/detail list so counts stay aligned.
+    own_party_total_credits = safe_float(own_party_group.get("credits", 0))
+    own_party_total_debits = safe_float(own_party_group.get("debits", 0))
+    own_party_transaction_count = int(safe_float(own_party_group.get("transaction_count", 0)))
+    own_party_name = (
+        str(own_party_group.get("party_name") or "").strip()
+        or report_info.get("company_name")
+        or "Own Party"
+    )
 
     # Write the single Own Party row
     values = [
@@ -7466,23 +7473,12 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws5.column_dimensions["F"].width = 14  # Transactions
 
     rp_row_start = row + 1
-    related_parties = filter_report_related_parties(report_info.get("related_parties", []) or [])
     related_party_rows = build_related_party_summary_rows_for_report(
         related_parties,
         own_related,
         cp_rows=cp_sorted,
         company_name=company_name,
     )
-    own_related_display_transactions = [
-        txn
-        for group in build_own_related_party_groups_for_report(
-            own_related,
-            related_parties=related_parties,
-            company_name=company_name,
-            counterparty_rows=cp_sorted,
-        )
-        for txn in (group.get("transactions", []) or [])
-    ]
 
     if related_party_rows:
         for rp_idx, rp in enumerate(related_party_rows):
