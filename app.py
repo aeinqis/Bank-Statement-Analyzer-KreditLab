@@ -7680,23 +7680,54 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     # NOTE: Related Parties sheet (ws5c) has been REMOVED as content is now in Counterparty sheet
 
-    # Unclassified
+    # Unclassified sheet - Updated with caption
     ws5d = wb.create_sheet("Unclassified")
     ws5d.cell(row=1, column=1, value="UNCLASSIFIED TRANSACTIONS").font = title_font
+
+    # Add caption below title
+    caption_row = 2
+    uncl_threshold = safe_float(
+        report_data.get("classification_config", {}).get("unclassified_listing_threshold", 10000)
+    )
+    caption_text = f"List of unclassified transactions that are >= RM {uncl_threshold:,.0f}"
+    ws5d.cell(row=caption_row, column=1, value=caption_text)
+    ws5d.cell(row=caption_row, column=1).font = Font(name="Calibri", italic=True, color="475569", size=10)
+    ws5d.cell(row=caption_row, column=1).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    # Merge cells for caption to span across columns (optional but looks better)
+    ws5d.merge_cells(start_row=caption_row, start_column=1, end_row=caption_row, end_column=6)
+
+    # Set column widths before writing data
+    ws5d.column_dimensions["A"].width = 8   # No.
+    ws5d.column_dimensions["B"].width = 14  # Date
+    ws5d.column_dimensions["C"].width = 55  # Description
+    ws5d.column_dimensions["D"].width = 18  # Amount
+    ws5d.column_dimensions["E"].width = 14  # Type
+    ws5d.column_dimensions["F"].width = 18  # Balance
+
+    # Write headers (starting 2 rows after caption, or row 4 if caption is at row 2)
+    header_row = caption_row + 2  # This will be row 4
     unclassified_headers = ["No.", "Date", "Description", "Amount", "Type", "Balance"]
-    write_headers(ws5d, 3, unclassified_headers, header_fill_orange)
+    write_headers(ws5d, header_row, unclassified_headers, header_fill_orange)
+
+    # Write data rows starting after headers
     for idx, txn in enumerate(report_data.get("unclassified_transactions", []) or [], 1):
-        row_idx = idx + 3
+        row_idx = header_row + idx
         txn_type = (txn.get("type") or "").upper()
-        values = [idx, txn.get("date", ""), (txn.get("description", "") or "")[:80], txn.get("amount"), txn_type, txn.get("balance")]
+        values = [
+            idx, 
+            txn.get("date", ""), 
+            (txn.get("description", "") or "")[:80], 
+            txn.get("amount"), 
+            txn_type, 
+            txn.get("balance")
+        ]
         write_values(ws5d, row_idx, values, number_cols={4, 6},
-                     credit_cols={4} if txn_type == "CREDIT" else set(),
-                     debit_cols={4} if txn_type != "CREDIT" else set())
+                    credit_cols={4} if txn_type == "CREDIT" else set(),
+                    debit_cols={4} if txn_type != "CREDIT" else set())
         ws5d.cell(row=row_idx, column=1).number_format = "0"
         for centre_col in (1, 2, 4, 5, 6):
             ws5d.cell(row=row_idx, column=centre_col).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    auto_width(ws5d)
-    ws5d.column_dimensions["A"].width = 8
 
     # Round Figure Transactions - Updated with proper formatting
     round_rows = get_round_transactions_for_report(report_data)
