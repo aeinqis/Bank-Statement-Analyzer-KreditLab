@@ -771,6 +771,73 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(shah_group["debits"], 300.0)
         self.assertEqual(len(shah_group["transactions"]), 2)
 
+    def test_own_related_inheritance_ignores_mentions_inside_other_counterparties(self):
+        own_related = {
+            "transactions": [
+                {
+                    "date": "2025-09-01",
+                    "description": "TR IBG SHAHARUDDIN SAMS ONE",
+                    "amount": 100.0,
+                    "type": "DEBIT",
+                    "party_type": "RELATED",
+                    "party_name": "SHAHARUDDIN SAMS",
+                }
+            ]
+        }
+        shah_transactions = [
+            {
+                "date": f"2025-09-{(idx % 28) + 1:02d}",
+                "description": f"TR IBG SHAHARUDDIN SAMS {idx + 1}",
+                "amount": 735_609.41 if idx == 0 else 1.0,
+                "type": "DEBIT",
+                "balance": 700.0 - idx,
+            }
+            for idx in range(39)
+        ]
+        cp_rows = [
+            {
+                "counterparty_name": "ALPHA TRADING",
+                "total_credits": 0.0,
+                "total_debits": 1_000_000.0,
+                "credit_count": 0,
+                "debit_count": 3,
+                "transaction_count": 3,
+                "transactions": [
+                    {
+                        "date": "2025-09-03",
+                        "description": "ALPHA TRADING PAYMENT FOR SHAHARUDDIN SAMS",
+                        "amount": 1_000_000.0,
+                        "type": "DEBIT",
+                        "party_name": "SHAHARUDDIN SAMS",
+                        "counterparty_name_raw": "SHAHARUDDIN SAMS",
+                    }
+                ],
+            },
+            {
+                "counterparty_name": "SHAHARUDDIN SAMS",
+                "total_credits": 0.0,
+                "total_debits": 735_647.41,
+                "credit_count": 0,
+                "debit_count": 39,
+                "transaction_count": 39,
+                "transactions": shah_transactions,
+            },
+        ]
+
+        groups = build_own_related_party_groups_for_report(
+            own_related,
+            related_parties=[{"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"}],
+            counterparty_rows=cp_rows,
+        )
+
+        shah_group = next(group for group in groups if group["party_name"] == "SHAHARUDDIN SAMS")
+        self.assertEqual(shah_group["credit_count"], 0)
+        self.assertEqual(shah_group["debit_count"], 39)
+        self.assertEqual(shah_group["transaction_count"], 39)
+        self.assertEqual(shah_group["credits"], 0.0)
+        self.assertEqual(shah_group["debits"], 735_647.41)
+        self.assertEqual(len(shah_group["transactions"]), 39)
+
     def test_own_related_empty_related_placeholder_inherits_counterparty_ledger(self):
         cp_rows = [
             {
@@ -818,6 +885,49 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(dayang_group["credits"], 50.0)
         self.assertEqual(dayang_group["debits"], 125.0)
         self.assertEqual(len(dayang_group["transactions"]), 3)
+
+    def test_own_related_own_party_inherits_counterparty_display_name(self):
+        cp_rows = [
+            {
+                "counterparty_name": "MUHAFIZ SECURITY SDN BHD",
+                "total_credits": 2_784_136.22,
+                "total_debits": 872_136.0,
+                "credit_count": 14,
+                "debit_count": 56,
+                "transaction_count": 70,
+                "transactions": [
+                    {
+                        "date": "2025-09-04",
+                        "description": "IBG CREDIT MTH END MUHAFIZ SECURITY SDN",
+                        "amount": 500_000.0,
+                        "type": "CREDIT",
+                        "balance": 1_770_529.95,
+                    },
+                    {
+                        "date": "2025-09-04",
+                        "description": "TR IBG MUHAFIZ SECURITY SDN TRANSFER BACK TO MBB",
+                        "amount": 400_000.0,
+                        "type": "DEBIT",
+                        "balance": 1_875_782.28,
+                    },
+                ],
+            }
+        ]
+
+        groups = build_own_related_party_groups_for_report(
+            {"transactions": []},
+            company_name="MUHAFIZ SECURITY SDN. BHD.",
+            counterparty_rows=cp_rows,
+        )
+
+        own_group = next(group for group in groups if group["badge_type"] == "OP")
+        self.assertEqual(own_group["party_name"], "MUHAFIZ SECURITY SDN BHD")
+        self.assertEqual(own_group["credit_count"], 14)
+        self.assertEqual(own_group["debit_count"], 56)
+        self.assertEqual(own_group["transaction_count"], 70)
+        self.assertEqual(own_group["credits"], 2_784_136.22)
+        self.assertEqual(own_group["debits"], 872_136.0)
+        self.assertEqual(len(own_group["transactions"]), 2)
 
     def test_reports_prefer_streamlit_counterparty_rows_over_raw_ledger(self):
         cp_ledger = {

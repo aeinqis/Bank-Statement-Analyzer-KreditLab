@@ -1786,7 +1786,7 @@ def generate_interactive_html(data):
                 <td class="mono r">RM {balance:,.2f}</td>
             </tr>'''
 
-        txn_count = len(group['transactions'])
+        txn_count = int(group.get('transaction_count') or len(group['transactions']))
         rp_party_rows += f'''
         <tr class="rp-party-row" onclick="toggleRp('rp-detail-{idx}')" style="cursor:pointer">
             <td><span id="rp-caret-{idx}">▶</span> {escape(group['party_name'])} <span class="{badge_cls}">{group['badge_type']}</span></td>
@@ -4126,6 +4126,7 @@ def build_own_related_party_groups_for_report(
             "debits": 0.0,
             "credit_count": 0,
             "debit_count": 0,
+            "transaction_count": 0,
         }
 
     def _group_key(party_name: str, badge_type: str):
@@ -4170,6 +4171,7 @@ def build_own_related_party_groups_for_report(
         elif txn_type == "DEBIT":
             group["debits"] += amount
             group["debit_count"] += 1
+        group["transaction_count"] += 1
 
         txn_copy = dict(txn)
         txn_copy["party_name"] = party_name
@@ -4197,18 +4199,42 @@ def build_own_related_party_groups_for_report(
                 return
             matches = [
                 cp for cp in counterparty_rows
-                if isinstance(cp, dict) and _counterparty_row_matches_report_party(cp, party_name)
+                if isinstance(cp, dict) and _counterparty_row_matches_report_party_name(cp, party_name)
             ]
             if not matches:
                 return
 
             badge_type = group.get("badge_type")
             party_type = "OWN" if badge_type == "OP" else "RELATED"
+            display_name = (
+                str(matches[0].get("counterparty_name") or matches[0].get("counterparty") or party_name).strip()
+                or party_name
+            )
             transactions = []
             credits = debits = 0.0
             credit_count = debit_count = 0
+            ledger_credits = ledger_debits = 0.0
+            ledger_credit_count = ledger_debit_count = ledger_transaction_count = 0
+            has_credit_total = has_debit_total = False
+            has_credit_count = has_debit_count = has_transaction_count = False
 
             for cp in matches:
+                if "total_credits" in cp or "total_credit" in cp:
+                    has_credit_total = True
+                    ledger_credits += safe_float(cp.get("total_credits", cp.get("total_credit", 0)))
+                if "total_debits" in cp or "total_debit" in cp:
+                    has_debit_total = True
+                    ledger_debits += safe_float(cp.get("total_debits", cp.get("total_debit", 0)))
+                if "credit_count" in cp or "credit_tx_count" in cp:
+                    has_credit_count = True
+                    ledger_credit_count += int(safe_float(cp.get("credit_count", cp.get("credit_tx_count", 0))))
+                if "debit_count" in cp or "debit_tx_count" in cp:
+                    has_debit_count = True
+                    ledger_debit_count += int(safe_float(cp.get("debit_count", cp.get("debit_tx_count", 0))))
+                if "transaction_count" in cp:
+                    has_transaction_count = True
+                    ledger_transaction_count += int(safe_float(cp.get("transaction_count", 0)))
+
                 for txn in cp.get("transactions", []) or []:
                     if not isinstance(txn, dict):
                         continue
@@ -4224,23 +4250,38 @@ def build_own_related_party_groups_for_report(
                         debit_count += 1
 
                     txn_copy = dict(txn)
-                    txn_copy["party_name"] = party_name
+                    txn_copy["party_name"] = display_name
                     txn_copy["party_type"] = party_type
                     txn_copy["type"] = txn_type
                     txn_copy["amount"] = round(amount, 2)
                     transactions.append(txn_copy)
 
-            if not transactions:
+            if not any(
+                [
+                    transactions,
+                    has_credit_total,
+                    has_debit_total,
+                    has_credit_count,
+                    has_debit_count,
+                    has_transaction_count,
+                ]
+            ):
                 return
+            group["party_name"] = display_name
             group["party_type"] = party_type
             group["transactions"] = sorted(
                 transactions,
                 key=lambda tx: (str(tx.get("date") or ""), str(tx.get("description") or "")),
             )
-            group["credits"] = round(credits, 2)
-            group["debits"] = round(debits, 2)
-            group["credit_count"] = credit_count
-            group["debit_count"] = debit_count
+            group["credits"] = round(ledger_credits if has_credit_total else credits, 2)
+            group["debits"] = round(ledger_debits if has_debit_total else debits, 2)
+            group["credit_count"] = ledger_credit_count if has_credit_count else credit_count
+            group["debit_count"] = ledger_debit_count if has_debit_count else debit_count
+            group["transaction_count"] = (
+                ledger_transaction_count
+                if has_transaction_count
+                else group["credit_count"] + group["debit_count"]
+            )
 
         for group in groups.values():
             _replace_group_from_counterparty_rows(group)
@@ -4253,6 +4294,8 @@ def build_own_related_party_groups_for_report(
     for group in groups.values():
         group["credits"] = round(group["credits"], 2)
         group["debits"] = round(group["debits"], 2)
+        if not group.get("transaction_count"):
+            group["transaction_count"] = int(group.get("credit_count", 0) or 0) + int(group.get("debit_count", 0) or 0)
 
     return sorted(groups.values(), key=_group_sort_key)
 
@@ -4470,6 +4513,40 @@ def _counterparty_row_matches_report_party(cp: dict, party_name: str) -> bool:
         _report_candidate_contains_party_tokens(source, party_name)
         for source in _counterparty_row_report_match_sources(cp)
     )
+
+
+def _counterparty_row_name_sources(cp: dict) -> List[str]:
+    """Return the identity labels for a counterparty ledger row.
+
+    OP/RP inheritance must mirror the main counterparty ledger, so matching is
+    intentionally limited to row-level names and raw aliases.
+    """
+    sources = [
+        cp.get("counterparty_name"),
+        cp.get("counterparty"),
+    ]
+    raw_names = cp.get("raw_names", [])
+    if isinstance(raw_names, (list, tuple, set)):
+        sources.extend(raw_names)
+    elif raw_names:
+        sources.append(raw_names)
+
+    return [str(source) for source in sources if source]
+
+
+def _counterparty_row_matches_report_party_name(cp: dict, party_name: str) -> bool:
+    party_display = _report_party_display_name(party_name)
+    party_canonical = _canonical_report_counterparty_display_name(party_display)
+    for source in _counterparty_row_name_sources(cp):
+        source_display = _report_party_display_name(source)
+        source_canonical = _canonical_report_counterparty_display_name(source_display)
+        if (
+            _report_party_names_equivalent(source_display, party_display)
+            or _report_party_names_equivalent(source_canonical, party_canonical)
+            or _report_candidate_contains_party_tokens(source_display, party_display)
+        ):
+            return True
+    return False
 
 
 def _report_counterparty_alignment_targets(
