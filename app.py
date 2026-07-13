@@ -7847,12 +7847,17 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     ws6.column_dimensions["E"].width = 22   # Category
 
     # Risk Signals
+   # Risk Signals - Fixed header issue
     ws7 = wb.create_sheet("Risk Signals")
     ws7.cell(row=1, column=1, value="RISK SIGNALS ANALYSIS").font = title_font
+
+    # Write headers at row 3 (leaving row 2 empty for spacing)
     risk_headers = ["No.", "Signal", "Detected", "Remarks"]
-    write_headers(ws7, 3, risk_headers)  # Changed from 1 to 3 to leave space for title
+    write_headers(ws7, 3, risk_headers)  # Headers at row 3
+
+    # Write data starting from row 4 (after headers)
     risk_df = build_risk_signals_dataframe_for_excel(flags, consolidated, statutory_compliance, monthly_analysis, report_data)
-    for row_idx, item in enumerate(risk_df.to_dict(orient="records"), 2):
+    for row_idx, item in enumerate(risk_df.to_dict(orient="records"), 4):  # Start at row 4
         values = [item.get("#"), item.get("Signal"), item.get("Detected"), item.get("Remarks")]
         write_values(ws7, row_idx, values)
         ws7.cell(row=row_idx, column=1).number_format = "0"
@@ -7861,6 +7866,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         ws7.cell(row=row_idx, column=3).alignment = Alignment(horizontal="center", vertical="center")
         if item.get("Detected") == "YES":
             ws7.cell(row=row_idx, column=3).font = Font(name="Calibri", color="922B21", bold=True)
+
+    # Set column widths
     auto_width(ws7)
     ws7.column_dimensions["D"].width = 70
 
