@@ -9938,6 +9938,157 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> dict:
         "company_name": company_name_for_top,
     }
 
+def _related_party_counterparty_row_name(row: dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    return re.sub(
+        r"\s+",
+        " ",
+        str(
+            row.get("counterparty_name")
+            or row.get("party_name")
+            or row.get("counterparty")
+            or row.get("party")
+            or ""
+        ).strip(),
+    )
+
+
+def _counterparty_rows_for_related_party_manager(
+    cp_ledger: dict = None,
+    shared_report_data: dict = None,
+) -> List[dict]:
+    rows: List[dict] = []
+
+    def add_rows(candidate_rows) -> None:
+        if isinstance(candidate_rows, list):
+            rows.extend(row for row in candidate_rows if isinstance(row, dict))
+
+    if isinstance(shared_report_data, dict):
+        add_rows(shared_report_data.get("report_counterparty_rows"))
+        add_rows(shared_report_data.get("counterparty_ledger_rows"))
+        shared_ledger = shared_report_data.get("counterparty_ledger")
+        if isinstance(shared_ledger, dict):
+            add_rows(shared_ledger.get("counterparties"))
+
+    if isinstance(cp_ledger, dict):
+        add_rows(cp_ledger.get("counterparties"))
+
+    return rows
+
+
+def _counterparty_row_for_related_party_name(
+    party_name: str,
+    counterparty_rows: List[dict],
+    *,
+    total_cr=None,
+    total_dr=None,
+) -> Optional[dict]:
+    display_name = _report_party_display_name(party_name)
+    if not display_name:
+        return None
+
+    amount_hint = safe_float(total_cr) or safe_float(total_dr)
+    matches = []
+    for row in counterparty_rows or []:
+        row_name = _related_party_counterparty_row_name(row)
+        if (
+            not row_name
+            or _is_report_unknown_counterparty(row_name)
+            or _is_report_special_counterparty_bucket(row_name)
+        ):
+            continue
+
+        score = -1
+        if _report_party_identity_names_match(row_name, display_name):
+            score = 4
+        elif _counterparty_row_matches_report_party_name(row, display_name):
+            score = 3
+        elif _counterparty_row_matches_report_party(row, display_name):
+            score = 2
+        if score < 0:
+            continue
+
+        amount_score = 0
+        if amount_hint:
+            if round(safe_float(row.get("total_credits", 0)), 2) == round(safe_float(total_cr), 2):
+                amount_score += 1
+            if round(safe_float(row.get("total_debits", 0)), 2) == round(safe_float(total_dr), 2):
+                amount_score += 1
+
+        matches.append((
+            score,
+            amount_score,
+            int(safe_float(row.get("transaction_count", 0))),
+            len(row_name),
+            row_name.casefold(),
+            row,
+        ))
+
+    if not matches:
+        return None
+    return max(matches, key=lambda item: item[:-1])[-1]
+
+
+def _align_related_party_candidates_to_counterparty_rows(
+    candidates: list,
+    counterparty_rows: List[dict],
+) -> list:
+    """Use the visible Counterparty Ledger name for manager-facing RP rows."""
+    aligned = []
+    for candidate in candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        item = dict(candidate)
+        original_name = _report_party_display_name(item)
+        match = _counterparty_row_for_related_party_name(
+            original_name,
+            counterparty_rows,
+            total_cr=item.get("total_cr", 0),
+            total_dr=item.get("total_dr", 0),
+        )
+        ledger_name = _related_party_counterparty_row_name(match) if match else ""
+        if ledger_name and ledger_name.upper() != original_name.upper():
+            item["original_name"] = original_name
+            item["name"] = ledger_name
+        aligned.append(item)
+
+    merged: list[dict] = []
+    for item in aligned:
+        existing_index = next(
+            (
+                idx for idx, existing in enumerate(merged)
+                if _report_party_names_equivalent(item.get("name"), existing.get("name"))
+            ),
+            None,
+        )
+        if existing_index is None:
+            merged.append(item)
+            continue
+
+        existing = merged[existing_index]
+        confidence_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        merged_signals = list(existing.get("signals") or [])
+        for signal in item.get("signals") or []:
+            if signal not in merged_signals:
+                merged_signals.append(signal)
+        combined = {**existing, **item}
+        combined["signals"] = merged_signals
+        combined["total_cr"] = max(safe_float(existing.get("total_cr", 0)), safe_float(item.get("total_cr", 0)))
+        combined["total_dr"] = max(safe_float(existing.get("total_dr", 0)), safe_float(item.get("total_dr", 0)))
+        combined["debit_month_count"] = max(
+            int(safe_float(existing.get("debit_month_count", 0))),
+            int(safe_float(item.get("debit_month_count", 0))),
+        )
+        if confidence_order.get(str(existing.get("confidence") or "").upper(), 9) < confidence_order.get(
+            str(item.get("confidence") or "").upper(), 9
+        ):
+            combined["confidence"] = existing.get("confidence")
+        merged[existing_index] = combined
+
+    return merged
+
+
 def detect_related_party_candidates(
     cp_ledger: dict,
     confirmed_names: set,
@@ -10136,24 +10287,71 @@ def render_related_party_manager(
                 return "CONFIRMED"
         return "HIGH"
 
+    counterparty_rows = _counterparty_rows_for_related_party_manager(cp_ledger, shared_report_data)
+
+    def _ledger_name_for_party(name: str) -> str:
+        match = _counterparty_row_for_related_party_name(name, counterparty_rows)
+        return _related_party_counterparty_row_name(match) or name
+
+    def _related_party_financials(name: str) -> tuple[float, float]:
+        match = _counterparty_row_for_related_party_name(name, counterparty_rows)
+        if not match:
+            return 0.0, 0.0
+        return (
+            safe_float(match.get("total_credits", match.get("total_credit", 0))),
+            safe_float(match.get("total_debits", match.get("total_debit", 0))),
+        )
+
+    def _fmt_rm(amount) -> str:
+        value = safe_float(amount)
+        return f"RM {value:,.2f}" if value else "-"
+
+    def _manager_badge(label: str) -> str:
+        clean = str(label or "").strip().upper()
+        palette = {
+            "HIGH": ("rgba(248, 113, 113, .16)", "#fecaca", "rgba(248, 113, 113, .45)"),
+            "MEDIUM": ("rgba(251, 191, 36, .16)", "#fde68a", "rgba(251, 191, 36, .45)"),
+            "LOW": ("rgba(148, 163, 184, .16)", "#e2e8f0", "rgba(148, 163, 184, .45)"),
+            "CONFIRMED": ("rgba(52, 211, 153, .14)", "#bbf7d0", "rgba(52, 211, 153, .42)"),
+        }
+        background, color, border = palette.get(clean, palette["LOW"])
+        return (
+            f"<span style=\"display:inline-flex;align-items:center;"
+            f"border:1px solid {border};border-radius:999px;padding:.18rem .55rem;"
+            f"font-size:.78rem;font-weight:700;letter-spacing:.02em;"
+            f"background:{background};color:{color};\">{escape(clean or 'REVIEW')}</span>"
+        )
+
+    def _candidate_is_hidden_after_alignment(candidate: dict) -> bool:
+        names = [
+            _rp_name(candidate),
+            str(candidate.get("original_name") or "").strip() if isinstance(candidate, dict) else "",
+        ]
+        review_names = [name for name in names if name]
+        blocker_names = list(confirmed_names) + list(dismissed)
+        return any(
+            name.upper() in confirmed_names
+            or name.upper() in dismissed
+            or any(_report_party_names_equivalent(name, blocker) for blocker in blocker_names)
+            for name in review_names
+        )
+
     def _merge_related_party_entries(entries: list) -> list:
         merged = []
-        seen = set()
         for rp in entries or []:
-            name = _rp_name(rp)
+            raw_name = _rp_name(rp)
+            name = _ledger_name_for_party(raw_name)
             if (
                 not name
                 or _is_report_unknown_counterparty(name)
                 or _is_report_special_counterparty_bucket(name)
             ):
                 continue
-            key = name.upper()
-            if key in seen:
+            if any(_report_party_names_equivalent(name, existing.get("name")) for existing in merged):
                 continue
             item = dict(rp) if isinstance(rp, dict) else {"name": name, "relationship": ""}
             item["name"] = name
             merged.append(item)
-            seen.add(key)
         return merged
 
     confirmed_rps = _merge_related_party_entries(
@@ -10174,6 +10372,14 @@ def render_related_party_manager(
         dismissed,
         shared_report_data,
     )
+    all_candidates = _align_related_party_candidates_to_counterparty_rows(
+        all_candidates,
+        counterparty_rows,
+    )
+    all_candidates = [
+        candidate for candidate in all_candidates
+        if not _candidate_is_hidden_after_alignment(candidate)
+    ]
     auto_known_candidates, possible_candidates = partition_related_party_candidates_for_manager(all_candidates)
     auto_known_to_add = [
         {
@@ -10196,110 +10402,106 @@ def render_related_party_manager(
     # ─────────────────────────────────────────────────────────────────────
     # SECTION 1 — Known Related Parties
     # ─────────────────────────────────────────────────────────────────────
-    st.markdown("### Known Related Parties")
+    with st.expander(f"Known Related Parties ({len(known_rps)})", expanded=True):
+        st.caption("Confirmed and high-confidence parties currently used by the reports.")
 
-    if not known_rps:
-        st.info("No known related parties detected yet.")
-    else:
-        h = st.columns([3, 1.4, 2, 2, 2, 1])
-        for label, col in zip(["Party Name", "Status", "Relationship", "Credits (RM)", "Debits (RM)", ""], h):
-            col.markdown(f"**{label}**")
-        st.divider()
+        if not known_rps:
+            st.info("No known related parties detected yet.")
+        else:
+            h = st.columns([3.2, 2.2, 1.7, 1.7, 1.1])
+            for label, col in zip(["Party", "Status / Relationship", "Credits", "Debits", "Action"], h):
+                col.markdown(f"**{label}**")
+            st.divider()
 
-        to_remove = None
-        removable_keys = {_rp_key(rp) for rp in confirmed_rps if _rp_key(rp)}
-        for i, rp in enumerate(known_rps):
-            name = _rp_name(rp)
-            rel = _rp_relationship(rp) or "—"
-            status = _rp_status(rp)
+            to_remove = None
+            removable_keys = {_rp_key(rp) for rp in confirmed_rps if _rp_key(rp)}
+            for i, rp in enumerate(known_rps):
+                name = _rp_name(rp)
+                rel = _rp_relationship(rp) or "Affiliate"
+                status = _rp_status(rp)
+                cr_amt, dr_amt = _related_party_financials(name)
 
-            # look up financials from CP ledger
-            cr_amt = dr_amt = 0.0
-            for cp in (cp_ledger or {}).get("counterparties", []) if isinstance(cp_ledger, dict) else []:
-                if cp.get("counterparty_name", "").strip().upper() == name.upper():
-                    cr_amt = safe_float(cp.get("total_credits", 0))
-                    dr_amt = safe_float(cp.get("total_debits", 0))
-                    break
+                c1, c2, c3, c4, c5 = st.columns([3.2, 2.2, 1.7, 1.7, 1.1])
+                c1.markdown(f"**{escape(name)}**")
+                c1.caption(f"Relationship: {rel}")
+                c2.markdown(_manager_badge(status), unsafe_allow_html=True)
+                c3.write(_fmt_rm(cr_amt))
+                c4.write(_fmt_rm(dr_amt))
+                if _rp_key(rp) in removable_keys:
+                    if c5.button("Remove", key=f"_rp_rm_{i}", help="Remove from known related parties", use_container_width=True):
+                        to_remove = _rp_key(rp)
+                else:
+                    c5.caption("Auto")
 
-            c1, c2, c3, c4, c5, c6 = st.columns([3, 1.4, 2, 2, 2, 1])
-            c1.write(f"**{name}**")
-            c2.write(status)
-            c3.write(rel)
-            c4.write(f"RM {cr_amt:,.2f}" if cr_amt else "—")
-            c5.write(f"RM {dr_amt:,.2f}" if dr_amt else "—")
-            if _rp_key(rp) in removable_keys:
-                if c6.button("✕", key=f"_rp_rm_{i}", help="Remove from known related parties"):
-                    to_remove = _rp_key(rp)
-            else:
-                c6.write("")
-
-        if to_remove is not None:
-            confirmed_rps = [rp for rp in confirmed_rps if _rp_key(rp) != to_remove]
-            _save(confirmed_rps, dismissed)
-            changed = True
-            st.rerun()
+            if to_remove is not None:
+                confirmed_rps = [rp for rp in confirmed_rps if _rp_key(rp) != to_remove]
+                _save(confirmed_rps, dismissed)
+                changed = True
+                st.rerun()
 
     # ─────────────────────────────────────────────────────────────────────
     # SECTION 2 — Candidate / Possible Related Parties
     # ─────────────────────────────────────────────────────────────────────
-    st.markdown("### Possible Related Parties")
-    st.caption(
-        "Medium and low confidence candidates. Click **✓ Confirm** to add to the known list, "
-        "or **✕ Dismiss** to hide the candidate."
-    )
+    with st.expander(f"Possible Related Parties ({len(possible_candidates)})", expanded=True):
+        st.caption("Review medium and low confidence candidates before adding them to the known list.")
 
-    _CONF_ICON = {"HIGH": "🔴 HIGH", "MEDIUM": "🟡 MEDIUM", "LOW": "⚪ LOW"}
+        if not possible_candidates:
+            st.info("No medium or low confidence candidates to review.")
+        else:
+            h = st.columns([3.2, 1.5, 1.7, 1.7, 2.1])
+            for label, col in zip(["Candidate", "Confidence", "Credits", "Debits", "Action"], h):
+                col.markdown(f"**{label}**")
+            st.divider()
 
-    if not possible_candidates:
-        st.info("No medium or low confidence candidates to review.")
-    else:
-        h = st.columns([3, 2, 2, 2, 1, 1])
-        for label, col in zip(
-            ["Party Name", "Confidence", "Credits (RM)", "Debits (RM)", "Confirm", "Dismiss"], h
-        ):
-            col.markdown(f"**{label}**")
-        st.divider()
+            action = None
+            for i, cand in enumerate(possible_candidates):
+                name = cand["name"]
+                conf = str(cand.get("confidence", "LOW") or "LOW").upper()
+                evidence = str(cand.get("evidence", "") or "")
+                cr_amt, dr_amt = _related_party_financials(name)
+                if not (cr_amt or dr_amt):
+                    cr_amt = cand.get("total_cr", 0)
+                    dr_amt = cand.get("total_dr", 0)
 
-        action = None  # ("confirm"|"dismiss", index)
-        for i, cand in enumerate(possible_candidates):
-            name = cand["name"]
-            conf = str(cand.get("confidence", "LOW") or "LOW").upper()
-            evidence = cand.get("evidence", "")
-            cr_amt = cand.get("total_cr", 0)
-            dr_amt = cand.get("total_dr", 0)
+                c1, c2, c3, c4, c5 = st.columns([3.2, 1.5, 1.7, 1.7, 2.1])
+                c1.markdown(f"**{escape(name)}**")
+                if evidence:
+                    c1.caption(evidence[:100])
+                c2.markdown(_manager_badge(conf), unsafe_allow_html=True)
+                c3.write(_fmt_rm(cr_amt))
+                c4.write(_fmt_rm(dr_amt))
+                with c5:
+                    confirm_col, dismiss_col = st.columns(2)
+                    if confirm_col.button("Confirm", key=f"_cand_confirm_{i}", help="Add to known related parties", use_container_width=True):
+                        action = ("confirm", i)
+                    if dismiss_col.button("Dismiss", key=f"_cand_dismiss_{i}", help="Hide this candidate", use_container_width=True):
+                        action = ("dismiss", i)
 
-            c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 2, 2, 1, 1])
-            c1.write(f"**{name}**")
-            if evidence:
-                c1.caption(evidence[:80])
-            c2.write(_CONF_ICON.get(conf, conf))
-            c3.write(f"RM {cr_amt:,.2f}" if cr_amt else "—")
-            c4.write(f"RM {dr_amt:,.2f}" if dr_amt else "—")
-
-            if c5.button("✓", key=f"_cand_confirm_{i}", help="Add to known related parties"):
-                action = ("confirm", i)
-            if c6.button("✕", key=f"_cand_dismiss_{i}", help="Dismiss this candidate"):
-                action = ("dismiss", i)
-
-        if action:
-            act, idx = action
-            cand = possible_candidates[idx]
-            if act == "confirm":
-                if not (
-                    _is_report_unknown_counterparty(cand["name"])
-                    or _is_report_special_counterparty_bucket(cand["name"])
-                ):
-                    confirmed_rps.append({
-                        "name": cand["name"],
-                        "relationship": "Analyst-confirmed - review required",
-                        "confidence": str(cand.get("confidence", "") or "").upper(),
-                    })
-                    dismissed.discard(cand["name"].upper())
-            else:
-                dismissed.add(cand["name"].upper())
-            _save(confirmed_rps, dismissed)
-            changed = True
-            st.rerun()
+            if action:
+                act, idx = action
+                cand = possible_candidates[idx]
+                candidate_names = {
+                    str(cand.get("name") or "").strip().upper(),
+                    str(cand.get("original_name") or "").strip().upper(),
+                }
+                candidate_names.discard("")
+                if act == "confirm":
+                    if not (
+                        _is_report_unknown_counterparty(cand["name"])
+                        or _is_report_special_counterparty_bucket(cand["name"])
+                    ):
+                        confirmed_rps.append({
+                            "name": cand["name"],
+                            "relationship": "Analyst-confirmed - review required",
+                            "confidence": str(cand.get("confidence", "") or "").upper(),
+                        })
+                        for candidate_name in candidate_names:
+                            dismissed.discard(candidate_name)
+                else:
+                    dismissed.update(candidate_names)
+                _save(confirmed_rps, dismissed)
+                changed = True
+                st.rerun()
 
     if changed:
         st.success("✅ Related party list updated — regenerate your reports to apply changes.")

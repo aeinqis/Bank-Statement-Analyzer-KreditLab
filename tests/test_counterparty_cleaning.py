@@ -2,6 +2,7 @@ import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
 from app import (
+    _align_related_party_candidates_to_counterparty_rows,
     build_own_related_party_groups_for_report,
     _report_related_party_entries,
     _top_parties_from_counterparty_rows,
@@ -734,6 +735,36 @@ class CounterpartyCleaningTests(unittest.TestCase):
             [candidate["name"] for candidate in possible],
             ["MEDIUM PARTY", "LOW PARTY"],
         )
+
+    def test_related_party_manager_uses_counterparty_ledger_display_name(self):
+        candidates = [
+            {
+                "name": "MARIANA BINTI AHMAT",
+                "confidence": "MEDIUM",
+                "total_cr": 0.0,
+                "total_dr": 8760.0,
+                "signals": ["personal_keyword_sweep"],
+            }
+        ]
+        counterparty_rows = [
+            {
+                "counterparty_name": "MARIANA AHMAT",
+                "total_credits": 0.0,
+                "total_debits": 8760.0,
+                "transaction_count": 7,
+                "transactions": [
+                    {
+                        "description": "TR TO MARIANA BINTI AHMAT DIRECTOR FEE",
+                        "counterparty_name_raw": "MARIANA BINTI AHMAT",
+                    }
+                ],
+            }
+        ]
+
+        aligned = _align_related_party_candidates_to_counterparty_rows(candidates, counterparty_rows)
+
+        self.assertEqual(aligned[0]["name"], "MARIANA AHMAT")
+        self.assertEqual(aligned[0]["original_name"], "MARIANA BINTI AHMAT")
 
     def test_own_related_groups_use_matching_counterparty_ledger_transactions(self):
         own_related = {
