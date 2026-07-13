@@ -4206,10 +4206,11 @@ def build_own_related_party_groups_for_report(
 
             badge_type = group.get("badge_type")
             party_type = "OWN" if badge_type == "OP" else "RELATED"
-            display_name = (
+            ledger_display_name = (
                 str(matches[0].get("counterparty_name") or matches[0].get("counterparty") or party_name).strip()
                 or party_name
             )
+            display_name = ledger_display_name if badge_type == "OP" else party_name
             transactions = []
             credits = debits = 0.0
             credit_count = debit_count = 0
@@ -4534,17 +4535,32 @@ def _counterparty_row_name_sources(cp: dict) -> List[str]:
     return [str(source) for source in sources if source]
 
 
+def _report_party_identity_names_match(left, right) -> bool:
+    left_display = _report_party_display_name(left)
+    right_display = _report_party_display_name(right)
+    if not left_display or not right_display:
+        return False
+    if left_display.upper() == right_display.upper():
+        return True
+
+    left_canonical = _canonical_report_counterparty_display_name(left_display)
+    right_canonical = _canonical_report_counterparty_display_name(right_display)
+    if left_canonical.upper() == right_canonical.upper():
+        return True
+
+    left_tokens = _report_party_alias_core_tokens(left_canonical)
+    right_tokens = _report_party_alias_core_tokens(right_canonical)
+    if len(left_tokens) != len(right_tokens) or not left_tokens:
+        return False
+    return all(
+        _report_token_compatible(left_token, right_token)
+        for left_token, right_token in zip(left_tokens, right_tokens)
+    )
+
+
 def _counterparty_row_matches_report_party_name(cp: dict, party_name: str) -> bool:
-    party_display = _report_party_display_name(party_name)
-    party_canonical = _canonical_report_counterparty_display_name(party_display)
     for source in _counterparty_row_name_sources(cp):
-        source_display = _report_party_display_name(source)
-        source_canonical = _canonical_report_counterparty_display_name(source_display)
-        if (
-            _report_party_names_equivalent(source_display, party_display)
-            or _report_party_names_equivalent(source_canonical, party_canonical)
-            or _report_candidate_contains_party_tokens(source_display, party_display)
-        ):
+        if _report_party_identity_names_match(source, party_name):
             return True
     return False
 

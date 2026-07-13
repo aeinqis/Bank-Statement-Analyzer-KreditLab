@@ -796,7 +796,8 @@ class CounterpartyCleaningTests(unittest.TestCase):
         ]
         cp_rows = [
             {
-                "counterparty_name": "ALPHA TRADING",
+                "counterparty_name": "MUHAFIZ TECHNOLOGY",
+                "raw_names": ["MUHAFIZ TECHNOLOGY SHAHARUDDIN B SAMSI"],
                 "total_credits": 0.0,
                 "total_debits": 1_000_000.0,
                 "credit_count": 0,
