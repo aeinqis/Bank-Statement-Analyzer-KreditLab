@@ -8,6 +8,7 @@ from app import (
     build_report_counterparty_ledger_rows,
     filter_report_related_parties,
     get_report_counterparty_rows_from_data,
+    partition_related_party_candidates_for_manager,
     prepare_top_parties_for_report,
 )
 from kredit_lab_classify_track2 import _build_own_related_transactions_list_track2
@@ -718,6 +719,20 @@ class CounterpartyCleaningTests(unittest.TestCase):
                 {"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"},
             ]),
             [{"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"}],
+        )
+
+    def test_related_party_manager_splits_high_from_possible_candidates(self):
+        known, possible = partition_related_party_candidates_for_manager([
+            {"name": "HIGH PARTY", "confidence": "HIGH"},
+            {"name": "MEDIUM PARTY", "confidence": "MEDIUM"},
+            {"name": "LOW PARTY", "status": "LOW"},
+            {"name": "UNKNOWN STATUS", "confidence": "REVIEW"},
+        ])
+
+        self.assertEqual([candidate["name"] for candidate in known], ["HIGH PARTY"])
+        self.assertEqual(
+            [candidate["name"] for candidate in possible],
+            ["MEDIUM PARTY", "LOW PARTY"],
         )
 
     def test_own_related_groups_use_matching_counterparty_ledger_transactions(self):

@@ -10072,6 +10072,26 @@ def detect_related_party_candidates(
         ),
     )[:40]
 
+
+def partition_related_party_candidates_for_manager(candidates: list) -> tuple[list, list]:
+    """Split RP candidates for the Streamlit manager.
+
+    HIGH confidence is treated as known. MEDIUM/LOW remain possible until the
+    analyst confirms them.
+    """
+    known = []
+    possible = []
+    for candidate in candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        confidence = str(candidate.get("confidence") or candidate.get("status") or "").upper()
+        if confidence == "HIGH":
+            known.append(candidate)
+        elif confidence in {"MEDIUM", "LOW"}:
+            possible.append(candidate)
+    return known, possible
+
+
 def render_related_party_manager(
     cp_ledger: dict = None,
     shared_report_data: dict = None,
@@ -10089,61 +10109,109 @@ def render_related_party_manager(
 
     changed = False
 
-    # ── Working copies ──
-    confirmed_rps: list = list(st.session_state.get("related_parties_override", []) or [])
-    confirmed_rps = [
-        rp for rp in confirmed_rps
-        if not _is_report_unknown_counterparty(rp.get("name") if isinstance(rp, dict) else rp)
-        and not _is_report_special_counterparty_bucket(rp.get("name") if isinstance(rp, dict) else rp)
-    ]
-    dismissed: set = set(st.session_state.get("related_party_candidates_dismissed", set()))
-
-    confirmed_names = {
-        (rp.get("name") if isinstance(rp, dict) else str(rp)).strip().upper()
-        for rp in confirmed_rps
-        if rp
-    }
-
     def _save(new_confirmed, new_dismissed):
         st.session_state.related_parties_override = new_confirmed
         st.session_state.related_party_candidates_dismissed = new_dismissed
 
-    # ─────────────────────────────────────────────────────────────────────
-    # SECTION 1 — Add new related party
-    # ─────────────────────────────────────────────────────────────────────
-    with st.expander("➕ Add Related Party Manually", expanded=False):
-        a1, a2, a3 = st.columns([3, 3, 1])
-        new_name = a1.text_input("Party Name", key="_rp_new_name")
-        new_rel = a2.text_input("Relationship (e.g. Director, Spouse)", key="_rp_new_rel")
-        a3.write("")
-        a3.write("")
-        if a3.button("Add", key="_rp_add_btn", use_container_width=True):
-            clean = new_name.strip()
-            if _is_report_unknown_counterparty(clean) or _is_report_special_counterparty_bucket(clean):
-                st.warning("Special buckets and unknown/parser labels cannot be added as related parties.")
-            elif clean and clean.upper() not in confirmed_names:
-                confirmed_rps.append({"name": clean, "relationship": new_rel.strip()})
-                _save(confirmed_rps, dismissed)
-                changed = True
-                st.rerun()
+    def _rp_name(rp) -> str:
+        if isinstance(rp, dict):
+            return str(rp.get("name") or rp.get("party_name") or "").strip()
+        return str(rp or "").strip()
+
+    def _rp_key(rp) -> str:
+        return _rp_name(rp).upper()
+
+    def _rp_relationship(rp) -> str:
+        if isinstance(rp, dict):
+            return str(rp.get("relationship") or "").strip()
+        return ""
+
+    def _rp_status(rp) -> str:
+        if isinstance(rp, dict):
+            status = str(rp.get("confidence") or rp.get("status") or "").strip().upper()
+            if status in {"HIGH", "MEDIUM", "LOW"}:
+                return status
+            relationship = str(rp.get("relationship") or "").upper()
+            if "ANALYST-CONFIRMED" in relationship:
+                return "CONFIRMED"
+        return "HIGH"
+
+    def _merge_related_party_entries(entries: list) -> list:
+        merged = []
+        seen = set()
+        for rp in entries or []:
+            name = _rp_name(rp)
+            if (
+                not name
+                or _is_report_unknown_counterparty(name)
+                or _is_report_special_counterparty_bucket(name)
+            ):
+                continue
+            key = name.upper()
+            if key in seen:
+                continue
+            item = dict(rp) if isinstance(rp, dict) else {"name": name, "relationship": ""}
+            item["name"] = name
+            merged.append(item)
+            seen.add(key)
+        return merged
+
+    confirmed_rps = _merge_related_party_entries(
+        list(st.session_state.get("related_parties_override", []) or [])
+    )
+    report_known_rps = _merge_related_party_entries(
+        (shared_report_data or {}).get("report_info", {}).get("related_parties", [])
+        if isinstance(shared_report_data, dict)
+        else []
+    )
+    dismissed: set = set(st.session_state.get("related_party_candidates_dismissed", set()))
+    known_rps = _merge_related_party_entries(report_known_rps + confirmed_rps)
+    confirmed_names = {_rp_key(rp) for rp in known_rps if _rp_key(rp)}
+
+    all_candidates = detect_related_party_candidates(
+        cp_ledger,
+        confirmed_names,
+        dismissed,
+        shared_report_data,
+    )
+    auto_known_candidates, possible_candidates = partition_related_party_candidates_for_manager(all_candidates)
+    auto_known_to_add = [
+        {
+            "name": cand["name"],
+            "relationship": "High confidence",
+            "confidence": "HIGH",
+        }
+        for cand in auto_known_candidates
+        if _rp_key(cand) and _rp_key(cand) not in confirmed_names
+    ]
+    if auto_known_to_add:
+        confirmed_rps = _merge_related_party_entries(confirmed_rps + auto_known_to_add)
+        _save(confirmed_rps, dismissed)
+        changed = True
+        st.rerun()
+
+    known_rps = _merge_related_party_entries(known_rps + auto_known_to_add)
+    confirmed_names = {_rp_key(rp) for rp in known_rps if _rp_key(rp)}
 
     # ─────────────────────────────────────────────────────────────────────
-    # SECTION 2 — Confirmed Related Parties
+    # SECTION 1 — Known Related Parties
     # ─────────────────────────────────────────────────────────────────────
-    st.markdown("### ✅ Confirmed Related Parties")
+    st.markdown("### Known Related Parties")
 
-    if not confirmed_rps:
-        st.info("No confirmed related parties yet. Add one above or promote from candidates below.")
+    if not known_rps:
+        st.info("No known related parties detected yet.")
     else:
-        h = st.columns([3, 2, 2, 2, 1])
-        for label, col in zip(["Party Name", "Relationship", "Credits (RM)", "Debits (RM)", ""], h):
+        h = st.columns([3, 1.4, 2, 2, 2, 1])
+        for label, col in zip(["Party Name", "Status", "Relationship", "Credits (RM)", "Debits (RM)", ""], h):
             col.markdown(f"**{label}**")
         st.divider()
 
         to_remove = None
-        for i, rp in enumerate(confirmed_rps):
-            name = (rp.get("name") if isinstance(rp, dict) else str(rp)).strip()
-            rel  = (rp.get("relationship", "") if isinstance(rp, dict) else "").strip() or "—"
+        removable_keys = {_rp_key(rp) for rp in confirmed_rps if _rp_key(rp)}
+        for i, rp in enumerate(known_rps):
+            name = _rp_name(rp)
+            rel = _rp_relationship(rp) or "—"
+            status = _rp_status(rp)
 
             # look up financials from CP ledger
             cr_amt = dr_amt = 0.0
@@ -10153,37 +10221,37 @@ def render_related_party_manager(
                     dr_amt = safe_float(cp.get("total_debits", 0))
                     break
 
-            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
+            c1, c2, c3, c4, c5, c6 = st.columns([3, 1.4, 2, 2, 2, 1])
             c1.write(f"**{name}**")
-            c2.write(rel)
-            c3.write(f"RM {cr_amt:,.2f}" if cr_amt else "—")
-            c4.write(f"RM {dr_amt:,.2f}" if dr_amt else "—")
-            if c5.button("✕ Remove", key=f"_rp_rm_{i}", help="Remove from confirmed list"):
-                to_remove = i
+            c2.write(status)
+            c3.write(rel)
+            c4.write(f"RM {cr_amt:,.2f}" if cr_amt else "—")
+            c5.write(f"RM {dr_amt:,.2f}" if dr_amt else "—")
+            if _rp_key(rp) in removable_keys:
+                if c6.button("✕", key=f"_rp_rm_{i}", help="Remove from known related parties"):
+                    to_remove = _rp_key(rp)
+            else:
+                c6.write("")
 
         if to_remove is not None:
-            confirmed_rps.pop(to_remove)
+            confirmed_rps = [rp for rp in confirmed_rps if _rp_key(rp) != to_remove]
             _save(confirmed_rps, dismissed)
             changed = True
             st.rerun()
 
     # ─────────────────────────────────────────────────────────────────────
-    # SECTION 3 — Candidate / Possible Related Parties
+    # SECTION 2 — Candidate / Possible Related Parties
     # ─────────────────────────────────────────────────────────────────────
-    st.markdown("### 🔍 Possible Related Parties")
+    st.markdown("### Possible Related Parties")
     st.caption(
-        "Detected from transaction patterns. Click **✓ Confirm** to add to the confirmed list, "
-        "or **✕ Dismiss** to hide permanently."
-    )
-
-    candidates = detect_related_party_candidates(
-        cp_ledger, confirmed_names, dismissed, shared_report_data
+        "Medium and low confidence candidates. Click **✓ Confirm** to add to the known list, "
+        "or **✕ Dismiss** to hide the candidate."
     )
 
     _CONF_ICON = {"HIGH": "🔴 HIGH", "MEDIUM": "🟡 MEDIUM", "LOW": "⚪ LOW"}
 
-    if not candidates:
-        st.info("No additional candidates — all significant counterparties are confirmed or dismissed.")
+    if not possible_candidates:
+        st.info("No medium or low confidence candidates to review.")
     else:
         h = st.columns([3, 2, 2, 2, 1, 1])
         for label, col in zip(
@@ -10193,9 +10261,9 @@ def render_related_party_manager(
         st.divider()
 
         action = None  # ("confirm"|"dismiss", index)
-        for i, cand in enumerate(candidates):
+        for i, cand in enumerate(possible_candidates):
             name = cand["name"]
-            conf = cand.get("confidence", "LOW")
+            conf = str(cand.get("confidence", "LOW") or "LOW").upper()
             evidence = cand.get("evidence", "")
             cr_amt = cand.get("total_cr", 0)
             dr_amt = cand.get("total_dr", 0)
@@ -10208,14 +10276,14 @@ def render_related_party_manager(
             c3.write(f"RM {cr_amt:,.2f}" if cr_amt else "—")
             c4.write(f"RM {dr_amt:,.2f}" if dr_amt else "—")
 
-            if c5.button("✓", key=f"_cand_confirm_{i}", help="Add to confirmed related parties"):
+            if c5.button("✓", key=f"_cand_confirm_{i}", help="Add to known related parties"):
                 action = ("confirm", i)
             if c6.button("✕", key=f"_cand_dismiss_{i}", help="Dismiss this candidate"):
                 action = ("dismiss", i)
 
         if action:
             act, idx = action
-            cand = candidates[idx]
+            cand = possible_candidates[idx]
             if act == "confirm":
                 if not (
                     _is_report_unknown_counterparty(cand["name"])
@@ -10224,6 +10292,7 @@ def render_related_party_manager(
                     confirmed_rps.append({
                         "name": cand["name"],
                         "relationship": "Analyst-confirmed - review required",
+                        "confidence": str(cand.get("confidence", "") or "").upper(),
                     })
                     dismissed.discard(cand["name"].upper())
             else:
@@ -10231,24 +10300,6 @@ def render_related_party_manager(
             _save(confirmed_rps, dismissed)
             changed = True
             st.rerun()
-
-    # ─────────────────────────────────────────────────────────────────────
-    # SECTION 4 — Restore dismissed candidates
-    # ─────────────────────────────────────────────────────────────────────
-    if dismissed:
-        with st.expander(f"🚫 Dismissed Candidates ({len(dismissed)})", expanded=False):
-            st.caption("Click ↩ to restore a dismissed candidate to the possible list.")
-            to_restore = None
-            for dname in sorted(dismissed):
-                d1, d2 = st.columns([5, 1])
-                d1.write(dname)
-                if d2.button("↩ Restore", key=f"_restore_{dname}", use_container_width=True):
-                    to_restore = dname
-            if to_restore:
-                dismissed.discard(to_restore)
-                _save(confirmed_rps, dismissed)
-                changed = True
-                st.rerun()
 
     if changed:
         st.success("✅ Related party list updated — regenerate your reports to apply changes.")
