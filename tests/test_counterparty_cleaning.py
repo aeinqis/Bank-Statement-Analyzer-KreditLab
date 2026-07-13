@@ -771,6 +771,54 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(shah_group["debits"], 300.0)
         self.assertEqual(len(shah_group["transactions"]), 2)
 
+    def test_own_related_empty_related_placeholder_inherits_counterparty_ledger(self):
+        cp_rows = [
+            {
+                "counterparty_name": "DAYANG SITI RAUDZAH",
+                "total_credits": 50.0,
+                "total_debits": 125.0,
+                "credit_count": 1,
+                "debit_count": 2,
+                "transaction_count": 3,
+                "transactions": [
+                    {
+                        "date": "2025-09-01",
+                        "description": "IBG DAYANG SITI RAUDZAH REFUND",
+                        "amount": 50.0,
+                        "type": "CREDIT",
+                        "balance": 1050.0,
+                    },
+                    {
+                        "date": "2025-09-02",
+                        "description": "IBG DAYANG SITI RAUDZAH PAYMENT",
+                        "amount": 75.0,
+                        "type": "DEBIT",
+                        "balance": 975.0,
+                    },
+                    {
+                        "date": "2025-09-03",
+                        "description": "IBG DAYANG SITI RAUDZAH PAYMENT",
+                        "amount": 50.0,
+                        "type": "DEBIT",
+                        "balance": 925.0,
+                    },
+                ],
+            }
+        ]
+
+        groups = build_own_related_party_groups_for_report(
+            {"transactions": []},
+            related_parties=[{"name": "DAYANG SITI RAUDZAH", "relationship": "Affiliate"}],
+            counterparty_rows=cp_rows,
+        )
+
+        dayang_group = next(group for group in groups if group["party_name"] == "DAYANG SITI RAUDZAH")
+        self.assertEqual(dayang_group["credit_count"], 1)
+        self.assertEqual(dayang_group["debit_count"], 2)
+        self.assertEqual(dayang_group["credits"], 50.0)
+        self.assertEqual(dayang_group["debits"], 125.0)
+        self.assertEqual(len(dayang_group["transactions"]), 3)
+
     def test_reports_prefer_streamlit_counterparty_rows_over_raw_ledger(self):
         cp_ledger = {
             "counterparties": [

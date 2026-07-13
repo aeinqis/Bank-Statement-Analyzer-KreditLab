@@ -1763,6 +1763,13 @@ def generate_interactive_html(data):
         company_name=company_name,
         counterparty_rows=report_counterparty_rows,
     )
+    if rp_group_list:
+        rp_counts = {
+            'own_party_cr': sum(int(group.get('credit_count', 0) or 0) for group in rp_group_list if group.get('badge_type') == 'OP'),
+            'own_party_dr': sum(int(group.get('debit_count', 0) or 0) for group in rp_group_list if group.get('badge_type') == 'OP'),
+            'related_party_cr': sum(int(group.get('credit_count', 0) or 0) for group in rp_group_list if group.get('badge_type') == 'RP'),
+            'related_party_dr': sum(int(group.get('debit_count', 0) or 0) for group in rp_group_list if group.get('badge_type') == 'RP'),
+        }
     for idx, group in enumerate(rp_group_list):
         badge_cls = 'op-badge' if group['badge_type'] == 'OP' else 'rp-badge'
         detail_rows = ""
@@ -4171,6 +4178,18 @@ def build_own_related_party_groups_for_report(
         txn_copy["amount"] = amount
         group["transactions"].append(txn_copy)
 
+    if own_party_name:
+        groups.setdefault(
+            _group_key(own_party_name, "OP"),
+            _empty_group(own_party_name, "OP", "Own Party"),
+        )
+
+    for related_name, _relationship in related_entries:
+        groups.setdefault(
+            _group_key(related_name, "RP"),
+            _empty_group(related_name, "RP", "Related Party"),
+        )
+
     if counterparty_rows:
         def _replace_group_from_counterparty_rows(group: dict) -> None:
             party_name = str(group.get("party_name") or "").strip()
@@ -4225,18 +4244,6 @@ def build_own_related_party_groups_for_report(
 
         for group in groups.values():
             _replace_group_from_counterparty_rows(group)
-
-    if own_party_name:
-        groups.setdefault(
-            _group_key(own_party_name, "OP"),
-            _empty_group(own_party_name, "OP", "Own Party"),
-        )
-
-    for related_name, _relationship in related_entries:
-        groups.setdefault(
-            _group_key(related_name, "RP"),
-            _empty_group(related_name, "RP", "Related Party"),
-        )
 
     def _group_sort_key(group):
         if group["badge_type"] == "OP":
