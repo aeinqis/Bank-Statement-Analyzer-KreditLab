@@ -2078,11 +2078,11 @@ def generate_interactive_html(data):
         /* Header */
         .header {{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:2rem; margin-bottom:1.5rem; position:relative; overflow:hidden; box-shadow:var(--shadow-lg); }}
         .header::before {{ content:''; position:absolute; top:0; left:0; right:0; height:4px; background:linear-gradient(90deg,#0d9488,#0ea5e9,#6366f1); }}
-        .header-grid {{ display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1.5rem; }}
+        .header-grid {{ display:flex; flex-direction:column; align-items:stretch; gap:1.75rem; }}
         .company-info h1 {{ font-size:1.6rem; font-weight:700; margin-bottom:0.25rem; }}
         .company-info .period {{ color:var(--text-soft); font-size:0.88rem; }}
         .schema-badge {{ display:inline-block; padding:0.2rem 0.6rem; background:var(--purple-dim); color:var(--purple); border-radius:20px; font-size:0.72rem; font-weight:600; margin-left:0.75rem; vertical-align:middle; }}
-        .header-kpi {{ display:flex; gap:1.75rem; flex-wrap:wrap; }}
+        .header-kpi {{ display:flex; gap:1.75rem; flex-wrap:wrap; width:100%; justify-content:flex-start; }}
         .kpi {{ text-align:center; padding:0 1rem; border-left:2px solid var(--border); }}
         .kpi:first-child {{ border-left:none; }}
         .kpi .val {{ font-size:1.35rem; font-weight:700; font-family:'JetBrains Mono',monospace; }}
