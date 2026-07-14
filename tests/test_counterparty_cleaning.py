@@ -1,6 +1,7 @@
 import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
+from maybank import annotate_maybank_counterparties
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
     build_own_related_party_groups_for_report,
@@ -612,6 +613,47 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(rows[0]["counterparty_name_raw"], "TRANSFER FEE")
         self.assertEqual(rows[0]["counterparty_name_clean"], "TRANSFER FEE")
         self.assertEqual(rows[0]["party_name"], "TRANSFER FEE")
+
+    def test_maybank_rows_keep_counterparty_fields_for_ledger(self):
+        rows = [
+            {
+                "description": "PAYMENT FR A/C EPF DPE * 000000123456",
+                "credit": 1200.0,
+                "debit": 0.0,
+            },
+            {
+                "description": "PAYMENT FR A/C EPF DPE * 000000654321",
+                "credit": 800.0,
+                "debit": 0.0,
+            },
+        ]
+
+        annotate_maybank_counterparties(rows)
+
+        self.assertEqual(rows[0]["counterparty_name_raw"], "EPF DPE")
+        self.assertEqual(rows[0]["counterparty_name_clean"], "EPF DPE")
+        self.assertEqual(rows[1]["counterparty_name_clean"], "EPF DPE")
+        self.assertEqual(rows[0]["party_name"], "EPF DPE")
+
+    def test_track2_ledger_uses_maybank_parser_counterparty_fields(self):
+        rows = [
+            {
+                "date": "2026-01-01",
+                "description": "PAYMENT FR A/C EPF DPE * 000000123456",
+                "credit": 1200.0,
+                "debit": 0.0,
+                "balance": 1200.0,
+                "bank": "Maybank",
+            }
+        ]
+
+        annotate_maybank_counterparties(rows)
+        ledger = build_track2_counterparty_ledger(rows)
+
+        self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "EPF DPE")
+        self.assertEqual(ledger["counterparties"][0]["transaction_count"], 1)
+        self.assertEqual(ledger["extraction_stats"]["pattern_matched"], 1)
+        self.assertEqual(ledger["extraction_stats"]["raw_fallback"], 0)
 
     def test_own_related_list_groups_related_rows_by_confirmed_names(self):
         classified = [

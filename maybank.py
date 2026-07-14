@@ -10,7 +10,12 @@ from core_utils import (
     safe_float,
     signed_amount_from_record,
 )
-from party_utils import apply_party_aliasing, build_transactions_by_party, looks_like_suspicious_short_party
+from party_utils import (
+    apply_party_aliasing,
+    build_transactions_by_party,
+    deduplicate_counterparty_names,
+    looks_like_suspicious_short_party,
+)
 
 # -----------------------------
 # Regex patterns
@@ -277,6 +282,31 @@ def extract_maybank_party_name(description: str) -> str:
     if len(tokens) == 1:
         return tokens[0]
     return "UNKNOWN"
+
+
+def annotate_maybank_counterparties(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Attach Maybank counterparty aliases used by the shared ledger pipeline."""
+    raw_names = []
+    for row in rows or []:
+        raw = (
+            row.get("counterparty_name_raw")
+            or row.get("counterparty_name")
+            or row.get("party_name")
+            or extract_maybank_party_name(row.get("description", ""))
+            or "UNKNOWN"
+        )
+        raw = normalize_text(raw).upper() or "UNKNOWN"
+        row["counterparty_name_raw"] = raw
+        raw_names.append(raw)
+
+    clean_names = deduplicate_counterparty_names(raw_names)
+    for row, clean_name in zip(rows or [], clean_names):
+        clean_name = normalize_text(clean_name).upper() or "UNKNOWN"
+        row["counterparty_name_clean"] = clean_name
+        row["counterparty_name"] = clean_name
+        row["party_name"] = clean_name
+
+    return rows
 
 
 def _resolve_group_party_name(row: Any) -> str:
@@ -966,4 +996,4 @@ def parse_transactions_maybank(pdf_input: Any, source_filename: str = "") -> Lis
         seen.add(key)
         out.append(t)
 
-    return out
+    return annotate_maybank_counterparties(out)
