@@ -4,10 +4,12 @@ from cimb import annotate_cimb_counterparties, extract_cimb_party_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
     build_own_related_party_groups_for_report,
+    build_track2_counterparty_ledger,
     _report_related_party_entries,
     _top_parties_from_counterparty_rows,
     build_report_counterparty_ledger_rows,
     filter_report_related_parties,
+    generate_interactive_html,
     generate_excel_report,
     get_report_counterparty_rows_from_data,
     partition_related_party_candidates_for_manager,
@@ -703,6 +705,92 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual([p["party_name"] for p in party_view["payers"]], ["ALPHA CUSTOMER"])
         self.assertEqual([p["party_name"] for p in party_view["payees"]], ["SHAHARUDDIN SAMS"])
         self.assertTrue(party_view["payees"][0]["is_related_party"])
+
+    def test_html_counterparty_summary_cards_use_unknown_as_raw_fallback(self):
+        counterparty_rows = [
+            {
+                "counterparty_name": "ALPHA CUSTOMER",
+                "transaction_count": 2,
+                "credit_count": 2,
+                "debit_count": 0,
+                "total_credits": 2000.0,
+                "total_debits": 0.0,
+                "pattern_matched": 2,
+                "special_bucket": 0,
+                "raw_fallback": 0,
+                "transactions": [],
+            },
+            {
+                "counterparty_name": "UNKNOWN",
+                "transaction_count": 3,
+                "credit_count": 1,
+                "debit_count": 2,
+                "total_credits": 100.0,
+                "total_debits": 250.0,
+                "pattern_matched": 0,
+                "special_bucket": 3,
+                "raw_fallback": 0,
+                "transactions": [],
+            },
+            {
+                "counterparty_name": "BANK FEES",
+                "transaction_count": 1,
+                "credit_count": 0,
+                "debit_count": 1,
+                "total_credits": 0.0,
+                "total_debits": 10.0,
+                "pattern_matched": 0,
+                "special_bucket": 1,
+                "raw_fallback": 0,
+                "transactions": [],
+            },
+        ]
+
+        html = generate_interactive_html({
+            "report_info": {
+                "company_name": "ACME SDN BHD",
+                "schema_version": "6.3.5",
+            },
+            "accounts": [],
+            "monthly_analysis": [],
+            "consolidated": {},
+            "counterparty_ledger": {
+                "counterparties": counterparty_rows,
+                "total_counterparties": len(counterparty_rows),
+                "extraction_stats": {
+                    "pattern_matched": 2,
+                    "special_bucket": 4,
+                    "raw_fallback": 0,
+                },
+            },
+            "report_counterparty_rows": counterparty_rows,
+        })
+
+        self.assertIn('<div class="lbl">Total Counterparties</div>', html)
+        self.assertIn('<div class="summary-card"><div class="val">2</div><div class="lbl">Pattern matched</div></div>', html)
+        self.assertIn('<div class="summary-card"><div class="val">1</div><div class="lbl">Special bucket</div></div>', html)
+        self.assertIn('<div class="summary-card"><div class="val">3</div><div class="lbl">Raw fallback</div></div>', html)
+        self.assertNotIn("Original (pre-clean)", html)
+        self.assertNotIn("Merges Performed", html)
+        self.assertNotIn("Purpose Strips", html)
+        self.assertNotIn("Merged from banks", html)
+
+    def test_track2_ledger_counts_unknown_counterparty_as_raw_fallback(self):
+        ledger = build_track2_counterparty_ledger([
+            {
+                "date": "2026-01-01",
+                "description": "NO COUNTERPARTY FOUND",
+                "credit": 100.0,
+                "debit": 0.0,
+                "balance": 500.0,
+            }
+        ])
+
+        stats = ledger["extraction_stats"]
+        self.assertEqual(stats["raw_fallback"], 1)
+        self.assertEqual(stats["special_bucket"], 0)
+        self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "UNKNOWN")
+        self.assertEqual(ledger["counterparties"][0]["raw_fallback"], 1)
 
     def test_special_buckets_are_not_report_related_parties(self):
         self.assertEqual(

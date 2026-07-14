@@ -1306,6 +1306,7 @@ def generate_interactive_html(data):
 
     monthly_rows = ""
     chart_agg = OrderedDict()
+    has_account_col = any(m.get('account_number') for m in monthly)
 
     for mo, rows in monthly_by_month.items():
         agg = {}
@@ -1332,8 +1333,6 @@ def generate_interactive_html(data):
         agg['opening_balance'] = sum(r.get('opening_balance', 0) or 0 for r in rows)
         agg['closing_balance'] = sum(r.get('closing_balance', 0) or 0 for r in rows)
         chart_agg[mo] = agg
-
-        has_account_col = any(m.get('account_number') for m in monthly)
 
         if has_account_col and len(rows) > 1:
             for m in rows:
@@ -1843,17 +1842,10 @@ def generate_interactive_html(data):
         cleaning_status = cp_ledger.get('ledger_cleaning_status', '')
         cleaning_stats = cp_ledger.get('cleaning_stats', {}) or {}
         total_cp = cp_ledger.get('total_counterparties', 0)
-        merges = cleaning_stats.get('merges_performed', 0)
-        purpose_strips = cleaning_stats.get('purpose_strips', 0)
-        original_cp = cleaning_stats.get('original_counterparties', 0)
 
         ext_stats = cp_ledger.get('extraction_stats') if isinstance(cp_ledger.get('extraction_stats'), dict) else {}
-        merged_banks = ext_stats.get('merged_from_banks') if isinstance(ext_stats.get('merged_from_banks'), list) else None
-        ext_pattern = ext_stats.get('pattern_matched')
-        ext_bucket = ext_stats.get('special_bucket')
-        ext_raw = ext_stats.get('raw_fallback')
-        ext_total = ext_stats.get('total_transactions')
-        has_ext_stats = bool(ext_stats)
+        ext_pattern = ext_stats.get('pattern_matched', 0)
+        ext_bucket = ext_stats.get('special_bucket', 0)
 
         status_color = {'CLEANED': 'green', 'VALIDATION_FAILED': 'amber', 'SKIPPED': 'amber'}.get(cleaning_status, 'text-muted')
         status_badge = f'<span class="badge" style="background:var(--{status_color}-dim);color:var(--{status_color})">{cleaning_status or "N/A"}</span>' if cleaning_status else ''
@@ -1873,10 +1865,12 @@ def generate_interactive_html(data):
                 company_name=company_name,
             )
         report_counterparty_rows = counterparties_sorted
-        if raw_counterparties and len(counterparties_sorted) != len(raw_counterparties):
-            original_cp = original_cp or len(raw_counterparties)
-            merges = merges or (len(raw_counterparties) - len(counterparties_sorted))
         total_cp = len(counterparties_sorted)
+        row_pattern = _counterparty_row_stat_total(counterparties_sorted, 'pattern_matched')
+        row_bucket = _counterparty_row_stat_total(counterparties_sorted, 'special_bucket', exclude_unknown=True)
+        ext_pattern = row_pattern if _counterparty_rows_have_stat(counterparties_sorted, 'pattern_matched') else ext_pattern
+        ext_bucket = row_bucket if _counterparty_rows_have_stat(counterparties_sorted, 'special_bucket') else ext_bucket
+        ext_raw = _counterparty_unknown_transaction_count(counterparties_sorted)
 
         cp_rows_html = ''
         for idx, cp in enumerate(counterparties_sorted):
@@ -1927,13 +1921,9 @@ def generate_interactive_html(data):
                     {val_fail_warning}
                     <div class="summary-grid">
                         <div class="summary-card"><div class="val">{total_cp:,}</div><div class="lbl">Total Counterparties</div></div>
-                        {('<div class="summary-card"><div class="val">' + f'{original_cp:,}' + '</div><div class="lbl">Original (pre-clean)</div></div>') if original_cp else ''}
-                        {('<div class="summary-card"><div class="val">' + f'{merges:,}' + '</div><div class="lbl">Merges Performed</div></div>') if merges else ''}
-                        {('<div class="summary-card"><div class="val">' + f'{purpose_strips:,}' + '</div><div class="lbl">Purpose Strips</div></div>') if purpose_strips else ''}
-                        {('<div class="summary-card"><div class="val" style="font-size:1.05rem">' + ', '.join(merged_banks) + '</div><div class="lbl">Merged from banks</div></div>') if merged_banks else ''}
-                        {('<div class="summary-card"><div class="val">' + f'{int(ext_pattern or 0):,}' + '</div><div class="lbl">Pattern matched</div></div>') if has_ext_stats else ''}
-                        {('<div class="summary-card"><div class="val">' + f'{int(ext_bucket or 0):,}' + '</div><div class="lbl">Special bucket</div></div>') if has_ext_stats else ''}
-                        {('<div class="summary-card"><div class="val">' + f'{int(ext_raw or 0):,}' + '</div><div class="lbl">Raw fallback</div></div>') if has_ext_stats else ''}
+                        <div class="summary-card"><div class="val">{int(ext_pattern or 0):,}</div><div class="lbl">Pattern matched</div></div>
+                        <div class="summary-card"><div class="val">{int(ext_bucket or 0):,}</div><div class="lbl">Special bucket</div></div>
+                        <div class="summary-card"><div class="val">{int(ext_raw or 0):,}</div><div class="lbl">Raw fallback</div></div>
                     </div>
                     <div style="margin:0.5rem 0">
                         <input type="text" id="cp-search" placeholder="Filter counterparties..." onkeyup="filterCp()" style="width:100%;padding:0.5rem;border:1px solid var(--border);border-radius:4px;font-size:0.9rem">
@@ -3686,6 +3676,39 @@ def _is_report_special_counterparty_bucket(name) -> bool:
 def _is_report_unknown_counterparty(name) -> bool:
     upper = _report_counterparty_label(name)
     return upper in {"", "UNKNOWN", "UNKNOWN PARTY", "UNIDENTIFIED", "UNCATEGORIZED"}
+
+
+def _counterparty_rows_have_stat(counterparty_rows, stat_key: str) -> bool:
+    return any(isinstance(row, dict) and stat_key in row for row in counterparty_rows or [])
+
+
+def _counterparty_row_stat_total(counterparty_rows, stat_key: str, exclude_unknown: bool = False) -> int:
+    total = 0
+    for row in counterparty_rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("counterparty_name") or row.get("counterparty") or row.get("party")
+        if exclude_unknown and _is_report_unknown_counterparty(name):
+            continue
+        total += int(safe_float(row.get(stat_key, 0)))
+    return total
+
+
+def _counterparty_unknown_transaction_count(counterparty_rows) -> int:
+    total = 0
+    for row in counterparty_rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("counterparty_name") or row.get("counterparty") or row.get("party")
+        if not _is_report_unknown_counterparty(name):
+            continue
+        count = int(safe_float(row.get("transaction_count", 0)))
+        if not count:
+            count = int(safe_float(row.get("credit_count", 0))) + int(safe_float(row.get("debit_count", 0)))
+        if not count:
+            count = len(row.get("transactions", []) or [])
+        total += count
+    return total
 
 
 def _ledger_monthly_breakdown(transactions: List[dict], side: str) -> List[dict]:
@@ -8761,6 +8784,8 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
         return _is_report_special_counterparty_bucket(name)
 
     def _method_for_name(name: str, matched_parser_pattern: bool) -> str:
+        if _is_report_unknown_counterparty(name):
+            return "raw_fallback"
         if _is_special_bucket(name):
             return "special_bucket"
         if matched_parser_pattern:
