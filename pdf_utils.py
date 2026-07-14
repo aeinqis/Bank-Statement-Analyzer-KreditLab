@@ -24,6 +24,7 @@ _COMPANY_BAD_WORDS_RE = re.compile(
     r"\b(STATEMENT|ACCOUNT\s+STATEMENT|CURRENT\s+ACCOUNT|PAGE\b|BALANCE\b|SUMMARY\b|TRANSACTION|ENQUIRIES|BRANCH|PIDM|DATE\b|MUKA\b|HALAMAN\b)\b",
     re.IGNORECASE,
 )
+_COMPANY_SDN_BHD_TAIL_RE = re.compile(r"\bSDN\.?\s*BHD\.?\b.*$", re.IGNORECASE)
 
 
 def _clean_candidate_name(s: str) -> str:
@@ -34,6 +35,7 @@ def _clean_candidate_name(s: str) -> str:
         s,
         flags=re.IGNORECASE,
     )[0].strip()
+    s = _COMPANY_SDN_BHD_TAIL_RE.sub("SDN BHD", s).strip()
     # remove weird leading bullets/colons
     s = s.lstrip(":;-• ").strip()
     s = re.sub(r"\s+", " ", s)

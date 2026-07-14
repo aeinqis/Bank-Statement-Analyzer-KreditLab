@@ -44,7 +44,7 @@ COUNTERPARTY_DESCRIPTOR_TOKENS = {
     "RUJUKAN", "SIGN", "SURAT", "PGM", "PROGRAM", "MPC", "MSSB", "TRADE",
     "HOSTEL", "MELAKA", "MELAKA.", "TM",
     "SHARE", "CAPITAL", "CAP", "SHARECAP", "SHARECAPITAL", "BACK",
-    "AND", "BOULEV", "BOULEVARD", "TRIENEKEN", "MTSB",
+    "BOULEV", "BOULEVARD", "TRIENEKEN", "MTSB",
 }
 COUNTERPARTY_MONTH_TOKENS = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -339,6 +339,8 @@ def _strip_own_party_tokens(name: str, own_party: str) -> str:
     remainder = " ".join(name_up[:start] + name_up[end:]).strip()
     if len(remainder) < 3 or should_drop_as_counterparty(remainder):
         return name
+    if _remainder_is_truncated_own_party(remainder, own_core):
+        return name
 
     return remainder
 
@@ -353,6 +355,17 @@ def _description_implies_own_party(desc: str, own_party: str) -> bool:
         return False
     matched = sum(1 for token in own_core if token in desc_tokens)
     return matched >= 2 and matched / len(own_core) >= 0.5
+
+
+def _remainder_is_truncated_own_party(remainder: str, own_core: List[str]) -> bool:
+    """Avoid stripping a holder name down to a leftover singular/plural shard."""
+    remainder_tokens = _OWN_PARTY_DESC_TOKEN_RE.findall(normalize_text(remainder).upper())
+    if not remainder_tokens or not own_core:
+        return False
+    return all(
+        any(_own_party_token_matches(token, own_token) for own_token in own_core)
+        for token in remainder_tokens
+    )
 
 
 def normalize_company_suffix(name: Any) -> str:

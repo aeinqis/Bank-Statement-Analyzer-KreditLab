@@ -1,7 +1,8 @@
 import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
-from maybank import annotate_maybank_counterparties
+from maybank import annotate_maybank_counterparties, extract_maybank_party_name
+from pdf_utils import _clean_candidate_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
     build_own_related_party_groups_for_report,
@@ -78,6 +79,16 @@ class CounterpartyCleaningTests(unittest.TestCase):
     def test_truncates_company_name_after_sd_or_sdn_marker(self):
         self.assertEqual(clean_counterparty_name("ALPHA SD TOKEN PAYMENT"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BHD RENTAL JUL"), "ALPHA SDN BHD")
+
+    def test_statement_company_name_truncates_after_sdn_bhd(self):
+        self.assertEqual(
+            _clean_candidate_name("DMC TRAVEL AND TOURS SDN. BHD. 結單日期 : 31/08/25"),
+            "DMC TRAVEL AND TOURS SDN BHD",
+        )
+        self.assertEqual(
+            _clean_candidate_name("DMC TRAVEL AND TOURS SDN BHD 結單日期: 31/08/25"),
+            "DMC TRAVEL AND TOURS SDN BHD",
+        )
 
     def test_ibg_credit_counterparty_keeps_company_name(self):
         desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"
@@ -634,6 +645,39 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(rows[0]["counterparty_name_clean"], "EPF DPE")
         self.assertEqual(rows[1]["counterparty_name_clean"], "EPF DPE")
         self.assertEqual(rows[0]["party_name"], "EPF DPE")
+
+    def test_maybank_ac_counterparty_keeps_dmc_travel_name(self):
+        self.assertEqual(
+            extract_maybank_party_name("TRANSFER FR A/C DMC TRAVEL AND TOUR* Buraq Hotel mekah"),
+            "DMC TRAVEL AND TOUR",
+        )
+
+        rows = [
+            {
+                "date": "2025-08-22",
+                "description": "TRANSFER FR A/C DMC TRAVEL AND TOUR* Buraq Hotel mekah",
+                "credit": 0.0,
+                "debit": 3513.60,
+                "balance": 5799.39,
+                "bank": "Maybank",
+                "company_name": "DMC TRAVEL AND TOURS SDN BHD",
+            },
+            {
+                "date": "2025-12-27",
+                "description": "TRANSFER TO A/C DMC TRAVEL AND TOUR* Visa MBB CT",
+                "credit": 650.0,
+                "debit": 0.0,
+                "balance": 1388.43,
+                "bank": "Maybank",
+                "company_name": "DMC TRAVEL AND TOURS SDN BHD",
+            },
+        ]
+
+        annotate_maybank_counterparties(rows)
+        ledger = build_track2_counterparty_ledger(rows)
+
+        self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "DMC TRAVEL AND TOUR")
+        self.assertEqual(ledger["counterparties"][0]["transaction_count"], 2)
 
     def test_track2_ledger_uses_maybank_parser_counterparty_fields(self):
         rows = [
