@@ -2,7 +2,7 @@ import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
 from maybank import annotate_maybank_counterparties, extract_maybank_party_name
-from pdf_utils import _clean_candidate_name
+from pdf_utils import _clean_candidate_name, extract_company_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
     build_own_related_party_groups_for_report,
@@ -89,6 +89,36 @@ class CounterpartyCleaningTests(unittest.TestCase):
             _clean_candidate_name("DMC TRAVEL AND TOURS SDN BHD 結單日期: 31/08/25"),
             "DMC TRAVEL AND TOURS SDN BHD",
         )
+
+    def test_maybank_header_extracts_suffixless_agency_name(self):
+        class FakePage:
+            def __init__(self, text):
+                self._text = text
+
+            def extract_text(self):
+                return self._text
+
+        class FakePdf:
+            pages = [
+                FakePage(
+                    "\n".join(
+                        [
+                            "Maybank Islamic Berhad (787435-M)",
+                            "IBS TELUK INTAN",
+                            "MUKA/ PAGE : 1",
+                            "TARIKH PENYATA",
+                            "LSR AGENCY \u7d50\u55ae\u65e5\u671f : 31/03/25",
+                            "2121 KM 2 1/2 OPP KASTAM ,JALAN STATEMENT DATE",
+                            "NOMBOR AKAUN",
+                            "558060518128",
+                            "01/03 TRANSFER TO A/C 3,000.00+ 39,752.28",
+                            "GK GROUP 88 ENTERPR*",
+                        ]
+                    )
+                )
+            ]
+
+        self.assertEqual(extract_company_name(FakePdf(), max_pages=2), "LSR AGENCY")
 
     def test_ibg_credit_counterparty_keeps_company_name(self):
         desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"

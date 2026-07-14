@@ -25,6 +25,8 @@ _COMPANY_BAD_WORDS_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPANY_SDN_BHD_TAIL_RE = re.compile(r"\bSDN\.?\s*BHD\.?\b.*$", re.IGNORECASE)
+_STATEMENT_DATE_TAIL_RE = re.compile(r"\s*(?:\u7d50\u55ae\u65e5\u671f|\u7ed3\u5355\u65e5\u671f)\s*[:：]?.*$")
+_MAYBANK_STATEMENT_DATE_LABEL_RE = re.compile(r"^\s*TARIKH\s+PENYATA\s*$", re.IGNORECASE)
 
 
 def _clean_candidate_name(s: str) -> str:
@@ -36,10 +38,28 @@ def _clean_candidate_name(s: str) -> str:
         flags=re.IGNORECASE,
     )[0].strip()
     s = _COMPANY_SDN_BHD_TAIL_RE.sub("SDN BHD", s).strip()
+    s = _STATEMENT_DATE_TAIL_RE.sub("", s).strip()
     # remove weird leading bullets/colons
     s = s.lstrip(":;-• ").strip()
     s = re.sub(r"\s+", " ", s)
     return s
+
+
+def _looks_like_maybank_header_name(s: str) -> bool:
+    cand = _clean_candidate_name(s)
+    if not cand:
+        return False
+    if _looks_like_account_number_line(cand):
+        return False
+    if _COMPANY_BAD_WORDS_RE.search(cand):
+        return False
+    if re.search(r"https?://|www\.", cand, flags=re.IGNORECASE):
+        return False
+    if re.search(r"\d{2}/\d{2}(?:/\d{2,4})?", cand):
+        return False
+    if not re.search(r"[A-Za-z]", cand):
+        return False
+    return len(cand) >= 3
 
 
 def _looks_like_account_number_line(s: str) -> bool:
@@ -126,6 +146,14 @@ def extract_company_name(pdf, max_pages: int = 2) -> Optional[str]:
     lines: List[str] = []
     for t in texts:
         lines.extend([ln.strip() for ln in t.splitlines() if ln.strip()])
+
+    # Maybank Islamic multilingual statements can emit the holder name on the
+    # line after TARIKH PENYATA, with the Chinese statement-date label appended.
+    for i, ln in enumerate(lines[:40]):
+        if _MAYBANK_STATEMENT_DATE_LABEL_RE.match(ln) and i + 1 < len(lines):
+            cand = _clean_candidate_name(lines[i + 1])
+            if _looks_like_maybank_header_name(cand):
+                return cand
 
     # 2) context-aware: line before account label often contains company name
     for i, ln in enumerate(lines[:80]):
