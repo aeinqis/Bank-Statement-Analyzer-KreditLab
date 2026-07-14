@@ -12387,12 +12387,19 @@ if st.session_state.validation_toast_message:
     st.session_state.validation_toast_message = ""
 
 all_tx: List[dict] = []
+progress_panel = None
+progress_total_steps = 1
+progress_export_start_step = 0
+progress_final_message = ""
+progress_final_variant = "success"
 
 if uploaded_files and st.session_state.status == "running":
     progress_panel = st.empty()
 
     total_files = len(uploaded_files)
-    total_steps = total_files + 1
+    total_steps = total_files + 4
+    progress_total_steps = total_steps
+    progress_export_start_step = total_files + 3
     parser = PARSERS[bank_choice]
     processing_errors: List[str] = []
     total_extracted = 0
@@ -12585,14 +12592,14 @@ if uploaded_files and st.session_state.status == "running":
         st.session_state.status = "completed_with_errors"
         update_processing_progress(
             f"Completed with {len(processing_errors)} error(s). "
-            f"Extracted {total_extracted} transactions from {total_files} file(s).",
-            total_steps,
+            f"Extracted {total_extracted} transactions. Finalizing report data.",
+            total_files + 1,
             variant="warning",
         )
         st.warning(f"⚠️ Completed with {len(processing_errors)} error(s). Check the errors above.")
     else:
         st.session_state.status = "completed"
-        update_processing_progress("Finalizing extracted transactions.", total_steps)
+        update_processing_progress("Finalizing extracted transactions.", total_files + 1)
     
     st.markdown("---")
     all_tx = dedupe_transactions(all_tx)
@@ -12640,18 +12647,26 @@ if uploaded_files and st.session_state.status == "running":
             variant="warning",
         )
     elif processing_errors:
+        progress_final_variant = "warning"
+        progress_final_message = (
+            f"Reports ready with {len(processing_errors)} processing error(s). "
+            f"Extracted {final_transaction_count} transactions from {total_files} file(s)."
+        )
         update_processing_progress(
-            f"Completed with {len(processing_errors)} error(s). "
-            f"Extracted {final_transaction_count} transactions from {total_files} file(s).",
-            total_steps,
+            f"Preparing report sections and downloads after {len(processing_errors)} error(s). "
+            f"Extracted {final_transaction_count} transactions.",
+            total_files + 2,
             variant="warning",
         )
     else:
+        progress_final_variant = "success"
+        progress_final_message = (
+            f"All reports are ready. Processed {total_files} file(s) and "
+            f"{final_transaction_count} transactions."
+        )
         update_processing_progress(
-            f"Successfully processed all {total_files} file(s) and completed extraction of "
-            f"{final_transaction_count} transactions from {total_files} file(s).",
-            total_steps,
-            variant="success",
+            f"Preparing report sections and downloads for {final_transaction_count} transactions.",
+            total_files + 2,
         )
 
 
@@ -12825,6 +12840,14 @@ if st.session_state.results:
     
     st.subheader("⬇️ Download Options")
     col1, col2, col3, col4 = st.columns(4)
+    export_errors: List[str] = []
+    if progress_panel is not None:
+        render_processing_progress(
+            progress_panel,
+            status="Preparing JSON, HTML, and Excel download files.",
+            progress=progress_export_start_step / progress_total_steps,
+            variant="warning" if progress_final_variant == "warning" else "active",
+        )
 
     df_download = df.copy() if not df.empty else pd.DataFrame([])
 
@@ -12873,6 +12896,7 @@ if st.session_state.results:
                 use_container_width=True,
             )
         except Exception as e:
+            export_errors.append("HTML")
             st.error(f"Failed to generate HTML report: {e}")
 
     with col3:
@@ -12897,6 +12921,21 @@ if st.session_state.results:
             file_name=f"{safe_company_name}_raw_transactions.json",
             mime="application/json",
             use_container_width=True,
+        )
+
+    if progress_panel is not None:
+        final_variant = "warning" if export_errors or progress_final_variant == "warning" else "success"
+        final_message = progress_final_message or "All reports are ready."
+        if export_errors:
+            final_message = (
+                f"Report display finished, but {', '.join(export_errors)} export "
+                f"{'was' if len(export_errors) == 1 else 'were'} not prepared."
+            )
+        render_processing_progress(
+            progress_panel,
+            status=final_message,
+            progress=1.0,
+            variant=final_variant,
         )
 
 else:
