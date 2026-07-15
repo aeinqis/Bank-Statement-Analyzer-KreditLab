@@ -1,10 +1,9 @@
 # ocbc.py
 # OCBC Bank (Malaysia) - Current Account statement parser
 #
-# FIX:
-#   Some statements have NO transaction lines (only Balance B/F + Transaction Summary = 0/0).
-#   In that case, emit a single balance-only row dated to the statement end date so the month
-#   appears in Streamlit monthly summary.
+# Some statements have NO transaction lines (only Balance B/F + Transaction Summary = 0/0).
+# In that case, emit a balance-only marker row dated to the statement end date so the month
+# can appear in summaries without being counted as a transaction.
 
 from __future__ import annotations
 
@@ -15,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pdfplumber
 
 from core_utils import normalize_text, safe_float
+from party_utils import normalize_company_suffix
 
 
 # --- Patterns ---
@@ -38,6 +38,8 @@ STATEMENT_PERIOD_RE = re.compile(
 )
 
 MONEY_RE = re.compile(r"^-?(\d{1,3}(?:,\d{3})*|\d+)\.\d{2}$")
+REF_MARKER_RE = re.compile(r"\bREF\s*:?\s*", re.I)
+REF_TAIL_MAX_WORDS = 4
 
 STOP_LINES = (
     "TRANSACTION",
@@ -57,9 +59,75 @@ STOP_LINES = (
     "HURAIAN TRANSAKSI",
 )
 
+DESCRIPTION_ARTIFACT_MARKERS = (
+    "START SUBMITTING YOUR AUDIT CONFIRMATION REPORT",
+    "AUDIT CONFIRMATION REPORT REQUEST",
+    "REQUESTS, PLEASE VISIT OUR WEBSITE",
+    "TRANSFER FUNDS OVERSEAS QUICKLY AND EASILY",
+    "BUSINESS MOBILE APP.ENJOY",
+    "BUSINESS MOBILE APP. ENJOY",
+    "OCBC FLASH",
+    "THROUGH OCBC VELOCITY",
+    "OUR SMES, FOR MORE INFORMATION",
+    "BUILD YOUR BUSINESS STARTING WITH THE OCBC EBIZ ACCOUNT",
+    "THE SHARIAH-COMPL",
+    "ECONFIRM PORTAL",
+    "HTTPS://WWW.OCBC.COM.MY/BUSINESS-BANKING/HELP-AND-SUPPORT#FORMS",
+    "HTTPS://WWW.OCBC.COM.MY/EBIZ-I",
+    "HTTPS://ECONFIRM.MY",
+    "SILA HANTAR PERMINTAAN",
+    "UNTUK BORANG DAN SOALAN LAZIM",
+    "PROTECTED BY PIDM",
+    "YOUR BANKING QUESTIONS ANSWERED",
+    "A MEMBER OF OCBC GROUP",
+    "IF THE PROPERTY OR ASSET",
+    "LOCAL CHEQUES",
+    "CEK-CEK TEMPATAN",
+    "WITH EFFECT FROM",
+    "BASE LENDING RATE",
+    "INSURANCE KADAR PINJAMAN",
+)
+
 # classification hints
 CREDIT_HINTS = (" CR ", "CR /IB", "CR INWARD", "CREDIT")
 DEBIT_HINTS = (" DR ", "DR /IB", "DEBIT", "DUITNOW SC", "DEBIT AS ADVISED")
+
+OCBC_PARTY_PATTERNS = [
+    # Captures: PRINCIPAL GAS SDN BHD from "PYMT TO APPROVED PRINCIPAL GAS SDN BHD..."
+    re.compile(r"\bPYMT\s+TO\s+APPROVED\s+(?P<party>.+?)(?=\s+DUITNOW|$)", re.I),
+    # Captures: LUQMANULHAQEEM BIN from "DUITNOW(INST TRF) DR LUQMANULHAQEEM BIN..."
+    re.compile(r"DUITNOW\(INST\s+TRF\)\s+(?:DR|CR)\b\s+(?P<party>.+?)(?=\s+DESC:|\s+REF:|$)", re.I),
+    # Captures: LUQMANULHAQEEM BIN from "DUITNOW SC LUQMANULHAQEEM BIN..."
+    re.compile(r"\bDUITNOW\s+SC\s+(?P<party>.+?)(?=\s+DESC:|\s+REF:|$)", re.I),
+    # Captures the party from inward transfers if a name follows the code.
+    re.compile(r"\bCr\s+Inward\s+\(TT\)\s+\d+\s+(?P<party>.+?)$", re.I),
+]
+
+OCBC_PARTY_TRAILING_RE = re.compile(
+    r"\b(?:DESC|REF|REFERENCE|TRACE|ID|NO|TXN|TRANSACTION|ACC(?:OUNT)?|A/C|BILL|INV(?:OICE)?)\s*:?.*$",
+    re.I,
+)
+OCBC_PARTY_NUMERIC_TAIL_RE = re.compile(r"(?:\s+|[-./])\d{5,}(?:[-./]\d+)*\s*$", re.I)
+OCBC_PARTY_LEADING_CHANNEL_RE = re.compile(r"^/?IB\b\s*", re.I)
+
+OCBC_GENERIC_NON_PARTY_TOKENS = {
+    "APPROVED",
+    "CR",
+    "CREDIT",
+    "DEBIT",
+    "DESC",
+    "DR",
+    "DUITNOW",
+    "INWARD",
+    "INST",
+    "PAYMENT",
+    "PYMT",
+    "REF",
+    "SC",
+    "TO",
+    "TRF",
+    "TT",
+}
 
 
 def _to_iso_date(day: str, mon: str, year: str) -> str:
@@ -107,7 +175,117 @@ def _is_noise_line(line: str) -> bool:
     up = line.upper().strip()
     if not up:
         return True
-    return any(k in up for k in STOP_LINES)
+    return any(k in up for k in STOP_LINES) or any(k in up for k in DESCRIPTION_ARTIFACT_MARKERS)
+
+
+def _is_footer_or_legal_line(line: str) -> bool:
+    up = line.upper().strip()
+    return any(k in up for k in (
+        "YOUR BANKING QUESTIONS ANSWERED",
+        "A MEMBER OF OCBC GROUP",
+        "HTTP://WWW.BANKINGINFO.COM.MY",
+        "HTTPS://WWW.BANKINGINFO.COM.MY",
+        "HTTP://WWW.OCBC.COM.MY",
+        "HTTPS://WWW.OCBC.COM.MY",
+        "IF THE PROPERTY OR ASSET",
+        "JOINT MANAGEMENT BODY",
+        "CERTIFICATE OF INSURANCE",
+        "LOCAL CHEQUES",
+        "THE ENTRIES AND BALANCE",
+        "PLEASE NOTIFY US",
+        "CEK-CEK TEMPATAN",
+        "BUTIR-BUTIR TRANSAKSI",
+        "SILA MAKLUMKAN",
+        "WITH EFFECT FROM",
+        "BERKUATKUASA DARI",
+        "BASE LENDING RATE",
+        "INSURANCE KADAR PINJAMAN",
+    ))
+
+
+def _strip_ocbc_description_artifacts(description: str) -> str:
+    cleaned = normalize_text(description)
+    if not cleaned:
+        return ""
+
+    upper = cleaned.upper()
+    cut_index = None
+    for marker in DESCRIPTION_ARTIFACT_MARKERS:
+        marker_index = upper.find(marker)
+        if marker_index >= 0 and (cut_index is None or marker_index < cut_index):
+            cut_index = marker_index
+
+    if cut_index is not None:
+        cleaned = cleaned[:cut_index]
+
+    ref_matches = list(REF_MARKER_RE.finditer(cleaned))
+    if ref_matches:
+        ref_match = ref_matches[-1]
+        prefix = cleaned[: ref_match.end()]
+        ref_tail = cleaned[ref_match.end():].strip()
+        ref_tokens = ref_tail.split()
+        if len(ref_tokens) > REF_TAIL_MAX_WORDS:
+            cleaned = normalize_text(prefix + " ".join(ref_tokens[:REF_TAIL_MAX_WORDS]))
+
+    cleaned = re.sub(r"\s*[-=/,:;|]+\s*$", "", cleaned)
+    return normalize_text(cleaned)
+
+
+def _normalize_ocbc_party_name(name: str) -> str:
+    cleaned = normalize_text(name).upper()
+    if not cleaned:
+        return "UNKNOWN"
+
+    cleaned = OCBC_PARTY_TRAILING_RE.sub("", cleaned)
+    cleaned = OCBC_PARTY_NUMERIC_TAIL_RE.sub("", cleaned)
+    cleaned = OCBC_PARTY_LEADING_CHANNEL_RE.sub("", cleaned)
+    cleaned = re.sub(r"[^A-Z0-9/&().\s-]", " ", cleaned)
+    cleaned = normalize_text(cleaned)
+
+    normalized_tokens = []
+    for token in cleaned.split():
+        if token in {"SND", "SD"}:
+            token = "SDN"
+        if token in {"BH", "BDH", "B"} and any(existing == "SDN" for existing in normalized_tokens):
+            token = "BHD"
+        normalized_tokens.append(token)
+
+    cleaned = normalize_company_suffix(" ".join(normalized_tokens))
+    return cleaned or "UNKNOWN"
+
+
+def _is_generic_ocbc_non_party(name: str) -> bool:
+    cleaned = normalize_text(name).upper()
+    if not cleaned or cleaned == "UNKNOWN":
+        return True
+
+    tokens = [
+        token
+        for token in re.sub(r"[^A-Z0-9/&\s]", " ", cleaned).split()
+        if token
+    ]
+    if not tokens:
+        return True
+
+    return all(token in OCBC_GENERIC_NON_PARTY_TOKENS or token.isdigit() for token in tokens)
+
+
+def extract_ocbc_party_name(description: str) -> str:
+    """Extract a counterparty name from OCBC transaction descriptions."""
+    desc = normalize_text(description).upper()
+    if not desc or desc.startswith("NO TRANSACTIONS"):
+        return "UNKNOWN"
+
+    for pattern in OCBC_PARTY_PATTERNS:
+        match = pattern.search(desc)
+        if not match:
+            continue
+
+        candidate = _normalize_ocbc_party_name(match.group("party"))
+        if not _is_generic_ocbc_non_party(candidate):
+            return candidate
+
+    return "UNKNOWN"
 
 
 def parse_transactions_ocbc(pdf_input: Any, source_file: str = "") -> List[Dict]:
@@ -171,6 +349,7 @@ def parse_transactions_ocbc(pdf_input: Any, source_file: str = "") -> List[Dict]
                         current_tx = None
                         continue
 
+                    desc_head = _strip_ocbc_description_artifacts(desc_head)
                     desc_upper = desc_head.upper()
                     debit = 0.0
                     credit = 0.0
@@ -209,10 +388,25 @@ def parse_transactions_ocbc(pdf_input: Any, source_file: str = "") -> List[Dict]
                     continue
 
                 # Continuation lines (multi-line description)
-                if current_tx is not None and not _is_noise_line(line):
-                    # avoid numeric-only lines
-                    if not MONEY_RE.match(line.replace(",", "")):
-                        current_tx["description"] = normalize_text(current_tx["description"] + " " + line)
+                if current_tx is not None:
+                    up = line.upper()
+
+                    if _is_noise_line(line) or _is_footer_or_legal_line(line):
+                        current_tx = None
+                        continue
+
+                    is_likely_tx_detail = (
+                        up.startswith("DESC:")
+                        or up.startswith("REF:")
+                        or up.startswith("/IB")
+                        or " DUITNOW" in f" {up} "
+                        or len(line.split()) <= 6
+                    )
+
+                    if is_likely_tx_detail and not MONEY_RE.match(line.replace(",", "")):
+                        current_tx["description"] = _strip_ocbc_description_artifacts(
+                            normalize_text(current_tx["description"] + " " + line)
+                        )
 
         # ---- FIX: no transactions case (like your April PDF) ----
         if not transactions and prev_balance is not None:
@@ -229,8 +423,13 @@ def parse_transactions_ocbc(pdf_input: Any, source_file: str = "") -> List[Dict]
                     "bank": bank_name,
                     "source_file": source_file,
                     "is_statement_balance": True,
+                    "is_balance_marker": True,
                 }
             )
+
+        for transaction in transactions:
+            transaction["description"] = _strip_ocbc_description_artifacts(transaction.get("description", ""))
+            transaction["party_name"] = extract_ocbc_party_name(transaction.get("description", ""))
 
         return transactions
 
