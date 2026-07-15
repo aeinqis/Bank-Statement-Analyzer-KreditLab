@@ -160,6 +160,7 @@ from counterparty_ledger import (
     _merge_report_counterparty_row,
     _report_candidate_contains_party_tokens,
     _report_counterparty_alignment_targets,
+    _report_name_matches_own_party,
     _report_party_display_name,
     _report_party_names_equivalent,
     _report_related_party_entries,
@@ -953,6 +954,11 @@ def build_related_party_summary_rows_for_report(
         )
         if group.get("badge_type") == "RP"
     ]
+    related_entries = [
+        (name, relationship)
+        for name, relationship in _report_related_party_entries(related_parties)
+        if not _report_name_matches_own_party(name, company_name)
+    ]
 
     def _matching_group(name: str):
         target = str(name or "").strip().upper()
@@ -972,7 +978,7 @@ def build_related_party_summary_rows_for_report(
 
     rows = []
     seen = set()
-    for name, relationship in _report_related_party_entries(related_parties):
+    for name, relationship in related_entries:
         group = _matching_group(name)
         group_transactions = group.get("transactions", []) if group else []
         fallback = (

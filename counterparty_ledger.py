@@ -325,7 +325,8 @@ def render_counterparty_ledger_table(df: pd.DataFrame) -> dict:
     canonical_cp_rows = build_report_counterparty_ledger_rows(
         display_cp_ledger,
         related_parties=filter_report_related_parties(
-            st.session_state.get("related_parties_override", []) or []
+            st.session_state.get("related_parties_override", []) or [],
+            company_name=company_name_for_top,
         ),
         own_related={},
         company_name=company_name_for_top,
@@ -924,6 +925,25 @@ def _report_candidate_contains_party_tokens(candidate, party_name) -> bool:
     return _report_tokens_ordered_match(party_tokens, candidate_tokens)
 
 
+def _report_name_matches_own_party(name, company_name: str = "") -> bool:
+    """Return True when a report party label is the statement holder."""
+    party_name = _report_party_display_name(name)
+    own_party = _report_party_display_name(company_name)
+    if not party_name or not own_party:
+        return False
+    if party_name.upper() == own_party.upper():
+        return True
+    if _report_party_names_equivalent(party_name, own_party):
+        return True
+    try:
+        return _report_party_names_equivalent(
+            _canonical_report_counterparty_display_name(party_name),
+            _canonical_report_counterparty_display_name(own_party),
+        )
+    except Exception:
+        return False
+
+
 def _canonical_report_counterparty_display_name(value) -> str:
     raw = re.sub(r"\s+", " ", str(value or "").strip())
     if not raw:
@@ -936,8 +956,8 @@ def _canonical_report_counterparty_display_name(value) -> str:
     return canonical or raw
 
 
-def filter_report_related_parties(related_parties) -> List:
-    """Return analyst-confirmed related parties excluding synthetic buckets."""
+def filter_report_related_parties(related_parties, company_name: str = "") -> List:
+    """Return analyst-confirmed related parties excluding synthetic and own-party buckets."""
     filtered: List = []
     for name, relationship in _report_related_party_entries(related_parties):
         original = next(
@@ -952,8 +972,12 @@ def filter_report_related_parties(related_parties) -> List:
             item["name"] = name
             if relationship:
                 item["relationship"] = relationship
+            if _report_name_matches_own_party(name, company_name):
+                continue
             filtered.append(item)
         else:
+            if _report_name_matches_own_party(name, company_name):
+                continue
             filtered.append({"name": name, "relationship": relationship})
     return filtered
 
@@ -1002,6 +1026,7 @@ __all__ = [
     '_counterparty_row_report_match_sources',
     '_report_party_names_equivalent',
     '_report_candidate_contains_party_tokens',
+    '_report_name_matches_own_party',
     '_canonical_report_counterparty_display_name',
     'filter_report_related_parties',
     '_report_related_party_entries',

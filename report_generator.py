@@ -105,7 +105,7 @@ def generate_interactive_html(data):
     obs = normalize_observations(data.get('observations', {}))
     parsing = data.get('parsing_metadata', {})
     company_name = r.get('company_name', 'Company')
-    related_parties = filter_report_related_parties(r.get('related_parties', []))
+    related_parties = filter_report_related_parties(r.get('related_parties', []), company_name=company_name)
     report_counterparty_rows = copy_report_counterparty_rows(
         data.get('report_counterparty_rows') or data.get('counterparty_ledger_rows')
     )
@@ -192,7 +192,7 @@ def generate_interactive_html(data):
     period_start = r.get('period_start', '')
     period_end = r.get('period_end', '')
     total_months = r.get('total_months', 0)
-    related_parties = filter_report_related_parties(r.get('related_parties', []))
+    related_parties = filter_report_related_parties(r.get('related_parties', []), company_name=company)
 
     # ── Date format: convert from YYYY-MM-DD to YYYY-MM ──
     def _format_to_year_month(date_str):
@@ -2931,9 +2931,26 @@ def build_own_related_party_groups_for_report(
         txns = []
 
     groups = {}
-    related_entries = _report_related_party_entries(related_parties)
+    related_entries = [
+        (name, relationship)
+        for name, relationship in _report_related_party_entries(related_parties)
+        if not _report_name_matches_own_party(name, company_name)
+    ]
     has_confirmed_related_parties = bool(related_entries)
     own_party_name = _own_party_group_name_for_report(txns, company_name)
+
+    def _txn_matches_own_party(txn: dict, raw_party_name: str) -> bool:
+        for value in (
+            raw_party_name,
+            txn.get("counterparty_name"),
+            txn.get("counterparty"),
+            txn.get("counterparty_name_clean"),
+            txn.get("counterparty_name_raw"),
+            txn.get("raw_counterparty"),
+        ):
+            if value and _report_name_matches_own_party(value, company_name):
+                return True
+        return False
 
     def _empty_group(party_name: str, badge_type: str, party_type: str) -> dict:
         return {
@@ -2958,7 +2975,7 @@ def build_own_related_party_groups_for_report(
         party_type = str(txn.get("party_type") or "").strip()
         party_type_upper = party_type.upper()
 
-        if party_type_upper.startswith("OWN"):
+        if party_type_upper.startswith("OWN") or _txn_matches_own_party(txn, raw_party_name):
             badge_type = "OP"
             party_name = own_party_name
         else:

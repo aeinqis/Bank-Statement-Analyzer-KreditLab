@@ -54,21 +54,25 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         cp_ledger = build_track2_counterparty_ledger(report_data.get("transactions", []))
         report_data["counterparty_ledger"] = cp_ledger
     report_info = report_data.get("report_info", {}) or {}
+    company_name = report_info.get("company_name", "")
     
     # Build top_parties from the same aligned CP ledger rows used by the Counterparty sheets.
     report_counterparty_rows = get_report_counterparty_rows_from_data(
         report_data,
         cp_ledger,
-        related_parties=filter_report_related_parties(report_info.get("related_parties", []) or []),
+        related_parties=filter_report_related_parties(
+            report_info.get("related_parties", []) or [],
+            company_name=company_name,
+        ),
         own_related=own_related,
-        company_name=report_info.get("company_name", ""),
+        company_name=company_name,
     )
     if report_counterparty_rows:
         report_data["report_counterparty_rows"] = report_counterparty_rows
     top_parties = _top_parties_from_counterparty_rows(
         report_counterparty_rows,
         limit=None,
-        company_name=report_info.get("company_name", ""),
+        company_name=company_name,
     )
     report_data["top_parties"] = top_parties
 
@@ -286,8 +290,10 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     has_recon = any(m.get("reconciliation_status") for m in monthly_analysis) or bool(recon_lookup)
 
     # Build cp_sorted HERE so it's available for both Counterparty and CP Ledger sheets
-    related_parties = filter_report_related_parties(report_info.get("related_parties", []) or [])
-    company_name = report_info.get("company_name", "")
+    related_parties = filter_report_related_parties(
+        report_info.get("related_parties", []) or [],
+        company_name=company_name,
+    )
     cp_sorted = get_report_counterparty_rows_from_data(
         report_data,
         cp_ledger,

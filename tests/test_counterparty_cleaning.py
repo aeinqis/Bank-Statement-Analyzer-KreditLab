@@ -927,6 +927,49 @@ class CounterpartyCleaningTests(unittest.TestCase):
             [{"name": "SHAHARUDDIN SAMS", "relationship": "Affiliate"}],
         )
 
+    def test_own_party_is_not_report_related_party(self):
+        filtered = filter_report_related_parties(
+            [
+                {"name": "LSR AGENCY", "relationship": "Affiliate"},
+                {"name": "DANG YEAN LEE", "relationship": "Affiliate"},
+            ],
+            company_name="LSR AGENCY",
+        )
+
+        self.assertEqual(filtered, [{"name": "DANG YEAN LEE", "relationship": "Affiliate"}])
+
+    def test_own_related_groups_promote_company_named_related_row_to_own_party(self):
+        groups = build_own_related_party_groups_for_report(
+            {
+                "transactions": [
+                    {
+                        "date": "2025-03-01",
+                        "description": "IBG CREDIT LSR AGENCY",
+                        "amount": 100.0,
+                        "type": "CREDIT",
+                        "party_type": "OWN",
+                        "party_name": "LSR AGENCY",
+                    },
+                    {
+                        "date": "2025-03-02",
+                        "description": "IBG TRANSFER LSR AGENCY",
+                        "amount": 50.0,
+                        "type": "DEBIT",
+                        "party_type": "RELATED",
+                        "party_name": "LSR AGENCY",
+                    },
+                ]
+            },
+            related_parties=[{"name": "LSR AGENCY", "relationship": "Affiliate"}],
+            company_name="LSR AGENCY",
+        )
+
+        own_group = next(group for group in groups if group["badge_type"] == "OP")
+        self.assertEqual(own_group["party_name"], "LSR AGENCY")
+        self.assertEqual(own_group["credit_count"], 1)
+        self.assertEqual(own_group["debit_count"], 1)
+        self.assertFalse(any(group["badge_type"] == "RP" for group in groups))
+
     def test_related_party_manager_splits_high_from_possible_candidates(self):
         known, possible = partition_related_party_candidates_for_manager([
             {"name": "HIGH PARTY", "confidence": "HIGH"},
