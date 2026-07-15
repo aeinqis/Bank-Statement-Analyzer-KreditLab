@@ -72,6 +72,15 @@ def render_related_party_manager(
                 return "CONFIRMED"
         return "HIGH"
 
+    company_name = ""
+    if isinstance(shared_report_data, dict):
+        company_name = str(shared_report_data.get("report_info", {}).get("company_name") or "").strip()
+    if not company_name:
+        company_name = str(st.session_state.get("company_name_override") or "").strip()
+
+    def _is_own_party_name(name: str) -> bool:
+        return bool(name and _report_name_matches_own_party(name, company_name))
+
     counterparty_rows = _counterparty_rows_for_related_party_manager(cp_ledger, shared_report_data)
 
     def _ledger_name_for_party(name: str) -> str:
@@ -113,6 +122,8 @@ def render_related_party_manager(
             str(candidate.get("original_name") or "").strip() if isinstance(candidate, dict) else "",
         ]
         review_names = [name for name in names if name]
+        if any(_is_own_party_name(name) for name in review_names):
+            return True
         blocker_names = list(confirmed_names) + list(dismissed)
         return any(
             name.upper() in confirmed_names
@@ -128,6 +139,8 @@ def render_related_party_manager(
             name = _ledger_name_for_party(raw_name)
             if (
                 not name
+                or _is_own_party_name(raw_name)
+                or _is_own_party_name(name)
                 or _is_report_unknown_counterparty(name)
                 or _is_report_special_counterparty_bucket(name)
             ):
@@ -156,6 +169,7 @@ def render_related_party_manager(
         confirmed_names,
         dismissed,
         shared_report_data,
+        company_name=company_name,
     )
     all_candidates = _align_related_party_candidates_to_counterparty_rows(
         all_candidates,
@@ -274,6 +288,7 @@ def render_related_party_manager(
                     if not (
                         _is_report_unknown_counterparty(cand["name"])
                         or _is_report_special_counterparty_bucket(cand["name"])
+                        or _is_own_party_name(cand["name"])
                     ):
                         confirmed_rps.append({
                             "name": cand["name"],
@@ -299,6 +314,7 @@ def detect_related_party_candidates(
     confirmed_names: set,
     dismissed: set,
     shared_report_data: dict = None,
+    company_name: str = "",
 ) -> list:
     """
     Produce a ranked candidate list from Track 2 related-party signals only.
@@ -326,6 +342,7 @@ def detect_related_party_candidates(
             or name in confirmed_names
             or name in dismissed
             or name in _NOISE
+            or _report_name_matches_own_party(display_name, company_name)
             or _is_report_unknown_counterparty(display_name)
             or _is_report_special_counterparty_bucket(display_name)
             or any(

@@ -45,6 +45,97 @@ TOTAL_JUMLAH_RE = re.compile(r"\bTOTAL\s*/\s*JUMLAH\b", re.IGNORECASE)
 # Balance brought forward line (new layout)
 BALANCE_BF_RE = re.compile(r"^\s*Balance\s+Brought\s+Fwd\b", re.IGNORECASE)
 
+AMBANK_FOOTER_RE = re.compile(
+    r"\s*AmBank Islamic Berhad.*$|\s*3060_0021\s*$",
+    re.I,
+)
+
+AMBANK_CASH_DEPOSIT_RE = re.compile(r"\b(?:CASH\s+DEPOSIT|CRM\s+CSH\s+DEP)\b", re.I)
+AMBANK_HIBAH_PROFIT_RE = re.compile(r"^\s*HIBAH\s*/\s*PROFIT\b", re.I)
+AMBANK_MEPS_FEE_RE = re.compile(r"^\s*MEPS\s+FEE\b", re.I)
+AMBANK_ATM_WITHDRAWAL_RE = re.compile(
+    r"\b(?:ATM\s+(?:CASH\s+)?WITHDRAWAL|CASH\s+WITHDRAWAL\s+(?:AT\s+)?ATM|ATM\s+WDL)\b",
+    re.I,
+)
+
+AMBANK_TRANSFER_RE = re.compile(
+    r"""^
+    (?P<transfer_type>DEBIT|CREDIT)\s+TRANSFER
+    \s*,\s*
+    (?P<party>[^,]*)
+    """,
+    re.I | re.X,
+)
+
+AMBANK_INST_TRF_RE = re.compile(
+    r"""^
+    Inst\s+Trf\b
+    .*?
+    /\s*(?:CREDIT|DEBIT)(?:\s+TRANSFER)?
+    \s*,\s*
+    (?P<party>[^,]*)
+    """,
+    re.I | re.X,
+)
+
+AMBANK_CARD_PURCHASE_RE = re.compile(
+    r"""^
+    (?:
+        MC\s+Retail\s+Off\s+Us(?:\s*-\s*\w+)? |
+        MC\s+Retail\s*/\s*Pur(?:chase|cahse|hase)\s+Off |
+        MyDebit\s+(?:Pur|Per)(?:chase|cahse|hase)\s+(?:Off|On)
+    )
+    (?:\s*/\s*[^,]*)?
+    \s*,\s*
+    (?P<party>[^,]*)
+    """,
+    re.I | re.X,
+)
+
+AMBANK_DUITNOW_RE = re.compile(
+    r"""^
+    DuitNow\s+(?:TRF|CR\s+TRF|Transfer)
+    \s*/\s*
+    (?P<category>MISC\s+CREDIT|MISC\s+DEBIT|DEBIT\s+TRANSFER|CREDIT\s+TRANSFER)
+    \s*,\s*
+    (?P<party>[^,]*)
+    """,
+    re.I | re.X,
+)
+
+AMBANK_TXN_PREFIX_RE = re.compile(
+    r"""^
+    (?P<txn_type>
+        Fund\s+Transfer |
+        DuitNow\s+(?:TRF|CR\s+TRF|Transfer) |
+        STATUTORY\s+BODY\s+TXN |
+        Salary |
+        CTL\s+OUTWARD\s+CLEARING |
+        INWARD\s+IBG |
+        INW\s+AMI\s+CHQ |
+        CHEQUE\s+PROCESSING\s+FEE |
+        JomPAY |
+        CMS\s+FPX\s+PAYMENT |
+        Interbank\s+GIRO |
+        SI\s*-\s*INTERBANK\s+GIRO\s+TD-I\s+PFT/PFT\s+TF |
+        INTERBANK\s+GIRO\s+STANDING\s+INSTRUCTION\s+FEE |
+        CMS\s+INTER\s+ACC\s+TRF |
+        HIBAH/PROFIT
+    )
+    \s*/?
+    (?P<category>[^,]*)
+    ,\s*
+    (?P<party>.*?)
+    (?:
+        ,\s*.*$
+        |$
+    )
+    """,
+    re.I | re.X,
+)
+
+AMBANK_NUMERIC_PARTY_TOKEN_RE = re.compile(r"\b\S*\d\S*\b")
+
 _MONTH_MAP = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
     "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
@@ -76,6 +167,84 @@ def _normalize_lines_keep_order(text: str) -> List[str]:
         if ln:
             lines.append(ln)
     return lines
+
+
+def _clean_ambank_party_name(party: str) -> str:
+    party = re.sub(r"^[,\s]+|[,\s]+$", "", str(party or ""))
+    party = AMBANK_NUMERIC_PARTY_TOKEN_RE.sub(" ", party)
+    party = re.sub(
+        r"\s+\b(?:INV|INVOICE|PB|PV|FIN|OTC|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b.*$",
+        "",
+        party,
+        flags=re.I,
+    )
+    party = re.sub(r"\bSDN\.?\s*BHD\.?\b", "SDN BHD", party, flags=re.I)
+    party = re.sub(r"\bSDN\.?\s*BH\b", "SDN BHD", party, flags=re.I)
+    party = re.sub(r"\bSDN\.?\s*B\b", "SDN BHD", party, flags=re.I)
+    party = re.sub(r"\s{2,}", " ", party).strip(" -/,.")
+    return party.upper() if party else "UNKNOWN"
+
+
+def extract_ambank_party_name(description: str) -> str:
+    desc = re.sub(r"\s+", " ", str(description or "")).strip()
+    desc = AMBANK_FOOTER_RE.sub("", desc).strip(" ,")
+
+    if not desc:
+        return "UNKNOWN"
+
+    if AMBANK_CASH_DEPOSIT_RE.search(desc):
+        return "CASH DEPOSIT"
+
+    if AMBANK_HIBAH_PROFIT_RE.search(desc):
+        return "HIBAH/PROFIT"
+
+    if AMBANK_MEPS_FEE_RE.search(desc):
+        return "MEPS FEE"
+
+    if AMBANK_ATM_WITHDRAWAL_RE.search(desc):
+        return "ATM WITHDRAWAL"
+
+    # =========================
+    # ALL CHEQUE TRANSACTIONS
+    # =========================
+    if re.search(r"\b(?:CHQ|CHEQUE|CLEARING)\b", desc, re.I):
+        return "CHEQUE"
+
+    # =========================
+    # DUITNOW
+    # =========================
+    match = AMBANK_DUITNOW_RE.search(desc)
+    if match:
+        party = match.group("party").split(",", 1)[0]
+        party = _clean_ambank_party_name(party)
+        return party if party != "UNKNOWN" else "DUITNOW"
+
+    match = AMBANK_INST_TRF_RE.search(desc)
+    if match:
+        party = _clean_ambank_party_name(match.group("party"))
+        return party if party != "UNKNOWN" else "INST TRF"
+
+    match = AMBANK_TRANSFER_RE.search(desc)
+    if match:
+        party = _clean_ambank_party_name(match.group("party"))
+        return party if party != "UNKNOWN" else f"{match.group('transfer_type').upper()} TRANSFER"
+
+    match = AMBANK_CARD_PURCHASE_RE.search(desc)
+    if match:
+        party = _clean_ambank_party_name(match.group("party"))
+        return party if party != "UNKNOWN" else "CARD PURCHASE"
+
+    match = AMBANK_TXN_PREFIX_RE.match(desc)
+    if not match:
+        return "UNKNOWN"
+
+    party = match.group("party").strip()
+
+    # Remove empty cheque-style placeholders
+    if not party or party in {",", ", ,"}:
+        return "UNKNOWN"
+
+    return _clean_ambank_party_name(party)
 
 
 def _find_amount_near_label(lines: List[str], label_re: re.Pattern) -> Optional[float]:
@@ -301,6 +470,7 @@ def _finalize_tx(
             "seq": int(seq),
             "bank": "Ambank",
             "source_file": filename,
+            "party_name": "UNKNOWN",
             "is_balance_bf": True,
         }
         return tx, bal
@@ -368,6 +538,7 @@ def _finalize_tx(
         "seq": int(seq),
         "bank": "Ambank",
         "source_file": filename,
+        "party_name": extract_ambank_party_name(desc),
     }
     return tx, balance
 
@@ -467,6 +638,7 @@ def _parse_transactions_from_lines(
                         "seq": int(seq),
                         "bank": "Ambank",
                         "source_file": filename,
+                        "party_name": "UNKNOWN",
                         "is_balance_bf": True,
                     }
                     txs.append(tx)

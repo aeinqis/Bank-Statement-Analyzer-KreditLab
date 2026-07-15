@@ -10,6 +10,7 @@ from app import (
     _report_related_party_entries,
     _top_parties_from_counterparty_rows,
     build_report_counterparty_ledger_rows,
+    detect_related_party_candidates,
     filter_report_related_parties,
     generate_interactive_html,
     generate_excel_report,
@@ -983,6 +984,37 @@ class CounterpartyCleaningTests(unittest.TestCase):
             [candidate["name"] for candidate in possible],
             ["MEDIUM PARTY", "LOW PARTY"],
         )
+
+    def test_related_party_manager_blocks_own_party_candidate(self):
+        candidates = detect_related_party_candidates(
+            {"counterparties": []},
+            confirmed_names=set(),
+            dismissed=set(),
+            shared_report_data={
+                "report_info": {
+                    "company_name": "LSR AGENCY",
+                    "related_party_candidates": [
+                        {
+                            "name": "LSR AGENCY",
+                            "confidence": "HIGH",
+                            "evidence": "Flagged by Track 2 engine",
+                            "total_cr": 134171.0,
+                            "total_dr": 0.0,
+                        },
+                        {
+                            "name": "DANG YEAN LEE",
+                            "confidence": "HIGH",
+                            "evidence": "Flagged by Track 2 engine",
+                            "total_cr": 0.0,
+                            "total_dr": 100.0,
+                        },
+                    ],
+                }
+            },
+            company_name="LSR AGENCY",
+        )
+
+        self.assertEqual([candidate["name"] for candidate in candidates], ["DANG YEAN LEE"])
 
     def test_related_party_manager_uses_counterparty_ledger_display_name(self):
         candidates = [
