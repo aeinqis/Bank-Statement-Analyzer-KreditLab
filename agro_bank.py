@@ -258,6 +258,7 @@ def extract_agrobank_party_name(description: str, account_holder: str = "") -> s
 
     segments = [normalize_text(part).upper() for part in re.split(r"\s+\|\s+", description) if normalize_text(part)]
     account_holder_norm = normalize_text(account_holder).upper()
+    account_holder_party = _normalize_agrobank_party_name(account_holder_norm) if account_holder_norm else ""
 
     if re.search(r"\bMBISM[YK]KL\b", desc, re.I) and account_holder_norm:
         return _normalize_agrobank_party_name(account_holder_norm)
@@ -268,7 +269,8 @@ def extract_agrobank_party_name(description: str, account_holder: str = "") -> s
             meaningful_segments = []
             repeated_self_segments = []
             for segment in continuation_segments:
-                if segment == account_holder_norm:
+                segment_party = _normalize_agrobank_party_name(segment)
+                if account_holder_party and segment_party == account_holder_party:
                     repeated_self_segments.append(segment)
                     continue
                 if any(pattern.fullmatch(segment) for pattern in AGROBANK_CONTINUATION_SKIP_PATTERNS):

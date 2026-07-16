@@ -2,6 +2,7 @@ import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
 from alliance import annotate_alliance_counterparties, extract_alliance_party_name
+from agro_bank import extract_agrobank_party_name
 from maybank import annotate_maybank_counterparties, extract_maybank_party_name
 from pdf_utils import _clean_candidate_name, extract_company_name
 from app import (
@@ -768,6 +769,77 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertIn("SHAHARUDDIN SAMS", names)
         self.assertEqual(ledger["extraction_stats"]["pattern_matched"], 2)
         self.assertEqual(ledger["extraction_stats"]["raw_fallback"], 0)
+
+    def test_agrobank_pipe_segments_prefer_non_own_company_counterparty(self):
+        account_holder = "INTEGRASI ERAT SDN BHD"
+        self.assertEqual(
+            extract_agrobank_party_name(
+                "18118595 DuitNow/Instant Dr | INTEGRASI ERAT SDN. BHD. | MK ENERALD CONSTRUCTION | RPP",
+                account_holder=account_holder,
+            ),
+            "MK ENERALD CONSTRUCTION",
+        )
+        self.assertEqual(
+            extract_agrobank_party_name(
+                "320509698 DuitNow/Instant Cr | MK ENERALD CONSTRUCTION | INTEGRASI ERAT SDN. BHD.",
+                account_holder=account_holder,
+            ),
+            "MK ENERALD CONSTRUCTION",
+        )
+
+    def test_agrobank_ledger_regroups_debit_and_credit_rows_by_non_own_party(self):
+        rows = [
+            {
+                "date": "2025-06-13",
+                "description": "18118595 DuitNow/Instant Dr | INTEGRASI ERAT SDN. BHD. | MK ENERALD CONSTRUCTION | RPP",
+                "party_name": "INTEGRASI ERAT SDN BHD",
+                "credit": 0.0,
+                "debit": 143700.0,
+                "balance": 42097.42,
+                "bank": "Agrobank",
+                "company_name": "INTEGRASI ERAT SDN BHD",
+            },
+            {
+                "date": "2025-06-13",
+                "description": "18118595 DuitNow/Instant Dr | INTEGRASI ERAT SDN. BHD. | MK ENERALD CONSTRUCTION | RPP",
+                "party_name": "INTEGRASI ERAT SDN BHD",
+                "credit": 0.0,
+                "debit": 0.5,
+                "balance": 42096.92,
+                "bank": "Agrobank",
+                "company_name": "INTEGRASI ERAT SDN BHD",
+            },
+            {
+                "date": "2025-06-13",
+                "description": "320509698 DuitNow/Instant Cr | MK ENERALD CONSTRUCTION | INTEGRASI ERAT SDN. BHD.",
+                "party_name": "MK ENERALD CONSTRUCTION",
+                "credit": 50000.0,
+                "debit": 0.0,
+                "balance": 92096.92,
+                "bank": "Agrobank",
+                "company_name": "INTEGRASI ERAT SDN BHD",
+            },
+            {
+                "date": "2025-06-14",
+                "description": "101639558 DuitNow/Instant Cr | MK ENERALD CONSTRUCTION | INTEGRASI ERAT SDN. BHD.",
+                "party_name": "MK ENERALD CONSTRUCTION",
+                "credit": 50000.0,
+                "debit": 0.0,
+                "balance": 142096.92,
+                "bank": "Agrobank",
+                "company_name": "INTEGRASI ERAT SDN BHD",
+            },
+        ]
+
+        ledger = build_track2_counterparty_ledger(rows)
+        self.assertEqual(len(ledger["counterparties"]), 1)
+        group = ledger["counterparties"][0]
+        self.assertEqual(group["counterparty_name"], "MK ENERALD CONSTRUCTION")
+        self.assertEqual(group["transaction_count"], 4)
+        self.assertEqual(group["credit_count"], 2)
+        self.assertEqual(group["debit_count"], 2)
+        self.assertEqual(group["total_credits"], 100000.0)
+        self.assertEqual(group["total_debits"], 143700.5)
 
     def test_own_related_list_groups_related_rows_by_confirmed_names(self):
         classified = [

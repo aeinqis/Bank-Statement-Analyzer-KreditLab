@@ -19,6 +19,11 @@ try:
 except Exception:  # pragma: no cover - rebound from app.py during normal use
     safe_float = float
 
+try:
+    from agro_bank import resolve_agrobank_party_name
+except Exception:  # pragma: no cover - Agrobank parser may be unavailable in isolated imports
+    resolve_agrobank_party_name = None
+
 
 def bind_app_globals(app_globals: dict) -> None:
     """Expose app.py helpers/constants that these extracted functions already use."""
@@ -510,19 +515,32 @@ def _resolve_transaction_counterparty_details(row: pd.Series) -> Tuple[str, bool
     Prefer counterparty values extracted by bank parsers and keep whether a
     parser/extractor supplied the name.
     """
-    for column in COUNTERPARTY_NAME_FIELDS:
-        if column in row:
-            counterparty = normalize_counterparty_value(row.get(column))
-            if counterparty:
-                return counterparty, True
-
+    bank = normalize_counterparty_value(row.get("bank"))
     description = row.get("description", "")
     try:
         if pd.isna(description):
             description = ""
     except Exception:
         pass
-    bank = normalize_counterparty_value(row.get("bank"))
+
+    if "AGRO" in bank and resolve_agrobank_party_name is not None:
+        company_name = row.get("company_name", "")
+        counterparty = normalize_counterparty_value(
+            resolve_agrobank_party_name(
+                description,
+                existing_party_name="" if normalize_counterparty_value(company_name) else row.get("party_name", ""),
+                account_holder=company_name,
+            )
+        )
+        if counterparty:
+            return counterparty, True
+
+    for column in COUNTERPARTY_NAME_FIELDS:
+        if column in row:
+            counterparty = normalize_counterparty_value(row.get(column))
+            if counterparty:
+                return counterparty, True
+
     if "CIMB" in bank:
         counterparty = normalize_counterparty_value(extract_cimb_party_name(description))
         if counterparty:
