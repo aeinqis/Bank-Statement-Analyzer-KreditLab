@@ -1,6 +1,7 @@
 import unittest
 
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
+from alliance import annotate_alliance_counterparties, extract_alliance_party_name
 from maybank import annotate_maybank_counterparties, extract_maybank_party_name
 from pdf_utils import _clean_candidate_name, extract_company_name
 from app import (
@@ -728,6 +729,44 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "EPF DPE")
         self.assertEqual(ledger["counterparties"][0]["transaction_count"], 1)
         self.assertEqual(ledger["extraction_stats"]["pattern_matched"], 1)
+        self.assertEqual(ledger["extraction_stats"]["raw_fallback"], 0)
+
+    def test_alliance_rows_keep_counterparty_fields_for_ledger(self):
+        self.assertEqual(
+            extract_alliance_party_name("CR ADVICE - IBG REF123 MEGA SUPPLIES SDN BHD"),
+            "MEGA SUPPLIES SDN BHD",
+        )
+
+        rows = [
+            {
+                "date": "2026-01-01",
+                "description": "CR ADVICE - IBG REF123 MEGA SUPPLIES SDN BHD",
+                "description_lines": ["CR ADVICE - IBG REF123 MEGA SUPPLIES SDN BHD"],
+                "credit": 1200.0,
+                "debit": 0.0,
+                "balance": 3200.0,
+                "bank": "Alliance Bank",
+            },
+            {
+                "date": "2026-01-02",
+                "description": "Instant Transfer 123456 SHAHARUDDIN SAMS",
+                "description_lines": ["Instant Transfer 123456 SHAHARUDDIN SAMS"],
+                "credit": 0.0,
+                "debit": 300.0,
+                "balance": 2900.0,
+                "bank": "Alliance Bank",
+            },
+        ]
+
+        annotate_alliance_counterparties(rows)
+        ledger = build_track2_counterparty_ledger(rows)
+
+        names = {row["counterparty_name"] for row in ledger["counterparties"]}
+        self.assertEqual(rows[0]["counterparty_name_raw"], "MEGA SUPPLIES SDN BHD")
+        self.assertEqual(rows[0]["party_name"], "MEGA SUPPLIES SDN BHD")
+        self.assertIn("MEGA SUPPLIES SDN BHD", names)
+        self.assertIn("SHAHARUDDIN SAMS", names)
+        self.assertEqual(ledger["extraction_stats"]["pattern_matched"], 2)
         self.assertEqual(ledger["extraction_stats"]["raw_fallback"], 0)
 
     def test_own_related_list_groups_related_rows_by_confirmed_names(self):

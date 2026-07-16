@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from core_utils import normalize_text, sanitize_transaction_description
+from party_utils import deduplicate_counterparty_names
 
 
 _TX_START_RE = re.compile(r"^(?P<d>\d{2})(?P<m>\d{2})(?P<y>\d{2})\s+(?P<rest>.+)$")
@@ -625,6 +626,35 @@ def extract_alliance_party_name(description: str, account_holder: str = "", desc
     return "UNKNOWN"
 
 
+def annotate_alliance_counterparties(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Attach Alliance counterparty aliases used by the shared ledger pipeline."""
+    raw_names = []
+    for row in rows or []:
+        raw = (
+            row.get("counterparty_name_raw")
+            or row.get("counterparty_name")
+            or row.get("party_name")
+            or extract_alliance_party_name(
+                row.get("description", ""),
+                account_holder=row.get("company_name", ""),
+                description_lines=row.get("description_lines"),
+            )
+            or "UNKNOWN"
+        )
+        raw = normalize_text(raw).upper() or "UNKNOWN"
+        row["counterparty_name_raw"] = raw
+        raw_names.append(raw)
+
+    clean_names = deduplicate_counterparty_names(raw_names)
+    for row, clean_name in zip(rows or [], clean_names):
+        clean_name = normalize_text(clean_name).upper() or "UNKNOWN"
+        row["counterparty_name_clean"] = clean_name
+        row["counterparty_name"] = clean_name
+        row["party_name"] = clean_name
+
+    return rows
+
+
 def parse_transactions_alliance(pdf, filename: str) -> List[Dict[str, Any]]:
     """
     Parse Alliance Bank statement into transaction dicts.
@@ -778,4 +808,4 @@ def parse_transactions_alliance(pdf, filename: str) -> List[Dict[str, Any]]:
             }
         )
 
-    return out
+    return annotate_alliance_counterparties(out)
