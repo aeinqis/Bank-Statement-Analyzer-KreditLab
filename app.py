@@ -943,14 +943,52 @@ def build_related_party_summary_rows_for_report(
     own_related,
     cp_rows: List[dict] | None = None,
     company_name: str = "",
+    manual_company_identity_override: bool = False,
+    company_account_no: str = "",
 ) -> List[dict]:
     """Return related-party totals for Excel/HTML exports using C03-C04 rows first."""
+    def _normalise_account(value) -> str:
+        return re.sub(r"\D+", "", str(value or ""))
+
+    manual_account_key = _normalise_account(company_account_no)
+    manual_own_party_active = bool(
+        manual_company_identity_override
+        and str(company_name or "").strip()
+        and manual_account_key
+    )
+
+    def _cp_row_has_manual_account(cp: dict) -> bool:
+        if not manual_own_party_active or not isinstance(cp, dict):
+            return False
+        account_keys = [
+            _normalise_account(value)
+            for value in (cp.get("account_no"), cp.get("account_number"), cp.get("company_account_no"))
+            if str(value or "").strip()
+        ]
+        txn_account_keys = [
+            _normalise_account(value)
+            for txn in cp.get("transactions", []) or []
+            if isinstance(txn, dict)
+            for value in (txn.get("account_no"), txn.get("account_number"), txn.get("company_account_no"))
+            if str(value or "").strip()
+        ]
+        if account_keys or txn_account_keys:
+            return manual_account_key in account_keys or manual_account_key in txn_account_keys
+        return True
+
+    fallback_cp_rows = [
+        cp for cp in (cp_rows or [])
+        if not _cp_row_has_manual_account(cp)
+    ]
+
     groups = [
         group for group in build_own_related_party_groups_for_report(
             own_related,
             related_parties=related_parties,
             company_name=company_name,
             counterparty_rows=cp_rows,
+            manual_company_identity_override=manual_company_identity_override,
+            company_account_no=company_account_no,
         )
         if group.get("badge_type") == "RP"
     ]
@@ -984,7 +1022,7 @@ def build_related_party_summary_rows_for_report(
         fallback = (
             {}
             if group_transactions
-            else _merge_counterparty_rows_for_related_party(cp_rows or [], name)
+            else _merge_counterparty_rows_for_related_party(fallback_cp_rows, name)
         )
         use_group_totals = bool(group) and (
             bool(group_transactions)

@@ -978,6 +978,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         related_parties=related_parties,
         company_name=company_name,
         counterparty_rows=cp_sorted,
+        manual_company_identity_override=bool(report_info.get("manual_company_identity_override")),
+        company_account_no=report_info.get("manual_company_account_no") or report_info.get("company_account_no") or "",
     )
     own_party_group = next(
         (group for group in own_related_groups_for_counterparty if group.get("badge_type") == "OP"),
@@ -1065,6 +1067,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         own_related,
         cp_rows=cp_sorted,
         company_name=company_name,
+        manual_company_identity_override=bool(report_info.get("manual_company_identity_override")),
+        company_account_no=report_info.get("manual_company_account_no") or report_info.get("company_account_no") or "",
     )
 
     if related_party_rows:

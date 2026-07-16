@@ -1038,6 +1038,8 @@ def generate_interactive_html(data):
         related_parties=related_parties,
         company_name=company_name,
         counterparty_rows=report_counterparty_rows,
+        manual_company_identity_override=bool(r.get('manual_company_identity_override')),
+        company_account_no=r.get('manual_company_account_no') or r.get('company_account_no') or '',
     )
     if rp_group_list:
         rp_counts = {
@@ -2921,6 +2923,8 @@ def build_own_related_party_groups_for_report(
     related_parties=None,
     company_name: str = "",
     counterparty_rows: List[dict] | None = None,
+    manual_company_identity_override: bool = False,
+    company_account_no: str = "",
 ) -> List[dict]:
     """Group C01-C04 rows the same way the HTML Own/RP report presents them."""
     if isinstance(own_related, list):
@@ -2938,8 +2942,33 @@ def build_own_related_party_groups_for_report(
     ]
     has_confirmed_related_parties = bool(related_entries)
     own_party_name = _own_party_group_name_for_report(txns, company_name)
+    manual_own_party_active = bool(
+        manual_company_identity_override
+        and str(company_name or "").strip()
+        and str(company_account_no or "").strip()
+    )
+
+    def _normalise_account(value) -> str:
+        return re.sub(r"\D+", "", str(value or ""))
+
+    manual_account_key = _normalise_account(company_account_no)
+
+    def _txn_matches_manual_own_account(txn: dict) -> bool:
+        if not manual_own_party_active or not isinstance(txn, dict):
+            return False
+        account_values = (
+            txn.get("account_no"),
+            txn.get("account_number"),
+            txn.get("company_account_no"),
+        )
+        account_keys = [_normalise_account(value) for value in account_values if str(value or "").strip()]
+        if manual_account_key and account_keys:
+            return manual_account_key in account_keys
+        return not account_keys
 
     def _txn_matches_own_party(txn: dict, raw_party_name: str) -> bool:
+        if _txn_matches_manual_own_account(txn):
+            return True
         for value in (
             raw_party_name,
             txn.get("counterparty_name"),
@@ -3029,24 +3058,67 @@ def build_own_related_party_groups_for_report(
         )
 
     if counterparty_rows:
+        def _counterparty_row_has_manual_own_account(cp: dict) -> bool:
+            if not manual_own_party_active or not isinstance(cp, dict):
+                return False
+            row_account_values = (
+                cp.get("account_no"),
+                cp.get("account_number"),
+                cp.get("company_account_no"),
+            )
+            row_account_keys = [
+                _normalise_account(value)
+                for value in row_account_values
+                if str(value or "").strip()
+            ]
+            if manual_account_key and row_account_keys and manual_account_key in row_account_keys:
+                return True
+
+            txns_for_row = [txn for txn in cp.get("transactions", []) or [] if isinstance(txn, dict)]
+            txn_account_keys = [
+                _normalise_account(value)
+                for txn in txns_for_row
+                for value in (txn.get("account_no"), txn.get("account_number"), txn.get("company_account_no"))
+                if str(value or "").strip()
+            ]
+            if manual_account_key and txn_account_keys:
+                return manual_account_key in txn_account_keys
+            return not row_account_keys and not txn_account_keys
+
         def _replace_group_from_counterparty_rows(group: dict) -> None:
             party_name = str(group.get("party_name") or "").strip()
             if not party_name:
                 return
-            matches = [
-                cp for cp in counterparty_rows
-                if isinstance(cp, dict) and _counterparty_row_matches_report_party_name(cp, party_name)
-            ]
+            badge_type = group.get("badge_type")
+            if manual_own_party_active and badge_type == "OP":
+                matches = [
+                    cp for cp in counterparty_rows
+                    if isinstance(cp, dict) and _counterparty_row_has_manual_own_account(cp)
+                ]
+            else:
+                matches = [
+                    cp for cp in counterparty_rows
+                    if (
+                        isinstance(cp, dict)
+                        and _counterparty_row_matches_report_party_name(cp, party_name)
+                        and not (
+                            manual_own_party_active
+                            and badge_type == "RP"
+                            and _counterparty_row_has_manual_own_account(cp)
+                        )
+                    )
+                ]
             if not matches:
                 return
 
-            badge_type = group.get("badge_type")
             party_type = "OWN" if badge_type == "OP" else "RELATED"
             ledger_display_name = (
                 str(matches[0].get("counterparty_name") or matches[0].get("counterparty") or party_name).strip()
                 or party_name
             )
-            display_name = ledger_display_name if badge_type == "OP" else party_name
+            display_name = party_name if manual_own_party_active and badge_type == "OP" else (
+                ledger_display_name if badge_type == "OP" else party_name
+            )
             transactions = []
             credits = debits = 0.0
             credit_count = debit_count = 0

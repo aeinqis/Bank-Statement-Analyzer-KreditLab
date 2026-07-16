@@ -1256,6 +1256,106 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(own_group["debits"], 872_136.0)
         self.assertEqual(len(own_group["transactions"]), 2)
 
+    def test_manual_company_and_account_override_moves_account_rows_to_own_party(self):
+        cp_rows = [
+            {
+                "counterparty_name": "SUPPLIER SDN BHD",
+                "total_credits": 500.0,
+                "total_debits": 100.0,
+                "credit_count": 1,
+                "debit_count": 1,
+                "transaction_count": 2,
+                "transactions": [
+                    {
+                        "date": "2025-09-01",
+                        "description": "IBG CREDIT SUPPLIER SDN BHD",
+                        "amount": 500.0,
+                        "type": "CREDIT",
+                        "account_no": "123-456-789",
+                    },
+                    {
+                        "date": "2025-09-02",
+                        "description": "IBG DEBIT SUPPLIER SDN BHD",
+                        "amount": 100.0,
+                        "type": "DEBIT",
+                        "account_no": "123456789",
+                    },
+                ],
+            },
+            {
+                "counterparty_name": "OTHER ACCOUNT PARTY",
+                "total_credits": 0.0,
+                "total_debits": 75.0,
+                "credit_count": 0,
+                "debit_count": 1,
+                "transaction_count": 1,
+                "transactions": [
+                    {
+                        "date": "2025-09-03",
+                        "description": "IBG DEBIT OTHER ACCOUNT PARTY",
+                        "amount": 75.0,
+                        "type": "DEBIT",
+                        "account_no": "999999999",
+                    },
+                ],
+            },
+        ]
+
+        groups = build_own_related_party_groups_for_report(
+            {"transactions": []},
+            related_parties=[{"name": "SUPPLIER SDN BHD", "relationship": "Affiliate"}],
+            company_name="MANUAL COMPANY SDN BHD",
+            counterparty_rows=cp_rows,
+            manual_company_identity_override=True,
+            company_account_no="123456789",
+        )
+
+        own_group = next(group for group in groups if group["badge_type"] == "OP")
+        supplier_group = next(group for group in groups if group["party_name"] == "SUPPLIER SDN BHD")
+        self.assertEqual(own_group["party_name"], "MANUAL COMPANY")
+        self.assertEqual(own_group["credit_count"], 1)
+        self.assertEqual(own_group["debit_count"], 1)
+        self.assertEqual(own_group["transaction_count"], 2)
+        self.assertEqual({txn["party_type"] for txn in own_group["transactions"]}, {"OWN"})
+        self.assertEqual(supplier_group["badge_type"], "RP")
+        self.assertEqual(supplier_group["transaction_count"], 0)
+
+    def test_related_party_summary_excludes_manual_own_account_rows(self):
+        from app import build_related_party_summary_rows_for_report
+
+        cp_rows = [
+            {
+                "counterparty_name": "SUPPLIER SDN BHD",
+                "total_credits": 500.0,
+                "total_debits": 100.0,
+                "credit_count": 1,
+                "debit_count": 1,
+                "transaction_count": 2,
+                "transactions": [
+                    {
+                        "date": "2025-09-01",
+                        "description": "IBG CREDIT SUPPLIER SDN BHD",
+                        "amount": 500.0,
+                        "type": "CREDIT",
+                        "account_no": "123456789",
+                    }
+                ],
+            }
+        ]
+
+        rows = build_related_party_summary_rows_for_report(
+            [{"name": "SUPPLIER SDN BHD", "relationship": "Affiliate"}],
+            {"transactions": []},
+            cp_rows=cp_rows,
+            company_name="MANUAL COMPANY SDN BHD",
+            manual_company_identity_override=True,
+            company_account_no="123456789",
+        )
+
+        self.assertEqual(rows[0]["name"], "SUPPLIER SDN BHD")
+        self.assertEqual(rows[0]["transaction_count"], 0)
+        self.assertEqual(rows[0]["total_credits"], 0.0)
+
     def test_excel_counterparty_own_party_count_matches_cp_ledger(self):
         import openpyxl
 

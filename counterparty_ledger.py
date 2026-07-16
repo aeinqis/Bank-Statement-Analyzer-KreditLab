@@ -98,6 +98,10 @@ def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
             "counterparty_name_clean": clean_name,
             "party_name": clean_name,
         }
+        for meta_key in ("company_name", "account_no", "account_number"):
+            meta_value = _clean_optional_text(tx.get(meta_key))
+            if meta_value:
+                entry[meta_key] = meta_value
         if raw_counterparty:
             entry["counterparty_name_raw"] = raw_counterparty
             entry["raw_counterparty"] = raw_counterparty

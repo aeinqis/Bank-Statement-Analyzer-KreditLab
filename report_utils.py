@@ -28,6 +28,17 @@ def bind_app_globals(app_globals: dict) -> None:
         globals()[name] = value
 
 
+def _manual_company_identity_override_info() -> dict:
+    company_name = str(st.session_state.get("company_name_override") or "").strip()
+    account_no = str(st.session_state.get("company_account_no_override") or "").strip()
+    is_manual_identity = bool(company_name and account_no)
+    return {
+        "manual_company_identity_override": is_manual_identity,
+        "manual_company_name": company_name if is_manual_identity else "",
+        "manual_company_account_no": account_no if is_manual_identity else "",
+    }
+
+
 def build_shared_report_data(
     transactions: List[dict],
     monthly_summary: List[dict],
@@ -50,6 +61,7 @@ def build_shared_report_data(
             override = (st.session_state.get("company_name_override") or "").strip()
             if override and override not in company_names:
                 company_names.insert(0, override)
+            manual_identity = _manual_company_identity_override_info()
 
             determinations = st.session_state.get("account_type_determinations") or []
             account_meta = account_meta_from_determinations(determinations)
@@ -68,6 +80,7 @@ def build_shared_report_data(
                 account_meta=account_meta or None,
             )
             data.setdefault("counterparty_ledger", cp_ledger)
+            data.setdefault("report_info", {}).update(manual_identity)
             
             # Build top_parties from the same aligned CP ledger rows rendered in reports.
             # Get company name from override or first transaction
@@ -112,6 +125,7 @@ def build_shared_report_data(
         threshold,
     )
     report_data["pdf_integrity"] = pdf_integrity
+    report_data.setdefault("report_info", {}).update(_manual_company_identity_override_info())
     
     # Build top_parties from the aligned CP ledger for legacy fallback too
     cp_ledger = build_track2_counterparty_ledger(transactions)
@@ -171,6 +185,7 @@ def build_report_data_from_analysis(
 
     adapted_data = adapt_to_v6(data)
     adapted_data['transactions'] = transactions
+    adapted_data.setdefault('report_info', {}).update(_manual_company_identity_override_info())
     
     # Build top_parties from the same aligned CP ledger rows used by reports.
     cp_ledger = transaction_analysis.get('counterparty_ledger', {}) or build_track2_counterparty_ledger(transactions)
@@ -305,6 +320,7 @@ def normalize_report_data_for_export(data: dict) -> dict:
     normalized.setdefault("observations", {"positive": [], "concerns": []})
     normalized.setdefault("counterparty_ledger", {})
     normalized.setdefault("parsing_metadata", {})
+    normalized.setdefault("report_info", {})
     # Ensure top_parties remains from the aligned CP ledger.
     cp_ledger = normalized.get("counterparty_ledger", {})
     company_name = normalized.get("report_info", {}).get("company_name", "")
@@ -714,6 +730,7 @@ def _finalize_shared_report_data(
         data = {}
 
     data.setdefault("transactions", transactions or [])
+    data.setdefault("report_info", {}).update(_manual_company_identity_override_info())
     data.setdefault("classification_config", {})
     data["classification_config"]["large_transaction_threshold"] = threshold
     data["classification_config"]["large_credit_threshold"] = threshold
