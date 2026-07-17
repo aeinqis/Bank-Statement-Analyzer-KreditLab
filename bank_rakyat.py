@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from datetime import datetime
+from io import BytesIO
 from typing import Any
 
 import pdfplumber
@@ -408,11 +410,19 @@ def extract_transactions(
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
+def _open_bank_rakyat_pdf(pdf_input):
+    if hasattr(pdf_input, "pages"):
+        return nullcontext(pdf_input)
+    if isinstance(pdf_input, (bytes, bytearray)):
+        return pdfplumber.open(BytesIO(pdf_input))
+    return pdfplumber.open(pdf_input)
+
+
 def parse_bank_rakyat(pdf_path, source_filename=""):
     all_txns: list[dict] = []
     summary: dict = {}
 
-    with pdfplumber.open(pdf_path) as pdf:
+    with _open_bank_rakyat_pdf(pdf_path) as pdf:
         for page_no, page in enumerate(pdf.pages, start=1):
             words = page.extract_words(
                 keep_blank_chars=True,
