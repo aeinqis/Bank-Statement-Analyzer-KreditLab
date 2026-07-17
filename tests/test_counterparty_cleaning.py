@@ -1547,6 +1547,48 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(rows[0]["counterparty_name"], "UPELL CORPORATION SDN BHD")
         self.assertEqual(rows[0]["transactions"][0]["party_name"], "UPELL CORPORATION SDN BHD")
 
+    def test_report_does_not_move_mixed_description_counterparty_to_own_party(self):
+        cp_ledger = {
+            "counterparties": [
+                {
+                    "counterparty_name": "SIN CHYE HUAT SDN BHD",
+                    "total_credits": 44_508.0,
+                    "total_debits": 0.0,
+                    "credit_count": 3,
+                    "debit_count": 0,
+                    "transaction_count": 3,
+                    "transactions": [
+                        {
+                            "date": "2024-11-07",
+                            "description": "Fund Trf EB SIN CHYE HUAT SDN BH UPELL CORPORATION SCHSB",
+                            "amount": 16_120.0,
+                            "type": "CREDIT",
+                            "counterparty_name_raw": "SIN CHYE HUAT SDN BHD",
+                        },
+                        {
+                            "date": "2024-12-11",
+                            "description": "Fund Trf EB SIN CHYE HUAT SDN BH UPELL CORPORATION SB SCHSB",
+                            "amount": 10_050.0,
+                            "type": "CREDIT",
+                            "counterparty_name_raw": "SIN CHYE HUAT SDN BHD",
+                        },
+                        {
+                            "date": "2025-02-12",
+                            "description": "Fund Trf EB SIN CHYE HUAT SDN BH UPELL CORPORATION SD SCHSB",
+                            "amount": 18_338.0,
+                            "type": "CREDIT",
+                            "counterparty_name_raw": "SIN CHYE HUAT SDN BHD",
+                        },
+                    ],
+                }
+            ]
+        }
+
+        rows = build_report_counterparty_ledger_rows(cp_ledger, company_name="UPELL CORPORATION")
+
+        self.assertEqual([row["counterparty_name"] for row in rows], ["SIN CHYE HUAT SDN BHD"])
+        self.assertEqual(rows[0]["transactions"][0]["party_name"], "SIN CHYE HUAT SDN BHD")
+
     def test_manual_company_and_account_override_moves_account_rows_to_own_party(self):
         cp_rows = [
             {

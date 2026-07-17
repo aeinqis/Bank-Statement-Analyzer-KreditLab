@@ -707,7 +707,7 @@ def build_report_counterparty_ledger_rows(
     for cp in rows:
         matches = [
             target for target in targets
-            if _counterparty_row_matches_report_party(cp, target["name"])
+            if _counterparty_row_matches_alignment_target(cp, target)
         ]
         if matches:
             target = max(matches, key=lambda item: (len(_report_party_core_tokens(item["name"])), len(item["name"])))
@@ -1014,6 +1014,13 @@ def _prefer_own_party_counterparty_display_name(cp: dict, target_name: str) -> s
         candidates,
         key=lambda name: (" SDN BHD" in f" {name.upper()} ", len(name), name.casefold()),
     )
+
+
+def _counterparty_row_matches_alignment_target(cp: dict, target: dict) -> bool:
+    name = target.get("name", "") if isinstance(target, dict) else ""
+    if target.get("is_own_party"):
+        return _counterparty_row_matches_report_party_name(cp, name)
+    return _counterparty_row_matches_report_party(cp, name)
 
 
 def _counterparty_row_matches_report_party_name(cp: dict, party_name: str) -> bool:
