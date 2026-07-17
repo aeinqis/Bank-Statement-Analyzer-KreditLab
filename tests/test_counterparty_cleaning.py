@@ -83,6 +83,24 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(clean_counterparty_name("ALPHA SD TOKEN PAYMENT"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA SDN BHD RENTAL JUL"), "ALPHA SDN BHD")
 
+    def test_account_marker_slash_does_not_become_counterparty_initials(self):
+        self.assertEqual(
+            clean_counterparty_name("A/C CAC ENGINEERING SDN BHD"),
+            "CAC ENGINEERING SDN BHD",
+        )
+        self.assertEqual(
+            clean_counterparty_name("may25 a/c MUN HEAN (MALAYSIA) may25 a/c MUN HEAN (MALAYSIA) SDN BERHAD"),
+            "MUN HEAN MALAYSIA MUN HEAN MALAYSIA SDN BHD",
+        )
+        self.assertEqual(
+            clean_counterparty_name("A/C AC EVERCOM ENGINEERING"),
+            "AC EVERCOM ENGINEERING",
+        )
+        self.assertEqual(
+            clean_counterparty_name("AC EVERCOM ENGINEERING"),
+            "AC EVERCOM ENGINEERING",
+        )
+
     def test_statement_company_name_truncates_after_sdn_bhd(self):
         self.assertEqual(
             _clean_candidate_name("DMC TRAVEL AND TOURS SDN. BHD. 結單日期 : 31/08/25"),

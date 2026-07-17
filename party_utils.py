@@ -137,6 +137,7 @@ COUNTERPARTY_DATE_RE = re.compile(
     r"\b(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b"
 )
 COUNTERPARTY_REF_TOKEN_RE = re.compile(r"^(?:INV|REF|NO|ACC|ACCOUNT)?\d{2,}[A-Z0-9]*$")
+COUNTERPARTY_ACCOUNT_MARKER_RE = re.compile(r"\bA\s*/\s*C\b", re.I)
 COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
 COUNTERPARTY_SDN_MARKER_TOKENS = {"SD", "SDN"}
 COUNTERPARTY_TRANSFER_RAIL_PREFIX_RE = re.compile(
@@ -580,6 +581,7 @@ def clean_counterparty_name(raw_name: Any) -> str:
 
     raw = COUNTERPARTY_DATE_RE.sub(" ", raw)
     raw = raw.replace(".", " ")
+    raw = COUNTERPARTY_ACCOUNT_MARKER_RE.sub(" ", raw)
     raw = COUNTERPARTY_ALLOWED_PUNCT_RE.sub(" ", raw)
     raw = normalize_company_suffix_core(raw)
     raw = COUNTERPARTY_TRANSFER_RAIL_PREFIX_RE.sub(" ", raw)
