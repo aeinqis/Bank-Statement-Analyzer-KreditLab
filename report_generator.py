@@ -2835,6 +2835,7 @@ def prepare_top_parties_for_report(top_parties: dict, limit: int = 10, company_n
             _is_report_unknown_counterparty(name)
             or _is_report_special_counterparty_bucket(name)
             or _is_ghost_party_bucket(name)
+            or _is_bill_or_charge_top_party(name)
         )
 
     payers_suppressed = [p for p in payers_all if _top_party_is_suppressed(p)]
@@ -3228,6 +3229,8 @@ def _top_parties_from_counterparty_rows(counterparty_rows: List[dict], limit: Op
             continue
         if _is_ghost_party_bucket(name):
             continue
+        if _is_bill_or_charge_top_party(name):
+            continue
 
         transactions = cp.get("transactions") or []
         related_raw = cp.get("is_related_party", cp.get("related_party", False))
@@ -3317,6 +3320,13 @@ def _top_parties_from_counterparty_rows(counterparty_rows: List[dict], limit: Op
         "top_payers": [{**party, "rank": idx} for idx, party in enumerate(top_payers, 1)],
         "top_payees": [{**party, "rank": idx} for idx, party in enumerate(top_payees, 1)],
     }
+
+
+def _is_bill_or_charge_top_party(name) -> bool:
+    """Suppress bill/charge parser buckets from Top Parties only."""
+    normalised = re.sub(r"[^A-Z0-9]+", " ", str(name or "").upper())
+    tokens = {token for token in normalised.split() if token}
+    return bool(tokens & {"BILL", "BILLS", "CHARGE", "CHARGES"})
 
 
 def normalize_observations(obs):

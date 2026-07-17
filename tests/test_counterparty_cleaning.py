@@ -1005,6 +1005,24 @@ class CounterpartyCleaningTests(unittest.TestCase):
                     "transactions": [],
                 },
                 {
+                    "counterparty_name": "BILL PAYMENT",
+                    "transaction_count": 1,
+                    "credit_count": 1,
+                    "debit_count": 0,
+                    "total_credits": 777777.0,
+                    "total_debits": 0.0,
+                    "transactions": [],
+                },
+                {
+                    "counterparty_name": "MONTHLY CHARGE",
+                    "transaction_count": 1,
+                    "credit_count": 0,
+                    "debit_count": 1,
+                    "total_credits": 0.0,
+                    "total_debits": 666666.0,
+                    "transactions": [],
+                },
+                {
                     "counterparty_name": "ALPHA CUSTOMER",
                     "transaction_count": 1,
                     "credit_count": 1,
@@ -1035,6 +1053,31 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual([p["party_name"] for p in party_view["payers"]], ["ALPHA CUSTOMER"])
         self.assertEqual([p["party_name"] for p in party_view["payees"]], ["SHAHARUDDIN SAMS"])
         self.assertTrue(party_view["payees"][0]["is_related_party"])
+
+    def test_prepare_top_parties_excludes_bill_and_charge_cached_rows(self):
+        top_parties = {
+            "top_payers": [
+                {"party_name": "UTILITY BILL", "total_amount": 999999.0, "transaction_count": 1},
+                {"party_name": "REAL CUSTOMER", "total_amount": 1000.0, "transaction_count": 1},
+                {"party_name": "BILLION TRADING", "total_amount": 900.0, "transaction_count": 1},
+            ],
+            "top_payees": [
+                {"party_name": "BANK CHARGE", "total_amount": 888888.0, "transaction_count": 1},
+                {"party_name": "REAL SUPPLIER", "total_amount": 500.0, "transaction_count": 1},
+                {"party_name": "CHARGEPLUS SDN BHD", "total_amount": 400.0, "transaction_count": 1},
+            ],
+        }
+
+        party_view = prepare_top_parties_for_report(top_parties, limit=10)
+
+        self.assertEqual(
+            [p["party_name"] for p in party_view["payers"]],
+            ["REAL CUSTOMER", "BILLION TRADING"],
+        )
+        self.assertEqual(
+            [p["party_name"] for p in party_view["payees"]],
+            ["REAL SUPPLIER", "CHARGEPLUS SDN BHD"],
+        )
 
     def test_html_counterparty_summary_cards_use_unknown_as_raw_fallback(self):
         counterparty_rows = [
