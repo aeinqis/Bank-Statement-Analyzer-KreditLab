@@ -712,6 +712,8 @@ def build_report_counterparty_ledger_rows(
         if matches:
             target = max(matches, key=lambda item: (len(_report_party_core_tokens(item["name"])), len(item["name"])))
             display_name = target["name"]
+            if target.get("is_own_party"):
+                display_name = _prefer_own_party_counterparty_display_name(cp, display_name)
             is_related_party = bool(target.get("is_related_party"))
         else:
             display_name = str(cp.get("counterparty_name") or "UNKNOWN")
@@ -882,7 +884,7 @@ def _report_counterparty_alignment_targets(
     targets: List[dict] = []
     seen = set()
 
-    def add_target(name: str, is_related_party: bool = False) -> None:
+    def add_target(name: str, is_related_party: bool = False, is_own_party: bool = False) -> None:
         display_name = re.sub(r"\s+", " ", str(name or "").strip())
         key = display_name.upper()
         if (
@@ -893,7 +895,13 @@ def _report_counterparty_alignment_targets(
             or len(_report_party_core_tokens(display_name)) < 2
         ):
             return
-        targets.append({"name": display_name, "is_related_party": is_related_party})
+        targets.append(
+            {
+                "name": display_name,
+                "is_related_party": is_related_party,
+                "is_own_party": is_own_party,
+            }
+        )
         seen.add(key)
 
     for group in build_own_related_party_groups_for_report(
@@ -904,12 +912,108 @@ def _report_counterparty_alignment_targets(
         add_target(
             group.get("party_name", ""),
             is_related_party=group.get("badge_type") == "RP",
+            is_own_party=group.get("badge_type") == "OP",
         )
 
     for party in related_parties or []:
         add_target(_report_party_display_name(party), is_related_party=True)
 
     return targets
+
+
+def _report_name_has_legal_suffix(name: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:SDN\s+BHD|SDN\s+BH|SDN\s+B|BHD|BERHAD)\.?\s*$",
+            str(name or "").strip(),
+            flags=re.I,
+        )
+    )
+
+
+def _report_name_without_legal_suffix(name: str) -> str:
+    stripped = re.sub(
+        r"\s+(?:SDN\s+BHD|SDN\s+BH|SDN\s+B|BHD|BERHAD)\.?\s*$",
+        "",
+        str(name or "").strip(),
+        flags=re.I,
+    )
+    return re.sub(r"\s+", " ", stripped).strip()
+
+
+def _report_legal_suffix_from_text(base_name: str, source_text: str) -> str:
+    base = _report_name_without_legal_suffix(base_name)
+    if not base:
+        return ""
+    base_pattern = r"\s+".join(re.escape(token) for token in re.findall(r"[A-Z0-9]+", base.upper()))
+    if not base_pattern:
+        return ""
+    match = re.search(
+        rf"\b{base_pattern}\s+(?P<suffix>SDN\.?\s*(?:BHD|BH|B)\.?|BHD|BERHAD)\b",
+        str(source_text or ""),
+        flags=re.I,
+    )
+    if not match:
+        return ""
+    suffix = re.sub(r"[^A-Z0-9]+", " ", match.group("suffix").upper()).strip()
+    if suffix.startswith("SDN"):
+        return "SDN BHD"
+    if suffix == "BERHAD":
+        return "BERHAD"
+    if suffix == "BHD":
+        return "BHD"
+    return ""
+
+
+def _own_party_counterparty_display_sources(cp: dict) -> List[str]:
+    sources = [
+        cp.get("counterparty_name"),
+        cp.get("counterparty"),
+    ]
+    raw_names = cp.get("raw_names", [])
+    if isinstance(raw_names, (list, tuple, set)):
+        sources.extend(raw_names)
+    elif raw_names:
+        sources.append(raw_names)
+
+    for txn in cp.get("transactions", []) or []:
+        if not isinstance(txn, dict):
+            continue
+        sources.extend(
+            [
+                txn.get("counterparty_name"),
+                txn.get("counterparty_name_clean"),
+                txn.get("counterparty_name_raw"),
+                txn.get("raw_counterparty"),
+                txn.get("party_name"),
+                txn.get("description"),
+            ]
+        )
+    return [str(source) for source in sources if source]
+
+
+def _prefer_own_party_counterparty_display_name(cp: dict, target_name: str) -> str:
+    target = re.sub(r"\s+", " ", str(target_name or "").strip())
+    if not target or _report_name_has_legal_suffix(target):
+        return target
+
+    candidates = []
+    base = _report_name_without_legal_suffix(target)
+    for source in _own_party_counterparty_display_sources(cp):
+        suffix = _report_legal_suffix_from_text(base, source)
+        if not suffix:
+            continue
+        candidate = _canonical_report_counterparty_display_name(f"{base} {suffix}")
+        if candidate and _report_party_names_equivalent(candidate, target):
+            candidates.append(candidate)
+
+    if not candidates:
+        return target
+
+    return max(
+        candidates,
+        key=lambda name: (" SDN BHD" in f" {name.upper()} ", len(name), name.casefold()),
+    )
 
 
 def _counterparty_row_matches_report_party_name(cp: dict, party_name: str) -> bool:

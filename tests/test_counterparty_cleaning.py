@@ -1512,6 +1512,41 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(own_group["debits"], 872_136.0)
         self.assertEqual(len(own_group["transactions"]), 2)
 
+    def test_report_own_party_keeps_sdn_bhd_from_ledger_source(self):
+        cp_ledger = {
+            "counterparties": [
+                {
+                    "counterparty_name": "UPELL CORPORATION SDN BHD",
+                    "total_credits": 302_000.0,
+                    "total_debits": 0.0,
+                    "credit_count": 2,
+                    "debit_count": 0,
+                    "transaction_count": 2,
+                    "transactions": [
+                        {
+                            "date": "2025-01-13",
+                            "description": "DuitNow/Instant Trf PAYMENT PBB UPELL CORPORATION SDN BHD PBB UPELL CORPORATION SDN BHD",
+                            "amount": 152_000.0,
+                            "type": "CREDIT",
+                            "counterparty_name_raw": "UPELL CORPORATION SDN BHD",
+                        },
+                        {
+                            "date": "2025-01-20",
+                            "description": "DuitNow/Instant Trf PAYMENT PBB UPELL CORPORATION SDN BHD PBB UPELL CORPORATION SDN BHD",
+                            "amount": 150_000.0,
+                            "type": "CREDIT",
+                            "counterparty_name_raw": "UPELL CORPORATION SDN BHD",
+                        },
+                    ],
+                }
+            ]
+        }
+
+        rows = build_report_counterparty_ledger_rows(cp_ledger, company_name="UPELL CORPORATION")
+
+        self.assertEqual(rows[0]["counterparty_name"], "UPELL CORPORATION SDN BHD")
+        self.assertEqual(rows[0]["transactions"][0]["party_name"], "UPELL CORPORATION SDN BHD")
+
     def test_manual_company_and_account_override_moves_account_rows_to_own_party(self):
         cp_rows = [
             {
