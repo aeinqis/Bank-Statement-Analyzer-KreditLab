@@ -770,6 +770,108 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(ledger["extraction_stats"]["pattern_matched"], 2)
         self.assertEqual(ledger["extraction_stats"]["raw_fallback"], 0)
 
+    def test_alliance_bestlite_rows_split_mixed_counterparties(self):
+        self.assertEqual(
+            extract_alliance_party_name(
+                "IB2G FND TRF CA - CA AOBFTR03092025011749 PV-25260 BESTLITE ELECTRICAL PEARLMATICS SDN BHD",
+                account_holder="BESTLITE ELECTRICAL",
+            ),
+            "PEARLMATICS SDN BHD",
+        )
+        self.assertEqual(
+            extract_alliance_party_name(
+                "DuitNow CR Trf CA RPP250912234789219 bestlite electrical FCM BUILDERS SDN BHD bestlite electrical sdn bhd FCM BUILDERS SDN BHD",
+                account_holder="BESTLITE ELECTRICAL",
+            ),
+            "FCM BUILDERS SDN BHD",
+        )
+        self.assertEqual(
+            extract_alliance_party_name(
+                "IB2G FND TRF CA - CA AOBFTR12092025035862 BESTLITE-JUN'25-JUL' SIM LIM TRADING BESTLITE ELECTRICAL",
+                account_holder="BESTLITE ELECTRICAL",
+            ),
+            "SIM LIM TRADING",
+        )
+
+    def test_alliance_bestlite_annotation_infers_sdn_bhd_holder(self):
+        rows = [
+            {
+                "date": "2025-09-02",
+                "description": "DuitNow CR Trf CA RPP250902232658103 FUND TRF UOB TO AB BESTLITE ELECTRICAL FUND TRF UOB TO AB BESTLITE ELECTRICAL SDN. BHD.",
+                "description_lines": [
+                    "DuitNow CR Trf CA RPP250902232658103 FUND TRF UOB TO AB BESTLITE ELECTRICAL",
+                    "FUND TRF UOB TO AB BESTLITE ELECTRICAL SDN. BHD.",
+                ],
+                "credit": 234000.0,
+                "debit": 0.0,
+                "balance": 1012033.98,
+                "bank": "Alliance Bank",
+            },
+            {
+                "date": "2025-09-03",
+                "description": "IB2G FND TRF CA - CA AOBFTR03092025011749 PV-25260 BESTLITE ELECTRICAL PEARLMATICS SDN BHD",
+                "description_lines": [
+                    "IB2G FND TRF CA - CA AOBFTR03092025011749",
+                    "PV-25260 BESTLITE ELECTRICAL PEARLMATICS SDN BHD",
+                ],
+                "credit": 5000.0,
+                "debit": 0.0,
+                "balance": 1017033.98,
+                "bank": "Alliance Bank",
+            },
+            {
+                "date": "2025-09-12",
+                "description": "IB2G FND TRF CA - CA AOBFTR12092025035862 BESTLITE-JUN'25-JUL' SIM LIM TRADING BESTLITE ELECTRICAL",
+                "description_lines": [
+                    "IB2G FND TRF CA - CA AOBFTR12092025035862",
+                    "BESTLITE-JUN'25-JUL' SIM LIM TRADING BESTLITE ELECTRICAL",
+                ],
+                "credit": 7000.0,
+                "debit": 0.0,
+                "balance": 1024033.98,
+                "bank": "Alliance Bank",
+            },
+        ]
+
+        annotate_alliance_counterparties(rows)
+        names = {row["party_name"] for row in rows}
+
+        self.assertIn("BESTLITE ELECTRICAL SDN BHD", names)
+        self.assertIn("PEARLMATICS SDN BHD", names)
+        self.assertIn("SIM LIM TRADING", names)
+
+    def test_alliance_ledger_reresolves_with_manual_company_name(self):
+        rows = [
+            {
+                "date": "2025-09-03",
+                "description": "IB2G FND TRF CA - CA AOBFTR03092025011749 PV-25260 BESTLITE ELECTRICAL PEARLMATICS SDN BHD",
+                "party_name": "BESTLITE ELECTRICAL PEARLMATICS SDN BHD",
+                "credit": 5000.0,
+                "debit": 0.0,
+                "balance": 1017033.98,
+                "bank": "Alliance Bank",
+                "company_name": "BESTLITE ELECTRICAL",
+            },
+            {
+                "date": "2025-09-12",
+                "description": "DuitNow CR Trf CA RPP250912234789219 bestlite electrical FCM BUILDERS SDN BHD bestlite electrical sdn bhd FCM BUILDERS SDN BHD",
+                "party_name": "BESTLITE ELECTRICAL FCM BUILDERS SDN BHD",
+                "credit": 6000.0,
+                "debit": 0.0,
+                "balance": 1023033.98,
+                "bank": "Alliance Bank",
+                "company_name": "BESTLITE ELECTRICAL",
+            },
+        ]
+
+        ledger = build_track2_counterparty_ledger(rows)
+        names = {row["counterparty_name"] for row in ledger["counterparties"]}
+
+        self.assertIn("PEARLMATICS SDN BHD", names)
+        self.assertIn("FCM BUILDERS SDN BHD", names)
+        self.assertNotIn("BESTLITE ELECTRICAL PEARLMATICS SDN BHD", names)
+        self.assertNotIn("BESTLITE ELECTRICAL FCM BUILDERS SDN BHD", names)
+
     def test_agrobank_pipe_segments_prefer_non_own_company_counterparty(self):
         account_holder = "INTEGRASI ERAT SDN BHD"
         self.assertEqual(

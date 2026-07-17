@@ -83,6 +83,16 @@ ALLIANCE_MEMO_LINE_RE = re.compile(
     re.I,
 )
 ALLIANCE_REFERENCE_LINE_RE = re.compile(r"^(?:[A-Z0-9]{10,}|[A-Z]{1,4}\d{4,}.*|\d[\dA-Z\s'/-]*)$", re.I)
+ALLIANCE_ACCOUNT_HOLDER_HINT_PATTERNS = [
+    re.compile(
+        r"\bTO\s+AB\s+(?P<party>[A-Z][A-Z&()/.'\s-]{2,80}?)(?=\s+FUND\s+TRF|\s+TRANSFER\s+FROM|\s*$)",
+        re.I,
+    ),
+    re.compile(
+        r"\bTRANSFER\s+FROM\s+ABMB\s+T(?:O)?\s+(?P<party>[A-Z][A-Z&()/.'\s-]{2,80}?)(?=\s+TRANSFER\s+FROM\s+ABMB|\s*$)",
+        re.I,
+    ),
+]
 ALLIANCE_COMPANY_HINT_RE = re.compile(
     r"\b(?:SDN\.?\s*BHD\.?|S/B|SB|BERHAD|ENTERPRISE|TRADING|MARKETING|INDUSTRIES|TECHNOLOGIES|ELECTRICAL|ENGINEERING|LOGISTICS|SUPPLIES|SERVICE(?:S)?|HOLDINGS|CARRIER|CONCRETE|LIGHTING|HARDWARE)\b",
     re.I,
@@ -232,7 +242,7 @@ def _normalize_alliance_party_name(value: str) -> str:
         sdn_index = tokens.index("SDN")
         prefix_tokens = tokens[:sdn_index]
         original_prefix_tokens = list(prefix_tokens)
-        for size in range(min(4, len(prefix_tokens) // 2), 2, -1):
+        for size in range(min(4, len(prefix_tokens) // 2), 1, -1):
             anchor_tokens = prefix_tokens[:size]
             for start in range(1, len(prefix_tokens) - size + 1):
                 if prefix_tokens[start : start + size] == anchor_tokens:
@@ -436,17 +446,23 @@ def _extract_alliance_bottom_up_party(
     if not surviving_lines:
         return "UNKNOWN"
 
+    own_candidates: List[str] = []
     for line in reversed(surviving_lines):
-        candidate = _cleanup_alliance_party_candidate(line)
+        candidate = _finalize_alliance_party_candidate(line, account_holder=account_holder)
+        if account_holder and _alliance_party_names_equivalent(candidate, account_holder):
+            own_candidates.append(candidate)
         if _looks_like_alliance_party_line(candidate, account_holder=account_holder):
             return candidate
 
+    if own_candidates:
+        return max(own_candidates, key=lambda name: (" SDN BHD" in f" {name} ", len(name)))
+
     if len(surviving_lines) >= 2:
-        candidate = _cleanup_alliance_party_candidate(surviving_lines[-2])
+        candidate = _finalize_alliance_party_candidate(surviving_lines[-2], account_holder=account_holder)
         if not _is_weak_alliance_party_name(candidate):
             return candidate
 
-    candidate = _cleanup_alliance_party_candidate(surviving_lines[-1])
+    candidate = _finalize_alliance_party_candidate(surviving_lines[-1], account_holder=account_holder)
     if not _is_weak_alliance_party_name(candidate):
         return candidate
 
@@ -497,6 +513,60 @@ def _remove_account_holder_mentions(text: str, account_holder: str) -> str:
     return normalize_text(cleaned)
 
 
+def _alliance_party_identity_key(name: str) -> str:
+    cleaned = _normalize_alliance_party_name(name)
+    cleaned = re.sub(r"\bSDN\s+BHD\b", " ", cleaned)
+    cleaned = re.sub(r"\b(?:SDN|BHD|BERHAD|S/B|SB)\b", " ", cleaned)
+    return normalize_text(cleaned)
+
+
+def _alliance_party_names_equivalent(left: str, right: str) -> bool:
+    left_name = _normalize_alliance_party_name(left)
+    right_name = _normalize_alliance_party_name(right)
+    if not left_name or not right_name or "UNKNOWN" in {left_name, right_name}:
+        return False
+    if left_name == right_name:
+        return True
+    left_key = _alliance_party_identity_key(left_name)
+    right_key = _alliance_party_identity_key(right_name)
+    return bool(left_key and right_key and left_key == right_key)
+
+
+def _prefer_alliance_suffix_variant(name: str, source_text: str) -> str:
+    cleaned = _normalize_alliance_party_name(name)
+    base = _alliance_party_identity_key(cleaned)
+    if not base:
+        return cleaned
+
+    source = normalize_text(source_text).upper()
+    base_pattern = r"\s+".join(re.escape(part) for part in base.split())
+    if re.search(rf"\b{base_pattern}\s+SDN\.?\s*(?:BHD|B\.?|$)", source, re.I):
+        return _normalize_alliance_party_name(f"{base} SDN BHD")
+    return cleaned
+
+
+def _candidate_without_account_holder(candidate: str, account_holder: str) -> str:
+    if not account_holder:
+        return ""
+
+    stripped = _remove_account_holder_mentions(candidate, account_holder)
+    if not stripped or stripped.upper() == normalize_text(candidate).upper():
+        return ""
+
+    cleaned = _cleanup_alliance_party_candidate(stripped)
+    if cleaned == "UNKNOWN" or _is_weak_alliance_party_name(cleaned):
+        return ""
+    if not _looks_like_alliance_party_line(cleaned, account_holder=""):
+        return ""
+    return cleaned
+
+
+def _finalize_alliance_party_candidate(candidate: str, account_holder: str = "") -> str:
+    cleaned = _cleanup_alliance_party_candidate(candidate)
+    refined = _candidate_without_account_holder(cleaned, account_holder)
+    return refined or cleaned
+
+
 def _extract_alliance_legal_name(text: str, account_holder: str = "") -> str:
     cleaned = _remove_account_holder_mentions(text, account_holder)
     matches = list(
@@ -512,7 +582,7 @@ def _extract_alliance_legal_name(text: str, account_holder: str = "") -> str:
     valid_candidates = []
     for match in matches:
         candidate = _strip_alliance_reference_prefix(match.group(0))
-        candidate = _cleanup_alliance_party_candidate(candidate)
+        candidate = _finalize_alliance_party_candidate(candidate, account_holder=account_holder)
         if _is_weak_alliance_party_name(candidate):
             continue
         valid_candidates.append(candidate)
@@ -536,7 +606,7 @@ def _extract_alliance_direct_regex_party(text: str, account_holder: str = "") ->
         candidate = normalize_text(match.group(1) if match.groups() else match.group(0))
         candidate = _strip_alliance_reference_prefix(candidate)
         candidate = ALLIANCE_TRAILING_NOISE_RE.sub("", candidate)
-        candidate = _cleanup_alliance_party_candidate(candidate)
+        candidate = _finalize_alliance_party_candidate(candidate, account_holder=account_holder)
         if not _is_weak_alliance_party_name(candidate):
             return candidate
 
@@ -562,7 +632,7 @@ def _extract_alliance_named_phrase(text: str, account_holder: str = "") -> str:
             candidate = cleaned.rsplit(marker, 1)[-1]
             candidate = _strip_alliance_reference_prefix(candidate)
             candidate = ALLIANCE_TRAILING_NOISE_RE.sub("", candidate)
-            candidate = _cleanup_alliance_party_candidate(candidate)
+            candidate = _finalize_alliance_party_candidate(candidate, account_holder=account_holder)
             if not _is_weak_alliance_party_name(candidate):
                 return candidate
 
@@ -575,11 +645,11 @@ def _extract_alliance_named_phrase(text: str, account_holder: str = "") -> str:
         tokens.append(token)
 
     if len(tokens) >= 2:
-        candidate = _cleanup_alliance_party_candidate(" ".join(tokens[-min(5, len(tokens)):]))
+        candidate = _finalize_alliance_party_candidate(" ".join(tokens[-min(5, len(tokens)):]), account_holder=account_holder)
         if not _is_weak_alliance_party_name(candidate):
             return candidate
     if len(tokens) == 1:
-        candidate = _cleanup_alliance_party_candidate(tokens[0])
+        candidate = _finalize_alliance_party_candidate(tokens[0], account_holder=account_holder)
         if not _is_weak_alliance_party_name(candidate):
             return candidate
     return "UNKNOWN"
@@ -626,8 +696,85 @@ def extract_alliance_party_name(description: str, account_holder: str = "", desc
     return "UNKNOWN"
 
 
+def _infer_alliance_account_holder(rows: List[Dict[str, Any]]) -> str:
+    counts: Dict[str, int] = {}
+    variants: Dict[str, set[str]] = {}
+    source_text_by_key: Dict[str, str] = {}
+
+    for row in rows or []:
+        parts = row.get("description_lines")
+        if isinstance(parts, list) and parts:
+            source_text = " ".join(str(part) for part in parts)
+        else:
+            source_text = str(row.get("description", "") or "")
+        source_text = normalize_text(source_text).upper()
+        if not source_text:
+            continue
+
+        for pattern in ALLIANCE_ACCOUNT_HOLDER_HINT_PATTERNS:
+            for match in pattern.finditer(source_text):
+                candidate = _cleanup_alliance_party_candidate(match.group("party"))
+                if candidate == "UNKNOWN" or _is_weak_alliance_party_name(candidate):
+                    continue
+                key = _alliance_party_identity_key(candidate)
+                if not key:
+                    continue
+                counts[key] = counts.get(key, 0) + 1
+                variants.setdefault(key, set()).add(candidate)
+                source_text_by_key[key] = f"{source_text_by_key.get(key, '')} {source_text}"
+                suffix_variant = _prefer_alliance_suffix_variant(candidate, source_text)
+                if suffix_variant:
+                    variants.setdefault(key, set()).add(suffix_variant)
+
+    if not counts:
+        return ""
+
+    key, count = max(counts.items(), key=lambda item: (item[1], len(item[0])))
+    if count < 2:
+        return ""
+
+    candidates = variants.get(key) or {key}
+    source_text = source_text_by_key.get(key, "")
+    preferred = [_prefer_alliance_suffix_variant(candidate, source_text) for candidate in candidates]
+    return max(preferred, key=lambda value: (" SDN BHD" in f" {value} ", len(value)))
+
+
+def resolve_alliance_party_name(
+    description: str,
+    existing_party_name: str = "",
+    account_holder: str = "",
+    description_lines: Any = None,
+) -> str:
+    if account_holder:
+        refined = extract_alliance_party_name(
+            description,
+            account_holder=account_holder,
+            description_lines=description_lines,
+        )
+        if refined and refined != "UNKNOWN":
+            return refined
+
+    candidate = normalize_text(existing_party_name).upper()
+    if candidate and not _is_weak_alliance_party_name(candidate):
+        return _normalize_alliance_party_name(candidate)
+
+    refined = extract_alliance_party_name(description, description_lines=description_lines)
+    if refined and refined != "UNKNOWN":
+        return refined
+
+    return "UNKNOWN"
+
+
 def annotate_alliance_counterparties(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Attach Alliance counterparty aliases used by the shared ledger pipeline."""
+    account_holder = ""
+    for row in rows or []:
+        account_holder = normalize_text(row.get("company_name", "")).upper()
+        if account_holder:
+            break
+    if not account_holder:
+        account_holder = _infer_alliance_account_holder(rows)
+
     raw_names = []
     for row in rows or []:
         raw = (
@@ -636,12 +783,14 @@ def annotate_alliance_counterparties(rows: List[Dict[str, Any]]) -> List[Dict[st
             or row.get("party_name")
             or extract_alliance_party_name(
                 row.get("description", ""),
-                account_holder=row.get("company_name", ""),
+                account_holder=normalize_text(row.get("company_name", "")).upper() or account_holder,
                 description_lines=row.get("description_lines"),
             )
             or "UNKNOWN"
         )
         raw = normalize_text(raw).upper() or "UNKNOWN"
+        if account_holder and _alliance_party_names_equivalent(raw, account_holder):
+            raw = account_holder
         row["counterparty_name_raw"] = raw
         raw_names.append(raw)
 
