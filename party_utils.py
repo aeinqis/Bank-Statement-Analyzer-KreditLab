@@ -44,7 +44,7 @@ COUNTERPARTY_DESCRIPTOR_TOKENS = {
     "RUJUKAN", "SIGN", "SURAT", "PGM", "PROGRAM", "MPC", "MSSB", "TRADE",
     "HOSTEL", "MELAKA", "MELAKA.", "TM",
     "SHARE", "CAPITAL", "CAP", "SHARECAP", "SHARECAPITAL", "BACK",
-    "BOULEV", "BOULEVARD", "TRIENEKEN", "MTSB",
+    "BOULEV", "BOULEVARD", "TRIENEKEN", "MTSB", "FUND", "FUNDS",
 }
 COUNTERPARTY_MONTH_TOKENS = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -141,7 +141,7 @@ COUNTERPARTY_ACCOUNT_MARKER_RE = re.compile(r"\bA\s*/\s*C\b", re.I)
 COUNTERPARTY_ALLOWED_PUNCT_RE = re.compile(r"[^A-Z0-9&()\s]+")
 COUNTERPARTY_SDN_MARKER_TOKENS = {"SD", "SDN"}
 COUNTERPARTY_TRANSFER_RAIL_PREFIX_RE = re.compile(
-    r"^\s*IBG\s+CREDIT\s+(?:INTERBANK\s+GIRO\s+)*",
+    r"^\s*(?:IBG\s+CREDIT\s+(?:INTERBANK\s+GIRO\s+)*|DUITNOW\s+TRANSFER\s+|(?:TR\s+)?TO\s+SAVINGS\s+|TRTOSAVINGS\s+)",
     re.I,
 )
 COUNTERPARTY_PERSON_MEMO_SUFFIX_TOKENS = {
@@ -186,15 +186,22 @@ _CP_NOISE_NAMES = {
     "ACCOUNT",
     "BANK",
     "BULK",
+    "BILL",
+    "BILL PAYMENT",
+    "BILL PAYMENT TO FIN",
+    "BILL TO FIN",
     "CREDIT",
     "DEBIT",
     "DUITNOW",
     "FPX",
+    "FUND",
     "FUND TRANSFER",
     "IBG",
     "INSTANT TRANSFER",
     "PAYM",
     "PAYMENT",
+    "SAVINGS",
+    "TO SAVINGS",
     "TRANSFER",
     "TRANSFER TO",
     "TRANSFER FROM",
@@ -260,6 +267,8 @@ def _normalise_counterparty(name: str) -> str:
         return "PLANWORTH GLOBAL"
     if n == "JANM" or n.startswith("JANM ") or " JANM" in f" {n} " or "JANM CAWANGAN" in n:
         return "JANM"
+    if n == "BILLS":
+        return "BILLS"
 
     if n in _CP_NOISE_NAMES or len(n) < 3 or should_drop_as_counterparty(n):
         return "UNCATEGORIZED"
@@ -578,6 +587,8 @@ def clean_counterparty_name(raw_name: Any) -> str:
         return "UNKNOWN"
     if raw in {"TRANSFER FEE", "OTHER TRANSFER FEE"}:
         return "TRANSFER FEE"
+    if re.fullmatch(r"(?:BILL\s+)?(?:PAYMENT\s+)?(?:TO\s+)?FIN(?:ANCING)?|BILL\s+(?:PAYMENT|TO\s+FIN|COUNTERPARTY)|BILLS?", raw):
+        return "BILLS"
 
     raw = COUNTERPARTY_DATE_RE.sub(" ", raw)
     raw = raw.replace(".", " ")

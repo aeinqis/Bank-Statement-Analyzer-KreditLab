@@ -26,11 +26,11 @@ BANK_RAKYAT_CHEQUE_RE = re.compile(
 
 BANK_RAKYAT_PATTERNS = [
     re.compile(
-        r"^(?:\d{5}\s+)?DUITNOW\s*TRANSFER\s+(?P<party>.+?)(?:\s+(?:AGROBIZ|TRADING|SIMPANAN|STAFFID\d+|BAYARAN|BAY\d+|PWR|GAJI|REFUND|LEKUPAN|MMB|MMBEKAL|ANGKUT|SEWA|PERUBATAN|TUNTUTAN|INV|KZ\d+|PAKKF|PBWPHG|$).*)?$",
+        r"^(?:\d{5}\s+)?DUITNOW\s*TRANSFER\s+(?P<party>.+?)(?:\s+(?:AGROBIZ|TRADING|SIMPANAN|STAFFID\d+|BAYARAN|BAY\d+|PWR|GAJI|REFUND|LEKUPAN|MMB|MMBEKAL|ANGKUT|SEWA|PERUBATAN|TUNTUTAN|FUND(?:\s+TRANSFER)?|INV|KZ\d+|PAKKF|PBWPHG|$).*)?$",
         re.I,
     ),
     re.compile(
-        r"^(?:\d{5}\s+)?DUITNOW\s*FEE\s+(?P<party>.+?)(?:\s+(?:AGROBIZ|TRADING|STAFFID\d+|BAY\d+|PENDAHULUAN|GAJI|$).*)?$",
+        r"^(?:\d{5}\s+)?DUITNOW\s*FEE\s+(?P<party>.+?)(?:\s+(?:AGROBIZ|TRADING|STAFFID\d+|BAY\d+|PENDAHULUAN|GAJI|FUND(?:\s+TRANSFER)?|$).*)?$",
         re.I,
     ),
     re.compile(
@@ -124,7 +124,7 @@ def clean_bank_rakyat_party_name(value: str) -> str:
         return party or "UNKNOWN"
     party = re.sub(
         r"\b(?:AGROBIZ|TRADING|SIMPANAN|STAFFID\d+|GAJI\s+\w+\d*|GAJI|BAYARAN|BAY\d*|"
-        r"PWR|PINDAHAN|REFUND|LEKUPAN|SUMBANGAN|INV[-/\w]*|KZ[\w/-]*|PBWPHG/[\w/-]*|"
+        r"PWR|PINDAHAN|REFUND|LEKUPAN|SUMBANGAN|FUND(?:\s+TRANSFER)?|INV[-/\w]*|KZ[\w/-]*|PBWPHG/[\w/-]*|"
         r"PAKKF[\w/-]*|MMB\w*|MMBEKAL|ANGKUT|SEWA|PERUBATAN|TUNTUTAN|SERVICE|BELIAN|"
         r"TRANSFERFROM.*|FAROBORNEOFUND|FUNDTRANSFER|CASHW?DRAWAL|PAYMENT|REFERENCE|REF)\b.*$",
         "", party, flags=re.I,
@@ -144,7 +144,7 @@ def extract_bank_rakyat_party_name(description: str) -> str:
     if BANK_RAKYAT_CHEQUE_RE.search(desc):
         return "CHEQUE"
     if re.match(r"^(?:\d{5}\s+)?BILL\s*PAYMENT\s*TO\s*FIN\b", desc, re.I):
-        return "BILL PAYMENT TO FIN"
+        return "BILLS"
     if re.match(r"^(?:\d{5}\s+)?CREDIT\s*PROFIT\s*/?\s*HIBAH\b", desc, re.I):
         return "CREDIT PROFIT / HIBAH"
     if re.match(r"^CDM\s*CASH\s*DEPOSIT\b", desc, re.I):

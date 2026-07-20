@@ -12,6 +12,7 @@ from app import (
     build_own_related_party_groups_for_report,
     build_track2_counterparty_ledger,
     calculate_monthly_summary,
+    _is_report_special_counterparty_bucket,
     _report_related_party_entries,
     _top_parties_from_counterparty_rows,
     build_report_counterparty_ledger_rows,
@@ -23,7 +24,7 @@ from app import (
     partition_related_party_candidates_for_manager,
     prepare_top_parties_for_report,
 )
-from kredit_lab_classify_track2 import _build_own_related_transactions_list_track2
+from kredit_lab_classify_track2 import _build_own_related_transactions_list_track2, _is_excluded_related_party_name
 from party_utils import (
     _merge_counterparty_groups,
     build_transactions_by_party,
@@ -391,6 +392,63 @@ class CounterpartyCleaningTests(unittest.TestCase):
 
         names = {row["counterparty_name"] for row in ledger["counterparties"]}
         self.assertEqual(names, {"MTC OREC SDN BHD", "AANS MARINE SDN BHD"})
+
+    def test_bank_rakyat_bill_rows_use_special_bills_bucket(self):
+        self.assertEqual(extract_bank_rakyat_party_name("BILL PAYMENT TO FIN"), "BILLS")
+        self.assertEqual(normalise_counterparty_for_ledger("BILL PAYMENT TO FIN"), "BILLS")
+        self.assertEqual(normalise_counterparty_for_ledger("BILL TO FIN"), "BILLS")
+        self.assertTrue(_is_report_special_counterparty_bucket("BILLS"))
+        self.assertTrue(_is_excluded_related_party_name("BILLS"))
+
+        candidates = detect_related_party_candidates(
+            {"counterparties": []},
+            confirmed_names=set(),
+            dismissed=set(),
+            shared_report_data={
+                "report_info": {
+                    "related_party_candidates": [
+                        {"name": "BILLS", "confidence": "MEDIUM"},
+                        {"name": "FUND", "confidence": "MEDIUM"},
+                        {"name": "TO SAVINGS", "confidence": "MEDIUM"},
+                        {"name": "REAL PERSON", "confidence": "MEDIUM"},
+                    ]
+                }
+            },
+        )
+
+        self.assertEqual([candidate["name"] for candidate in candidates], ["REAL PERSON"])
+
+    def test_bank_rakyat_strips_fund_and_to_savings_noise_from_counterparties(self):
+        self.assertEqual(
+            extract_bank_rakyat_party_name("DUITNOW TRANSFER NIK MOHD AFI RUSYAIDI BIN ROSMAN Fund Transfer"),
+            "NIK MOHD AFI RUSYAIDI BIN ROSMAN",
+        )
+        self.assertEqual(
+            normalise_counterparty_for_ledger("NIK MOHD AFI RUSYAIDI BIN ROSMAN Fund Transfer"),
+            "NIK MOHD AFI RUSYAIDI ROSMAN",
+        )
+        self.assertEqual(
+            normalise_counterparty_for_ledger("TR TO SAVINGS MARIANA BINTI AHMAT Petty Cash"),
+            "MARIANA AHMAT",
+        )
+        self.assertEqual(normalise_counterparty_for_ledger("TO SAVINGS"), "UNCATEGORIZED")
+        self.assertEqual(normalise_counterparty_for_ledger("FUND"), "UNKNOWN")
+
+        ledger = build_track2_counterparty_ledger(
+            [
+                {
+                    "date": "2025-12-09",
+                    "description": "DUITNOW TRANSFER NIK MOHD AFI RUSYAIDI BIN ROSMAN Fund Transfer",
+                    "credit": 0,
+                    "debit": 540.00,
+                    "balance": 1000.00,
+                    "bank": "Bank Rakyat",
+                    "source_file": "sample.pdf",
+                }
+            ]
+        )
+
+        self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "NIK MOHD AFI RUSYAIDI ROSMAN")
 
     def test_ibg_credit_counterparty_keeps_company_name(self):
         desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"
