@@ -10,6 +10,7 @@ from app import (
     _align_related_party_candidates_to_counterparty_rows,
     build_own_related_party_groups_for_report,
     build_track2_counterparty_ledger,
+    calculate_monthly_summary,
     _report_related_party_entries,
     _top_parties_from_counterparty_rows,
     build_report_counterparty_ledger_rows,
@@ -169,6 +170,44 @@ class CounterpartyCleaningTests(unittest.TestCase):
             "RE CONCEPT RESOURCES",
         )
         self.assertEqual(extract_ambank_company_name(FakePdf(), max_pages=2), "RE CONCEPT RESOURCES")
+
+    def test_ambank_monthly_summary_reuses_clean_statement_company(self):
+        rows = [
+            {
+                "date": "2024-04-02",
+                "description": "INWARD IBG, V2 AUTO SDN BHD",
+                "debit": 0,
+                "credit": 100,
+                "balance": 100,
+                "bank": "Ambank",
+                "company_name": "02APR INWARD IBG, V2 AUTO SDN BHD",
+            },
+            {
+                "date": "2024-06-03",
+                "description": "INWARD IBG",
+                "debit": 0,
+                "credit": 100,
+                "balance": 200,
+                "bank": "Ambank",
+                "company_name": "JOHOR BAHRU - MELODIES GARDEN - 044 RE CONCEPT RESOURCES",
+            },
+            {
+                "date": "2024-07-02",
+                "description": "INWARD IBG, V2 AUTO SDN BHD",
+                "debit": 0,
+                "credit": 100,
+                "balance": 300,
+                "bank": "Ambank",
+                "company_name": "02JUL INWARD IBG, V2 AUTO SDN BHD",
+            },
+        ]
+
+        summary = calculate_monthly_summary(rows)
+
+        self.assertEqual(
+            [row["company_name"] for row in summary],
+            ["RE CONCEPT RESOURCES", "RE CONCEPT RESOURCES", "RE CONCEPT RESOURCES"],
+        )
 
     def test_ibg_credit_counterparty_keeps_company_name(self):
         desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"

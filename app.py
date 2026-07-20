@@ -36,7 +36,12 @@ from cimb import parse_transactions_cimb,extract_cimb_party_name
 from bank_islam import parse_bank_islam
 from bank_rakyat import parse_bank_rakyat
 from hong_leong import parse_hong_leong
-from ambank import parse_ambank, extract_ambank_statement_totals, extract_ambank_company_name
+from ambank import (
+    clean_ambank_company_name,
+    parse_ambank,
+    extract_ambank_statement_totals,
+    extract_ambank_company_name,
+)
 from bank_muamalat import parse_transactions_bank_muamalat
 from affin_bank import parse_affin_bank, extract_affin_statement_totals
 from agro_bank import parse_agro_bank
@@ -3127,6 +3132,33 @@ def filter_statement_transactions_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[mask].copy()
 
 
+AMBANK_COMPANY_NAME_NOISE_RE = re.compile(
+    r"^\s*\d{1,2}\s*(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b|"
+    r"\b(?:INWARD\s+IBG|IBG|GIRO|DUITNOW|TRANSFER|TRF|CREDIT|DEBIT|PAYMENT|"
+    r"AUTO|CHQ|CHEQUE|JOMPAY|FPX|SALARY|FEE|CHARGE)\b",
+    re.IGNORECASE,
+)
+
+
+def _clean_ambank_summary_company_name(value) -> Optional[str]:
+    raw = normalize_text(value)
+    if not raw:
+        return None
+
+    cleaned = clean_ambank_company_name(raw)
+    if not cleaned:
+        return None
+
+    raw_upper = raw.upper()
+    cleaned_upper = cleaned.upper()
+    if AMBANK_COMPANY_NAME_NOISE_RE.search(raw_upper):
+        return None
+    if AMBANK_COMPANY_NAME_NOISE_RE.search(cleaned_upper):
+        return None
+
+    return cleaned
+
+
 def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
     if not transactions:
         return []
@@ -3160,6 +3192,20 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
         df["seq"] = pd.to_numeric(df["seq"], errors="coerce").fillna(0).astype(int)
 
     df["__row_order"] = pd.to_numeric(df["__row_order"], errors="coerce").fillna(0).astype(int)
+    is_ambank_summary = False
+    if "bank" in df.columns:
+        is_ambank_summary = any(
+            normalize_text(value).upper() in {"AMBANK", "AM BANK"}
+            for value in df["bank"].dropna().tolist()
+        )
+
+    fallback_company_name = None
+    if is_ambank_summary and "company_name" in df.columns:
+        for value in df["company_name"].dropna().tolist():
+            candidate = _clean_ambank_summary_company_name(value)
+            if candidate:
+                fallback_company_name = candidate
+                break
 
     monthly_summary: List[dict] = []
     for period, group in df.groupby("month_period", sort=True):
@@ -3181,7 +3227,17 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
             x for x in group_sorted.get("company_name", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist()
             if x.strip()
         ]
-        company_name = company_vals[0] if company_vals else None
+        if is_ambank_summary:
+            company_name = next(
+                (
+                    candidate
+                    for candidate in (_clean_ambank_summary_company_name(x) for x in company_vals)
+                    if candidate
+                ),
+                fallback_company_name,
+            )
+        else:
+            company_name = company_vals[0] if company_vals else None
 
         acct_vals = [
             x for x in group_sorted.get("account_no", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist() if x.strip()
@@ -3441,11 +3497,13 @@ if uploaded_files and st.session_state.status == "running":
             except Exception:
                 company_name = None
             if bank_choice == "Ambank":
+                ambank_company_name = None
                 try:
                     with bytes_to_pdfplumber(pdf_bytes) as meta_pdf:
-                        company_name = extract_ambank_company_name(meta_pdf, max_pages=2) or company_name
+                        ambank_company_name = extract_ambank_company_name(meta_pdf, max_pages=2)
                 except Exception:
                     pass
+                company_name = ambank_company_name or _clean_ambank_summary_company_name(company_name)
 
             # extract account number
             account_no = None
