@@ -135,6 +135,23 @@ AMBANK_TXN_PREFIX_RE = re.compile(
 )
 
 AMBANK_NUMERIC_PARTY_TOKEN_RE = re.compile(r"\b\S*\d\S*\b")
+AMBANK_BRANCH_COMPANY_RE = re.compile(
+    r"""^\s*
+    [A-Z][A-Z\s.'()/&-]*?
+    \s+-\s+
+    [A-Z0-9][A-Z0-9\s.'()/&-]*?
+    \s+-\s+
+    \d{2,6}
+    \s+
+    (?P<company>[A-Z0-9][A-Z0-9 &().,'/-]{2,})
+    \s*$
+    """,
+    re.I | re.X,
+)
+AMBANK_COMPANY_SUFFIX_RE = re.compile(
+    r"\b(SDN\.?\s*BHD\.?|BHD\.?|BERHAD|ENTERPRISE|RESOURCES|TRADING|SERVICES|HOLDINGS|PLT)\b",
+    re.I,
+)
 
 _MONTH_MAP = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
@@ -167,6 +184,68 @@ def _normalize_lines_keep_order(text: str) -> List[str]:
         if ln:
             lines.append(ln)
     return lines
+
+
+def clean_ambank_company_name(raw: str) -> str:
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not text:
+        return ""
+
+    match = AMBANK_BRANCH_COMPANY_RE.match(text)
+    if match:
+        text = match.group("company")
+
+    text = re.split(
+        r"\b(?:ACCOUNT\s+NO|A/C\s+NO|NO\.?\s*AKAUN|NO\s+AKAUN|STATEMENT|PENYATA|CURRENCY|PAGE)\b",
+        text,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
+    text = re.split(r"\bMYR\b", text, maxsplit=1, flags=re.I)[0]
+    text = re.sub(r"\bSDN\.?\s*BHD\.?\b.*$", "SDN BHD", text, flags=re.I)
+    text = re.sub(r"\s+", " ", text).strip(" -/,.")
+    return text.upper() if text else ""
+
+
+def _looks_like_ambank_company_name(raw: str, cleaned: str) -> bool:
+    if not cleaned:
+        return False
+    if cleaned == raw.strip().upper() and not AMBANK_BRANCH_COMPANY_RE.match(raw or ""):
+        return False
+    if len(cleaned) < 6:
+        return False
+    if re.search(r"\d{6,}", cleaned):
+        return False
+    return bool(AMBANK_COMPANY_SUFFIX_RE.search(cleaned))
+
+
+def _extract_page_text(page) -> str:
+    try:
+        return page.extract_text(x_tolerance=1) or ""
+    except TypeError:
+        return page.extract_text() or ""
+
+
+def extract_ambank_company_name(pdf: pdfplumber.PDF, max_pages: int = 2) -> Optional[str]:
+    """
+    Extract AmBank account-holder name from headers like:
+    "JOHOR BAHRU - MELODIES GARDEN - 044 RE CONCEPT RESOURCES".
+    """
+    try:
+        pages = pdf.pages[: max(0, min(max_pages, len(pdf.pages)))]
+    except Exception:
+        return None
+
+    lines: List[str] = []
+    for page in pages:
+        lines.extend(_normalize_lines_keep_order(_extract_page_text(page)))
+
+    for line in lines[:80]:
+        cleaned = clean_ambank_company_name(line)
+        if _looks_like_ambank_company_name(line, cleaned):
+            return cleaned
+
+    return None
 
 
 def _clean_ambank_party_name(party: str) -> str:

@@ -4,6 +4,7 @@ from cimb import annotate_cimb_counterparties, extract_cimb_party_name
 from alliance import annotate_alliance_counterparties, extract_alliance_party_name
 from agro_bank import extract_agrobank_party_name
 from maybank import annotate_maybank_counterparties, extract_maybank_party_name
+from ambank import clean_ambank_company_name, extract_ambank_company_name
 from pdf_utils import _clean_candidate_name, extract_company_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
@@ -140,6 +141,34 @@ class CounterpartyCleaningTests(unittest.TestCase):
             ]
 
         self.assertEqual(extract_company_name(FakePdf(), max_pages=2), "LSR AGENCY")
+
+    def test_ambank_header_extracts_company_after_branch_number(self):
+        class FakePage:
+            def __init__(self, text):
+                self._text = text
+
+            def extract_text(self, **kwargs):
+                return self._text
+
+        class FakePdf:
+            pages = [
+                FakePage(
+                    "\n".join(
+                        [
+                            "AmBank (M) Berhad",
+                            "JOHOR BAHRU - MELODIES GARDEN - 044 RE CONCEPT RESOURCES",
+                            "Account No 1234567890",
+                            "Statement Date / Tarikh Penyata : 31/05/2026",
+                        ]
+                    )
+                )
+            ]
+
+        self.assertEqual(
+            clean_ambank_company_name("JOHOR BAHRU - MELODIES GARDEN - 044 RE CONCEPT RESOURCES"),
+            "RE CONCEPT RESOURCES",
+        )
+        self.assertEqual(extract_ambank_company_name(FakePdf(), max_pages=2), "RE CONCEPT RESOURCES")
 
     def test_ibg_credit_counterparty_keeps_company_name(self):
         desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"

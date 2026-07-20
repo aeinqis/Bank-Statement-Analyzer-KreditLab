@@ -36,7 +36,7 @@ from cimb import parse_transactions_cimb,extract_cimb_party_name
 from bank_islam import parse_bank_islam
 from bank_rakyat import parse_bank_rakyat
 from hong_leong import parse_hong_leong
-from ambank import parse_ambank, extract_ambank_statement_totals
+from ambank import parse_ambank, extract_ambank_statement_totals, extract_ambank_company_name
 from bank_muamalat import parse_transactions_bank_muamalat
 from affin_bank import parse_affin_bank, extract_affin_statement_totals
 from agro_bank import parse_agro_bank
@@ -3440,6 +3440,12 @@ if uploaded_files and st.session_state.status == "running":
                     company_name = extract_company_name(meta_pdf, max_pages=2)
             except Exception:
                 company_name = None
+            if bank_choice == "Ambank":
+                try:
+                    with bytes_to_pdfplumber(pdf_bytes) as meta_pdf:
+                        company_name = extract_ambank_company_name(meta_pdf, max_pages=2) or company_name
+                except Exception:
+                    pass
 
             # extract account number
             account_no = None
