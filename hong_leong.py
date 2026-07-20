@@ -30,6 +30,166 @@ OD_KEYWORDS_RE = re.compile(
     re.I
 )
 
+HLB_CHANNEL_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"HLConnect\s+DuitNow-previously\s+Inst|"
+    r"CIB\s+Instant\s+Transfer(?:\s+Reversal)?|"
+    r"Instant\s+Transfer|"
+    r"Cr\s+Adv-Interbank\s+GIRO|"
+    r"FPX\s+Collection|"
+    r"FPX\s+B2B1|"
+    r"JomPAY\s+Bill\s+Payment|"
+    r"CIB\s+IBG\s+CA\s+Debit\s+Advice|"
+    r"Fund\s+Trf\s+fr\s+CA\s+to\s+CA-Internet|"
+    r"Fund\s+Transfer|"
+    r"Bulk\s+DuitNow"
+    r")(?:\s+at\s+\w+)?\s*",
+    re.I,
+)
+
+HLB_REFERENCE_RE = re.compile(
+    r"\b(?:"
+    r"\d{8}[A-Z]{4}MYKL\d{3}[A-Z0-9]+|"
+    r"IBGCMP[A-Z0-9]+|"
+    r"CTHLCF[A-Z0-9]+|"
+    r"CPTJ[A-Z0-9]+|"
+    r"I\d{10,}|"
+    r"24IM\d+"
+    r")\b.*$",
+    re.I,
+)
+
+HLB_FOOTER_RE = re.compile(
+    r"\bHong\s+Leong(?:\s+Islamic)?\s+Bank\s+Berhad\b.*$|"
+    r"\bProtected\s+by\s+PIDM\b.*$|"
+    r"\bDilindungi\s+oleh\s+PIDM\b.*$|"
+    r"\bMenara\s+Hong\s+Leong\b.*$",
+    re.I,
+)
+
+HLB_COMPANY_RE = re.compile(
+    r"\b(?P<party>[A-Z0-9][A-Z0-9 &'()./@-]{2,}\b(?:"
+    r"SDN\.?\s*BHD\.?|SDN\.?\s*B\.?|BHD\.?|BERHAD|"
+    r"ENTERPRISE|RESOURCES|SERVICES|SERVICE|WORKS|MANAGEMENT|"
+    r"COUNCIL|INSURANCE|EXPRESS|UNIFI|MALAYSIA|MEDIA"
+    r")\b(?:\s*-\s*[A-Z])?)",
+    re.I,
+)
+
+HLB_PERSON_RE = re.compile(
+    r"\b(?P<party>[A-Z][A-Z.'@/-]+(?:\s+[A-Z][A-Z.'@/-]+){0,5}\s+"
+    r"(?:BIN|BINTI|BINTE|BT|BTE|A/L|AL)\s*"
+    r"(?:[A-Z][A-Z.'@/-]+(?:\s+[A-Z][A-Z.'@/-]+){0,4})?)\b",
+    re.I,
+)
+
+HLB_LEADING_NOISE_TOKENS = {
+    "A/C", "ADV", "ADVANCE", "ADVANVE", "AMG", "AMPANG", "APR25", "APR2025",
+    "BAKI", "BALIK", "BAYARAN", "BERNIAGA", "BIZ", "BLN", "BRG2", "BYRN", "CARD",
+    "CATERING", "CLAIM", "DISBURSEMENT", "DUIT", "FEB", "FOR", "FUND",
+    "GAJI", "GAJAH", "GE", "HANG", "HIACE", "HILIR", "HITAM", "INV",
+    "INTERBANK", "INVOIS", "ITEMS", "JLN", "JUNE", "JUNE2", "KATERING", "KELANG",
+    "KTERING", "KUBANG", "LAMA", "MAC", "MASJID", "MAY25", "MEI", "MODAL",
+    "MONKIARA", "MOREH", "NEGAR", "NEGARA", "NETWORK", "PAY",
+    "PAYMENT", "PEJABAT", "PEKERJA", "PETTY", "PLAQUE", "PLASTIK", "PPC", "RAYA",
+    "RORO", "RTM", "SAMPLE", "SERVICES", "SITE", "STAFF", "TRANSFER", "TRANSPORT",
+    "TRAVEL", "TUAH", "CASH", "CC", "CREDIT", "INSTALMENT", "KSB", "KUIH", "ONM",
+}
+
+HLB_TRAILING_NOISE_TOKENS = {
+    "C", "CA", "C/A", "_",
+}
+
+
+def _is_hlb_reference_token(token: str) -> bool:
+    token = str(token or "").strip().upper()
+    if not token or token == "_":
+        return True
+    if re.fullmatch(r"\d+", token):
+        return True
+    if re.search(r"\d", token) and len(token) >= 5:
+        return True
+    if re.fullmatch(r"C[0-9A-Z]{8,}", token):
+        return True
+    return False
+
+
+def _trim_hong_leong_candidate(value: str) -> str:
+    text = re.sub(r"[_]+", " ", str(value or "").upper())
+    text = re.sub(r"[^A-Z0-9&'()./@ -]+", " ", text)
+    text = re.sub(r"^\s*MTC\s+STAFF\s+", "", text, flags=re.I)
+    text = re.sub(r"^.*?\bADVANCE\s+PAYMENT\s+", "", text, flags=re.I)
+    text = re.sub(r"^\s*2ND\s+INSTALMENT\s+", "", text, flags=re.I)
+    text = re.sub(r"\bSDN\.?\s*B\.?\b", "SDN BHD", text, flags=re.I)
+    text = re.sub(r"\bSDN\.?\s*BHD\.?\b", "SDN BHD", text, flags=re.I)
+    text = re.sub(r"\bSDNBHD\b", "SDN BHD", text, flags=re.I)
+    text = re.sub(r"\bSD\s*$", "SDN BHD", text, flags=re.I)
+    text = re.sub(r"\bBERHAD\b", "BHD", text, flags=re.I)
+    mtc_match = re.search(r"\bMTC\s+ENGINEERING(?:\s+SDN\s+BHD)?\b", text, flags=re.I)
+    if mtc_match:
+        text = mtc_match.group(0)
+    text = re.sub(r"\s+", " ", text).strip(" .,-")
+
+    tokens = [token.strip(" .,-") for token in text.split() if token.strip(" .,-")]
+    while tokens and (tokens[0] in HLB_LEADING_NOISE_TOKENS or _is_hlb_reference_token(tokens[0])):
+        tokens.pop(0)
+    while tokens and (tokens[-1] in HLB_TRAILING_NOISE_TOKENS or _is_hlb_reference_token(tokens[-1])):
+        tokens.pop()
+
+    for idx, token in enumerate(tokens):
+        if token in {"BIN", "BINTI", "BINTE", "BT", "BTE", "A/L", "AL"} and idx > 3:
+            tokens = tokens[idx - 3:]
+            break
+
+    text = " ".join(tokens).strip(" .,-")
+    text = re.sub(r"\s+([)])", r"\1", text)
+    text = re.sub(r"([(])\s+", r"\1", text)
+    if text.count("(") > text.count(")") and not text.endswith(")"):
+        text += ")"
+    return text or "UNKNOWN"
+
+
+def extract_hong_leong_party_name(description: str) -> str:
+    desc = re.sub(r"\s+", " ", str(description or "")).strip()
+    if not desc:
+        return "UNKNOWN"
+
+    if re.match(r"^(?:Cheque\s+Processing\s+Fee|Serv\s+Charge|Remittance\s+Commission)\b", desc, re.I):
+        return "BANK FEES"
+    if re.match(r"^(?:CA\s+Cash\s+Withdrawal|CA\s+IBT\s+Debit\s+Advice|CA\s+Debit\s+Advice)\b", desc, re.I):
+        return "CASH WITHDRAWAL"
+    if re.match(r"^CDM\s+Deposit\b", desc, re.I):
+        return "CASH DEPOSIT"
+    if re.match(r"^(?:CA\s+(?:IBT\s+)?Cash\s+Cheque|Local\s+Cheque)\b", desc, re.I):
+        return "CHEQUE"
+    if re.match(r"^Bulk\s+DuitNow\b", desc, re.I):
+        return "BULK DUITNOW"
+
+    body = HLB_FOOTER_RE.sub("", desc)
+    body = HLB_CHANNEL_PREFIX_RE.sub("", body)
+    body = HLB_REFERENCE_RE.sub("", body)
+    body = re.sub(r"\b\d{1,3}(?:,\d{3})*\.\d{2}\b", " ", body)
+    body = re.sub(r"\b[A-Z]{1,3}\d{4,}[A-Z0-9./-]*\b", " ", body)
+    body = re.sub(r"\s+", " ", body).strip()
+
+    person_matches = list(HLB_PERSON_RE.finditer(body))
+    if person_matches:
+        return _trim_hong_leong_candidate(person_matches[-1].group("party"))
+
+    company_candidates = [
+        _trim_hong_leong_candidate(match.group("party"))
+        for match in HLB_COMPANY_RE.finditer(body)
+    ]
+    company_candidates = [
+        candidate for candidate in company_candidates
+        if candidate and candidate != "UNKNOWN" and not re.fullmatch(r"(?:SDN\s+BHD|BHD|M\)?\s+BHD)", candidate)
+    ]
+    if company_candidates:
+        return max(company_candidates, key=lambda candidate: (len(candidate.split()), len(candidate)))
+
+    candidate = _trim_hong_leong_candidate(body)
+    return candidate if candidate and candidate != "UNKNOWN" else "UNKNOWN"
+
 
 # =========================================================
 # MAIN ENTRY (USED BY app.py)
@@ -149,6 +309,7 @@ def parse_hong_leong(pdf, filename):
             transactions.append({
                 "date": date,
                 "description": desc_text,
+                "party_name": extract_hong_leong_party_name(desc_text),
                 "debit": round(float(debit), 2),
                 "credit": round(float(credit), 2),
                 "balance": round(float(running_balance), 2),

@@ -6,6 +6,7 @@ from agro_bank import extract_agrobank_party_name
 from maybank import annotate_maybank_counterparties, extract_maybank_party_name
 from ambank import clean_ambank_company_name, extract_ambank_company_name
 from bank_rakyat import extract_bank_rakyat_party_name
+from hong_leong import extract_hong_leong_party_name
 from pdf_utils import _clean_candidate_name, extract_company_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
@@ -459,6 +460,89 @@ class CounterpartyCleaningTests(unittest.TestCase):
         )
 
         self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "NIK MOHD AFI RUSYAIDI ROSMAN")
+
+    def test_hong_leong_extracts_counterparties_from_export_descriptions(self):
+        self.assertEqual(
+            extract_hong_leong_party_name(
+                "HLConnect DuitNow-previously Inst 1,500.00 Fund transfer Bayaran balik modal "
+                "SHARIFAH BINTI JAMAL 20250303HLBBMYKL010ORM08520232"
+            ),
+            "SHARIFAH BINTI JAMAL",
+        )
+        self.assertEqual(
+            extract_hong_leong_party_name(
+                "Instant Transfer at KLM 30,000.00 interbank MTC ENGINEERING SDN. BHD. "
+                "20250701ARBKMYKL010OCB51275043"
+            ),
+            "MTC ENGINEERING SDN BHD",
+        )
+        self.assertEqual(
+            extract_hong_leong_party_name(
+                "FPX Collection at KLM 719.00 882100943395 AEON CREDIT SERVICE (M) BERHAD "
+                "I2503193750656"
+            ),
+            "AEON CREDIT SERVICE (M) BHD",
+        )
+        self.assertEqual(
+            extract_hong_leong_party_name(
+                "CIB IBG CA Debit Advice at KLM 487.20 Inv for Apr2025 RICOH (MALAYSIA) "
+                "IBGCMPMBBB2506190001638"
+            ),
+            "RICOH (MALAYSIA)",
+        )
+        self.assertEqual(
+            extract_hong_leong_party_name(
+                "JomPAY Bill Payment at DIO 652.65 220919488003 C6DGLCWB22506131047Y "
+                "TENAGA NASIONAL BERHAD 24IM250613001360"
+            ),
+            "TENAGA NASIONAL BHD",
+        )
+        self.assertEqual(
+            extract_hong_leong_party_name(
+                "CIB Instant Transfer at DIO 218.00 MTC STAFF CASH PETTY CASH PLAQUE "
+                "NOOR ZALINA BINTI SAMSUDDIN 20250709HLBBMYKL010OCB39528657"
+            ),
+            "NOOR ZALINA BINTI SAMSUDDIN",
+        )
+        self.assertEqual(
+            extract_hong_leong_party_name("Bulk DuitNow 120,000.00 JTG OnM MGT ALL CTHLCF70127561C777090725120759"),
+            "BULK DUITNOW",
+        )
+        self.assertTrue(_is_report_special_counterparty_bucket("BULK DUITNOW"))
+        self.assertTrue(_is_excluded_related_party_name("BULK DUITNOW"))
+
+    def test_hong_leong_ledger_resolves_description_only_counterparties(self):
+        ledger = build_track2_counterparty_ledger(
+            [
+                {
+                    "date": "2025-03-03",
+                    "description": (
+                        "HLConnect DuitNow-previously Inst 1,500.00 Fund transfer Bayaran balik modal "
+                        "SHARIFAH BINTI JAMAL 20250303HLBBMYKL010ORM08520232"
+                    ),
+                    "credit": 0,
+                    "debit": 1500.00,
+                    "balance": 0,
+                    "bank": "Hong Leong Islamic Bank",
+                    "source_file": "sample.pdf",
+                },
+                {
+                    "date": "2025-07-01",
+                    "description": (
+                        "Instant Transfer at KLM 30,000.00 interbank MTC ENGINEERING SDN. BHD. "
+                        "20250701ARBKMYKL010OCB51275043"
+                    ),
+                    "credit": 30000.00,
+                    "debit": 0,
+                    "balance": 0,
+                    "bank": "Hong Leong Islamic Bank",
+                    "source_file": "sample.pdf",
+                },
+            ]
+        )
+
+        names = {row["counterparty_name"] for row in ledger["counterparties"]}
+        self.assertEqual(names, {"SHARIFAH JAMAL", "MTC ENGINEERING SDN BHD"})
 
     def test_ibg_credit_counterparty_keeps_company_name(self):
         desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"

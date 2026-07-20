@@ -34,6 +34,11 @@ try:
 except Exception:  # pragma: no cover - Bank Rakyat parser may be unavailable in isolated imports
     extract_bank_rakyat_party_name = None
 
+try:
+    from hong_leong import extract_hong_leong_party_name
+except Exception:  # pragma: no cover - Hong Leong parser may be unavailable in isolated imports
+    extract_hong_leong_party_name = None
+
 
 def bind_app_globals(app_globals: dict) -> None:
     """Expose app.py helpers/constants that these extracted functions already use."""
@@ -561,6 +566,11 @@ def _resolve_transaction_counterparty_details(row: pd.Series) -> Tuple[str, bool
 
     if "RAKYAT" in bank and extract_bank_rakyat_party_name is not None:
         counterparty = normalize_counterparty_value(extract_bank_rakyat_party_name(description))
+        if counterparty and not _is_report_unknown_counterparty(counterparty):
+            return counterparty, True
+
+    if "HONG" in bank and "LEONG" in bank and extract_hong_leong_party_name is not None:
+        counterparty = normalize_counterparty_value(extract_hong_leong_party_name(description))
         if counterparty and not _is_report_unknown_counterparty(counterparty):
             return counterparty, True
 
