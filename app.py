@@ -2858,15 +2858,20 @@ def render_extracted_transaction_section(df: pd.DataFrame) -> None:
     st.markdown("#### All Transactions")
     requested_cols = ["date", "description", "debit", "credit", "balance"]
     display_cols = [c for c in requested_cols if c in df.columns]
+    display_df = df[display_cols].copy()
+    for money_col in ("debit", "credit", "balance"):
+        if money_col in display_df.columns:
+            display_df[money_col] = pd.to_numeric(display_df[money_col], errors="coerce").fillna(0.0)
+
     st.dataframe(
-        df[display_cols],
+        display_df,
         use_container_width=True,
         column_config={
             "date": "Transaction Date",
             "description": "Description",
-            "debit": "Debit (RM)",
-            "credit": "Credit (RM)",
-            "balance": "Running Balance",
+            "debit": st.column_config.NumberColumn("Debit (RM)", format="%.2f"),
+            "credit": st.column_config.NumberColumn("Credit (RM)", format="%.2f"),
+            "balance": st.column_config.NumberColumn("Running Balance", format="%.2f"),
         },
     )
 
