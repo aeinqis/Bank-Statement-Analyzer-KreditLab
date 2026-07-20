@@ -31,6 +31,13 @@ _MAYBANK_STATEMENT_DATE_LABEL_RE = re.compile(r"^\s*TARIKH\s+PENYATA\s*$", re.IG
 
 def _clean_candidate_name(s: str) -> str:
     s = (s or "").strip()
+    s = re.sub(
+        r"^\s*(?:ACCOUNT\s+NAME|A\/C\s+NAME|CUSTOMER\s+NAME|NAMA\s+AKAUN|NAMA\s+PELANGGAN|NAMA|"
+        r"ACCOUNT\s+HOLDER|PEMEGANG\s+AKAUN)\s*[:\-]?\s+",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
     # stop at common trailing fields
     s = re.split(
         r"\s{2,}|ACCOUNT\s+NO|A\/C\s+NO|NO\.\s*AKAUN|NO\s+AKAUN|STATEMENT|PENYATA|DATE|TARIKH|CURRENCY|BRANCH|PAGE|HALAMAN",

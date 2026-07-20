@@ -143,6 +143,34 @@ class CounterpartyCleaningTests(unittest.TestCase):
 
         self.assertEqual(extract_company_name(FakePdf(), max_pages=2), "LSR AGENCY")
 
+    def test_bank_islam_account_name_label_is_removed_from_company_name(self):
+        class FakePage:
+            def __init__(self, text):
+                self._text = text
+
+            def extract_text(self):
+                return self._text
+
+        class FakePdf:
+            pages = [
+                FakePage(
+                    "\n".join(
+                        [
+                            "Bank Islam",
+                            "Account Name FK TECHNOLOGY SDN BHD",
+                            "Account No 14123456789012",
+                            "Statement Date 01/03/2025 - 31/03/2025",
+                        ]
+                    )
+                )
+            ]
+
+        self.assertEqual(
+            _clean_candidate_name("Account Name FK TECHNOLOGY SDN BHD"),
+            "FK TECHNOLOGY SDN BHD",
+        )
+        self.assertEqual(extract_company_name(FakePdf(), max_pages=2), "FK TECHNOLOGY SDN BHD")
+
     def test_ambank_header_extracts_company_after_branch_number(self):
         class FakePage:
             def __init__(self, text):
@@ -1268,6 +1296,23 @@ class CounterpartyCleaningTests(unittest.TestCase):
             [p["party_name"] for p in party_view["payees"]],
             ["REAL SUPPLIER", "CHARGEPLUS SDN BHD"],
         )
+
+    def test_prepare_top_parties_excludes_system_counterparty_rows(self):
+        top_parties = {
+            "top_payers": [
+                {"party_name": "SYSTEM", "total_amount": 999999.0, "transaction_count": 10},
+                {"party_name": "REAL CUSTOMER", "total_amount": 1000.0, "transaction_count": 1},
+            ],
+            "top_payees": [
+                {"party_name": "BANK / SYSTEM", "total_amount": 888888.0, "transaction_count": 5},
+                {"party_name": "REAL SUPPLIER", "total_amount": 500.0, "transaction_count": 1},
+            ],
+        }
+
+        party_view = prepare_top_parties_for_report(top_parties, limit=10)
+
+        self.assertEqual([p["party_name"] for p in party_view["payers"]], ["REAL CUSTOMER"])
+        self.assertEqual([p["party_name"] for p in party_view["payees"]], ["REAL SUPPLIER"])
 
     def test_html_counterparty_summary_cards_use_unknown_as_raw_fallback(self):
         counterparty_rows = [
