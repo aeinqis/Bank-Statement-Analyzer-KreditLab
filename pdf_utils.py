@@ -38,6 +38,7 @@ def _clean_candidate_name(s: str) -> str:
         s,
         flags=re.IGNORECASE,
     )
+    s = re.sub(r"^\s*(?:[A-Z]{1,4}[-/]?\d{2,6}|\d{2,6}[-/]?[A-Z]{1,4})\s+", "", s, flags=re.IGNORECASE)
     # stop at common trailing fields
     s = re.split(
         r"\s{2,}|ACCOUNT\s+NO|A\/C\s+NO|NO\.\s*AKAUN|NO\s+AKAUN|STATEMENT|PENYATA|DATE|TARIKH|CURRENCY|BRANCH|PAGE|HALAMAN",
@@ -50,6 +51,10 @@ def _clean_candidate_name(s: str) -> str:
     s = s.lstrip(":;-• ").strip()
     s = re.sub(r"\s+", " ", s)
     return s
+
+
+def clean_extracted_company_name(s: str) -> str:
+    return _clean_candidate_name(s)
 
 
 def _looks_like_maybank_header_name(s: str) -> bool:

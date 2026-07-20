@@ -157,7 +157,7 @@ class CounterpartyCleaningTests(unittest.TestCase):
                     "\n".join(
                         [
                             "Bank Islam",
-                            "Account Name FK TECHNOLOGY SDN BHD",
+                            "Account Name C-056 FK TECHNOLOGY SDN BHD",
                             "Account No 14123456789012",
                             "Statement Date 01/03/2025 - 31/03/2025",
                         ]
@@ -166,10 +166,14 @@ class CounterpartyCleaningTests(unittest.TestCase):
             ]
 
         self.assertEqual(
-            _clean_candidate_name("Account Name FK TECHNOLOGY SDN BHD"),
+            _clean_candidate_name("Account Name C-056 FK TECHNOLOGY SDN BHD"),
             "FK TECHNOLOGY SDN BHD",
         )
         self.assertEqual(extract_company_name(FakePdf(), max_pages=2), "FK TECHNOLOGY SDN BHD")
+        self.assertEqual(
+            _clean_candidate_name("C-056 HYDRISE SOLUTION SDN BHD"),
+            "HYDRISE SOLUTION SDN BHD",
+        )
 
     def test_ambank_header_extracts_company_after_branch_number(self):
         class FakePage:
@@ -1467,6 +1471,7 @@ class CounterpartyCleaningTests(unittest.TestCase):
             {"name": "HIGH PARTY", "confidence": "HIGH"},
             {"name": "MEDIUM PARTY", "confidence": "MEDIUM"},
             {"name": "LOW PARTY", "status": "LOW"},
+            {"name": "OWN PARTY", "confidence": "MEDIUM"},
             {"name": "UNKNOWN STATUS", "confidence": "REVIEW"},
         ])
 
@@ -1491,6 +1496,13 @@ class CounterpartyCleaningTests(unittest.TestCase):
                             "evidence": "Flagged by Track 2 engine",
                             "total_cr": 134171.0,
                             "total_dr": 0.0,
+                        },
+                        {
+                            "name": "OWN PARTY",
+                            "confidence": "MEDIUM",
+                            "evidence": "DR 100.0% of gross",
+                            "total_cr": 0.0,
+                            "total_dr": 40000.0,
                         },
                         {
                             "name": "DANG YEAN LEE",

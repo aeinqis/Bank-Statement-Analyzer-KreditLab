@@ -28,6 +28,11 @@ def bind_app_globals(app_globals: dict) -> None:
         globals()[name] = value
 
 
+def _is_own_party_placeholder_name(name: str) -> bool:
+    clean = re.sub(r"\s+", " ", str(name or "").strip().upper())
+    return clean in {"OWN PARTY", "OWN PARTY SELF", "OWN PARTY (SELF)", "SELF"}
+
+
 def render_related_party_manager(
     cp_ledger: dict = None,
     shared_report_data: dict = None,
@@ -122,7 +127,7 @@ def render_related_party_manager(
             str(candidate.get("original_name") or "").strip() if isinstance(candidate, dict) else "",
         ]
         review_names = [name for name in names if name]
-        if any(_is_own_party_name(name) for name in review_names):
+        if any(_is_own_party_placeholder_name(name) or _is_own_party_name(name) for name in review_names):
             return True
         blocker_names = list(confirmed_names) + list(dismissed)
         return any(
@@ -342,6 +347,7 @@ def detect_related_party_candidates(
             or name in confirmed_names
             or name in dismissed
             or name in _NOISE
+            or _is_own_party_placeholder_name(display_name)
             or _report_name_matches_own_party(display_name, company_name)
             or _is_report_unknown_counterparty(display_name)
             or _is_report_special_counterparty_bucket(display_name)
@@ -456,6 +462,8 @@ def partition_related_party_candidates_for_manager(candidates: list) -> tuple[li
     possible = []
     for candidate in candidates or []:
         if not isinstance(candidate, dict):
+            continue
+        if _is_own_party_placeholder_name(candidate.get("name")) or _is_own_party_placeholder_name(candidate.get("original_name")):
             continue
         confidence = str(candidate.get("confidence") or candidate.get("status") or "").upper()
         if confidence == "HIGH":

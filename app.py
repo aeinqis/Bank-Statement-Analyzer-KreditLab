@@ -51,7 +51,7 @@ from alliance import parse_transactions_alliance
 from pdf_security import is_pdf_encrypted, decrypt_pdf_bytes
 
 # Import the extracted functions
-from pdf_utils import extract_company_name, extract_account_number
+from pdf_utils import clean_extracted_company_name, extract_company_name, extract_account_number
 from bank_totals import (
     extract_cimb_statement_totals,
     extract_rhb_statement_totals,
@@ -3358,7 +3358,7 @@ def calculate_monthly_summary(
         if is_ambank_summary:
             company_name = ambank_group_company_name(group_sorted, company_vals)
         else:
-            company_name = company_vals[0] if company_vals else None
+            company_name = clean_extracted_company_name(company_vals[0]) if company_vals else None
 
         acct_vals = [
             x for x in group_sorted.get("account_no", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist() if x.strip()
@@ -3645,6 +3645,8 @@ if uploaded_files and st.session_state.status == "running":
                 company_name = st.session_state.company_name_override.strip()
             if (st.session_state.company_account_no_override or "").strip():
                 account_no = st.session_state.company_account_no_override.strip()
+            if company_name:
+                company_name = clean_extracted_company_name(company_name)
 
             st.session_state.file_company_name[uploaded_file.name] = company_name
             st.session_state.file_account_no[uploaded_file.name] = account_no
