@@ -171,6 +171,33 @@ class CounterpartyCleaningTests(unittest.TestCase):
         )
         self.assertEqual(extract_ambank_company_name(FakePdf(), max_pages=2), "RE CONCEPT RESOURCES")
 
+    def test_ambank_header_extracts_company_after_branch_line(self):
+        class FakePage:
+            def __init__(self, text):
+                self._text = text
+
+            def extract_text(self, **kwargs):
+                return self._text
+
+        class FakePdf:
+            pages = [
+                FakePage(
+                    "\n".join(
+                        [
+                            "Dilindungi oleh PIDM setakat RM250,000",
+                            "TAMAN MALURI - CHERAS - 142",
+                            "PLENTITUDE ENERGY SDN BHD",
+                            "A-2-07 ONE SOUTH STREETMALL",
+                            "JALAN OS SEKSYEN 6",
+                            "TAMAN SERDANG PERDANA",
+                            "43300 SERI KEMBANGAN",
+                        ]
+                    )
+                )
+            ]
+
+        self.assertEqual(extract_ambank_company_name(FakePdf(), max_pages=2), "PLENTITUDE ENERGY SDN BHD")
+
     def test_ambank_monthly_summary_reuses_clean_statement_company(self):
         rows = [
             {
@@ -207,6 +234,47 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(
             [row["company_name"] for row in summary],
             ["RE CONCEPT RESOURCES", "RE CONCEPT RESOURCES", "RE CONCEPT RESOURCES"],
+        )
+
+    def test_ambank_monthly_summary_prefers_same_account_header_company(self):
+        rows = [
+            {
+                "date": "2024-03-02",
+                "description": "INWARD IBG KINI SDN BHD",
+                "debit": 0,
+                "credit": 100,
+                "balance": 100,
+                "bank": "Ambank",
+                "account_no": "8881019180298",
+                "company_name": "KINI SDN BHD",
+            },
+            {
+                "date": "2024-04-02",
+                "description": "INWARD IBG PROCESSING SDN BHD",
+                "debit": 0,
+                "credit": 100,
+                "balance": 200,
+                "bank": "Ambank",
+                "account_no": "8881019180298",
+                "company_name": "PROCESSING SDN BHD",
+            },
+            {
+                "date": "2024-05-02",
+                "description": "CREDIT TRANSFER",
+                "debit": 0,
+                "credit": 100,
+                "balance": 300,
+                "bank": "Ambank",
+                "account_no": "8881019180298",
+                "company_name": "PLENTITUDE ENERGY SDN BHD",
+            },
+        ]
+
+        summary = calculate_monthly_summary(rows)
+
+        self.assertEqual(
+            [row["company_name"] for row in summary],
+            ["PLENTITUDE ENERGY SDN BHD", "PLENTITUDE ENERGY SDN BHD", "PLENTITUDE ENERGY SDN BHD"],
         )
 
     def test_ibg_credit_counterparty_keeps_company_name(self):
