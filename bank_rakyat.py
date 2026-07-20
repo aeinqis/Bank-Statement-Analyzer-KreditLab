@@ -67,6 +67,25 @@ BANK_RAKYAT_PATTERNS = [
     ),
 ]
 
+BANK_RAKYAT_COMPANY_PREFIX_RE = re.compile(
+    r"^(?:\d{2,6}\s+)?(?:"
+    r"DUITNOW\s*(?:TRANSFER|FEE)|"
+    r"CIB\s+(?:DR|CR)\s+(?:ADVICE|CHARGES)|"
+    r"CIB\s+SMS\s+FEE|"
+    r"CIB\s+(?:DR\s+ADVICE|COMMISSION)\s*\(IBG\)|"
+    r"IBG\s+(?:CREDIT|INWARD\s+RETURN)|"
+    r"BANK\s+RAKYAT\s+(?:TRANSFER|PAYMENT)|"
+    r"TRANSFER\s+(?:TO|FROM)|"
+    r"PAYMENT\s+(?:TO|FROM)"
+    r")\s+",
+    re.I,
+)
+
+BANK_RAKYAT_COMPANY_NAME_RE = re.compile(
+    r"\b(?P<party>[A-Z0-9][A-Z0-9 &'()./-]*?\b(?:SDN\.?\s*BHD\.?|BHD\.?|BERHAD|PLT)\b)",
+    re.I,
+)
+
 
 # ── Amount / date helpers ──────────────────────────────────────────────────────
 
@@ -93,6 +112,16 @@ def clean_bank_rakyat_party_name(value: str) -> str:
     if not party:
         return "UNKNOWN"
     party = re.sub(r"^\(?IBG\)?\s+", "", party, flags=re.I)
+    party = re.sub(r"\bSDNBHD\b", "SDN BHD", party, flags=re.I)
+    party = re.sub(r"\bSDN\.?\s*BHD\.?\b", "SDN BHD", party, flags=re.I)
+    party = re.sub(r"\bSDN\.?\s*BH\b", "SDN BHD", party, flags=re.I)
+    party = re.sub(r"\bSDN\.?\s*B\b", "SDN BHD", party, flags=re.I)
+    party = re.sub(r"\bBERHAD\b", "BHD", party, flags=re.I)
+    company_match = re.search(r"\b(?:SDN\s+BHD|BHD|PLT)\b", party, re.I)
+    if company_match:
+        party = party[:company_match.end()]
+        party = re.sub(r"\s{2,}", " ", party).strip(" ,.-")
+        return party or "UNKNOWN"
     party = re.sub(
         r"\b(?:AGROBIZ|TRADING|SIMPANAN|STAFFID\d+|GAJI\s+\w+\d*|GAJI|BAYARAN|BAY\d*|"
         r"PWR|PINDAHAN|REFUND|LEKUPAN|SUMBANGAN|INV[-/\w]*|KZ[\w/-]*|PBWPHG/[\w/-]*|"
@@ -104,11 +133,6 @@ def clean_bank_rakyat_party_name(value: str) -> str:
     party = re.sub(r"\bFAROENGINEERING\b", "FARO ENGINEERING", party, flags=re.I)
     party = re.sub(r"\bROSMANHASHIM\b", "ROSMAN HASHIM", party, flags=re.I)
     party = re.sub(r"\bWANHABIBOTHMANBINWANRAZALI\b", "WAN HABIB OTHMAN BIN WAN RAZALI", party, flags=re.I)
-    party = re.sub(r"\bSDNBHD\b", "SDN BHD", party, flags=re.I)
-    party = re.sub(r"\bSDN\.?\s*BHD\.?\b", "SDN BHD", party, flags=re.I)
-    party = re.sub(r"\bSDN\.?\s*BH\b", "SDN BHD", party, flags=re.I)
-    party = re.sub(r"\bSDN\.?\s*B\b", "SDN BHD", party, flags=re.I)
-    party = re.sub(r"\b(SDN\s+BHD)\b.*$", r"\1", party, flags=re.I)
     party = re.sub(r"\s{2,}", " ", party).strip(" ,.-")
     return party or "UNKNOWN"
 
@@ -130,6 +154,10 @@ def extract_bank_rakyat_party_name(description: str) -> str:
         if m:
             party = m.groupdict().get("party", "")
             return clean_bank_rakyat_party_name(party)
+    company_text = BANK_RAKYAT_COMPANY_PREFIX_RE.sub("", desc)
+    company_match = BANK_RAKYAT_COMPANY_NAME_RE.search(company_text)
+    if company_match:
+        return clean_bank_rakyat_party_name(company_match.group("party"))
     return "UNKNOWN"
 
 
@@ -473,6 +501,7 @@ def parse_bank_rakyat(pdf_path, source_filename=""):
         debit   = row.get("debit")  or 0.0
         credit  = row.get("credit") or 0.0
         balance = row.get("balance")
+        description = row.get("description", "")
 
         if debit == 0.0 and credit == 0.0 and prev_balance is not None and balance is not None:
             delta = round(balance - prev_balance, 2)
@@ -486,7 +515,8 @@ def parse_bank_rakyat(pdf_path, source_filename=""):
         results.append({
             "date":                     row.get("date", ""),
             "transaction_code":         row.get("transaction_code", ""),
-            "description":              row.get("description", ""),
+            "description":              description,
+            "party_name":               extract_bank_rakyat_party_name(description),
             "debit":                    round(float(debit  or 0.0), 2),
             "credit":                   round(float(credit or 0.0), 2),
             "balance":                  balance,

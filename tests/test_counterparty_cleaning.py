@@ -5,6 +5,7 @@ from alliance import annotate_alliance_counterparties, extract_alliance_party_na
 from agro_bank import extract_agrobank_party_name
 from maybank import annotate_maybank_counterparties, extract_maybank_party_name
 from ambank import clean_ambank_company_name, extract_ambank_company_name
+from bank_rakyat import extract_bank_rakyat_party_name
 from pdf_utils import _clean_candidate_name, extract_company_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
@@ -344,6 +345,52 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(summary[0]["ending_balance"], 289072.37)
         self.assertEqual(summary[0]["total_debit"], 925845.24)
         self.assertEqual(summary[0]["total_credit"], 712759.99)
+
+    def test_bank_rakyat_extracts_company_counterparties_from_descriptions(self):
+        self.assertEqual(
+            extract_bank_rakyat_party_name(
+                "CIB CR ADVICE MTC OREC SDN BHD MTCEC LOAN REPAYMENT - BANK RAKYAT NOVEMBER 24"
+            ),
+            "MTC OREC SDN BHD",
+        )
+        self.assertEqual(
+            extract_bank_rakyat_party_name("DUITNOW TRANSFER AANS MARINE SDN BHD MARINE INV24 063 20PCT"),
+            "AANS MARINE SDN BHD",
+        )
+        self.assertEqual(
+            extract_bank_rakyat_party_name("BANK RAKYAT TRANSFER AANS MARINE SDN BHD INV 24-063"),
+            "AANS MARINE SDN BHD",
+        )
+
+    def test_bank_rakyat_ledger_resolves_description_only_company_counterparties(self):
+        ledger = build_track2_counterparty_ledger(
+            [
+                {
+                    "date": "2024-11-29",
+                    "description": (
+                        "CIB CR ADVICE MTC OREC SDN BHD MTCEC LOAN REPAYMENT - "
+                        "BANK RAKYAT NOVEMBER 24"
+                    ),
+                    "credit": 1609.52,
+                    "debit": 0,
+                    "balance": -242079.30,
+                    "bank": "Bank Rakyat",
+                    "source_file": "sample.pdf",
+                },
+                {
+                    "date": "2024-12-16",
+                    "description": "DUITNOW TRANSFER AANS MARINE SDN BHD MARINE INV24 063 20PCT",
+                    "credit": 0,
+                    "debit": 96000.00,
+                    "balance": -237349.90,
+                    "bank": "Bank Rakyat",
+                    "source_file": "sample.pdf",
+                },
+            ]
+        )
+
+        names = {row["counterparty_name"] for row in ledger["counterparties"]}
+        self.assertEqual(names, {"MTC OREC SDN BHD", "AANS MARINE SDN BHD"})
 
     def test_ibg_credit_counterparty_keeps_company_name(self):
         desc = "IBG CREDIT INTERBANK GIRO INTERBANK GIRO SOUTHERN CABLE SDN B"
