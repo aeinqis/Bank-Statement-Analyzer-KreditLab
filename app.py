@@ -3159,47 +3159,6 @@ def _clean_ambank_summary_company_name(value) -> Optional[str]:
     return cleaned
 
 
-def _ambank_company_candidate_description_hits(rows: pd.DataFrame, candidate: str) -> int:
-    if not candidate or "description" not in rows.columns:
-        return 0
-    candidate_upper = normalize_text(candidate).upper()
-    if not candidate_upper:
-        return 0
-    hits = 0
-    for desc in rows["description"].dropna().astype(str).tolist():
-        if candidate_upper in normalize_text(desc).upper():
-            hits += 1
-    return hits
-
-
-def _choose_ambank_account_company(rows: pd.DataFrame) -> Optional[str]:
-    if rows.empty or "company_name" not in rows.columns:
-        return None
-
-    scored = []
-    for value in rows["company_name"].dropna().astype(str).tolist():
-        candidate = _clean_ambank_summary_company_name(value)
-        if not candidate:
-            continue
-        candidate_rows = rows[
-            rows["company_name"].fillna("").astype(str).apply(
-                lambda x: _clean_ambank_summary_company_name(x) == candidate
-            )
-        ]
-        scored.append(
-            (
-                _ambank_company_candidate_description_hits(rows, candidate),
-                -len(candidate_rows),
-                -len(candidate),
-                candidate,
-            )
-        )
-
-    if not scored:
-        return None
-    return sorted(set(scored))[0][3]
-
-
 def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
     if not transactions:
         return []
@@ -3241,41 +3200,12 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
         )
 
     fallback_company_name = None
-    account_company_names = {}
     if is_ambank_summary and "company_name" in df.columns:
-        fallback_company_name = _choose_ambank_account_company(df)
-        if "account_no" in df.columns:
-            for account_no_value, account_group in df.groupby("account_no", dropna=True):
-                candidate = _choose_ambank_account_company(account_group)
-                account_no_key = normalize_text(account_no_value)
-                if account_no_key and candidate:
-                    account_company_names[account_no_key] = candidate
-        if not fallback_company_name:
-            for value in df["company_name"].dropna().tolist():
-                candidate = _clean_ambank_summary_company_name(value)
-                if candidate:
-                    fallback_company_name = candidate
-                    break
-
-    def ambank_group_company_name(group_rows: pd.DataFrame, values: List[str]) -> Optional[str]:
-        account_keys = [
-            normalize_text(x)
-            for x in group_rows.get("account_no", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist()
-            if normalize_text(x)
-        ]
-        for account_key in account_keys:
-            if account_key in account_company_names:
-                return account_company_names[account_key]
-
-        candidate = _choose_ambank_account_company(group_rows)
-        if candidate:
-            return candidate
-
-        for value in values:
+        for value in df["company_name"].dropna().tolist():
             candidate = _clean_ambank_summary_company_name(value)
             if candidate:
-                return candidate
-        return fallback_company_name
+                fallback_company_name = candidate
+                break
 
     monthly_summary: List[dict] = []
     for period, group in df.groupby("month_period", sort=True):
@@ -3298,7 +3228,14 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
             if x.strip()
         ]
         if is_ambank_summary:
-            company_name = ambank_group_company_name(group_sorted, company_vals)
+            company_name = next(
+                (
+                    candidate
+                    for candidate in (_clean_ambank_summary_company_name(x) for x in company_vals)
+                    if candidate
+                ),
+                fallback_company_name,
+            )
         else:
             company_name = company_vals[0] if company_vals else None
 

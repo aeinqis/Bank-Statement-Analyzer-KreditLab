@@ -148,17 +148,6 @@ AMBANK_BRANCH_COMPANY_RE = re.compile(
     """,
     re.I | re.X,
 )
-AMBANK_BRANCH_LINE_RE = re.compile(
-    r"""^\s*
-    [A-Z][A-Z\s.'()/&-]*?
-    \s+-\s+
-    [A-Z0-9][A-Z0-9\s.'()/&-]*?
-    \s+-\s+
-    \d{2,6}
-    \s*$
-    """,
-    re.I | re.X,
-)
 AMBANK_COMPANY_SUFFIX_RE = re.compile(
     r"\b(SDN\.?\s*BHD\.?|BHD\.?|BERHAD|ENTERPRISE|RESOURCES|TRADING|SERVICES|HOLDINGS|PLT)\b",
     re.I,
@@ -230,24 +219,6 @@ def _looks_like_ambank_company_name(raw: str, cleaned: str) -> bool:
     return bool(AMBANK_COMPANY_SUFFIX_RE.search(cleaned))
 
 
-def _looks_like_ambank_header_company_line(raw: str) -> bool:
-    cleaned = clean_ambank_company_name(raw)
-    if not cleaned:
-        return False
-    if len(cleaned) < 6:
-        return False
-    if re.search(r"\d{4,}", cleaned):
-        return False
-    if re.search(
-        r"\b(?:JALAN|TAMAN|PERSIARAN|LORONG|BANDAR|SEKSYEN|SERI|NO\.?|LOT|"
-        r"ACCOUNT|STATEMENT|PAGE|DILINDUNGI|PIDM)\b",
-        cleaned,
-        flags=re.I,
-    ):
-        return False
-    return bool(AMBANK_COMPANY_SUFFIX_RE.search(cleaned))
-
-
 def _extract_page_text(page) -> str:
     try:
         return page.extract_text(x_tolerance=1) or ""
@@ -259,8 +230,6 @@ def extract_ambank_company_name(pdf: pdfplumber.PDF, max_pages: int = 2) -> Opti
     """
     Extract AmBank account-holder name from headers like:
     "JOHOR BAHRU - MELODIES GARDEN - 044 RE CONCEPT RESOURCES".
-    Also handles layouts where "TAMAN MALURI - CHERAS - 142" is followed by
-    the company name on the next line inside the address box.
     """
     try:
         pages = pdf.pages[: max(0, min(max_pages, len(pdf.pages)))]
@@ -275,13 +244,6 @@ def extract_ambank_company_name(pdf: pdfplumber.PDF, max_pages: int = 2) -> Opti
         cleaned = clean_ambank_company_name(line)
         if _looks_like_ambank_company_name(line, cleaned):
             return cleaned
-
-    for idx, line in enumerate(lines[:80]):
-        if not AMBANK_BRANCH_LINE_RE.match(line):
-            continue
-        for candidate_line in lines[idx + 1 : min(len(lines), idx + 7)]:
-            if _looks_like_ambank_header_company_line(candidate_line):
-                return clean_ambank_company_name(candidate_line)
 
     return None
 
