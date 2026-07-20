@@ -115,6 +115,16 @@ class CounterpartyCleaningTests(unittest.TestCase):
             "DMC TRAVEL AND TOURS SDN BHD",
         )
 
+    def test_statement_company_name_repairs_bank_rakyat_glued_spacing(self):
+        self.assertEqual(
+            _clean_candidate_name("FAROENGINEERING(M)SDN BHD"),
+            "FARO ENGINEERING (M) SDN BHD",
+        )
+        self.assertEqual(
+            _clean_candidate_name("Account Name FAROENGINEERING(M)SDNBHD"),
+            "FARO ENGINEERING (M) SDN BHD",
+        )
+
     def test_maybank_header_extracts_suffixless_agency_name(self):
         class FakePage:
             def __init__(self, text):

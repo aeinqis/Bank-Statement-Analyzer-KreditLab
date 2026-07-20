@@ -29,8 +29,18 @@ _STATEMENT_DATE_TAIL_RE = re.compile(r"\s*(?:\u7d50\u55ae\u65e5\u671f|\u7ed3\u53
 _MAYBANK_STATEMENT_DATE_LABEL_RE = re.compile(r"^\s*TARIKH\s+PENYATA\s*$", re.IGNORECASE)
 
 
+def _repair_glued_company_name_spacing(s: str) -> str:
+    s = re.sub(r"\bFAROENGINEERING\b", "FARO ENGINEERING", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bSDNBHD\b", "SDN BHD", s, flags=re.IGNORECASE)
+    s = re.sub(r"(?<=[A-Za-z0-9])\((M|MALAYSIA)\)", r" (\1)", s, flags=re.IGNORECASE)
+    s = re.sub(r"\)(?=[A-Za-z])", ") ", s)
+    s = re.sub(r"(?<=[A-Za-z0-9)])(?=(?:SDN|BHD|BERHAD|PLT)\b)", " ", s, flags=re.IGNORECASE)
+    return s
+
+
 def _clean_candidate_name(s: str) -> str:
     s = (s or "").strip()
+    s = _repair_glued_company_name_spacing(s)
     s = re.sub(
         r"^\s*(?:ACCOUNT\s+NAME|A\/C\s+NAME|CUSTOMER\s+NAME|NAMA\s+AKAUN|NAMA\s+PELANGGAN|NAMA|"
         r"ACCOUNT\s+HOLDER|PEMEGANG\s+AKAUN)\s*[:\-]?\s+",
@@ -47,6 +57,7 @@ def _clean_candidate_name(s: str) -> str:
     )[0].strip()
     s = _COMPANY_SDN_BHD_TAIL_RE.sub("SDN BHD", s).strip()
     s = _STATEMENT_DATE_TAIL_RE.sub("", s).strip()
+    s = _repair_glued_company_name_spacing(s)
     # remove weird leading bullets/colons
     s = s.lstrip(":;-• ").strip()
     s = re.sub(r"\s+", " ", s)
