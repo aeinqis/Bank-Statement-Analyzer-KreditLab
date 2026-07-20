@@ -3159,7 +3159,98 @@ def _clean_ambank_summary_company_name(value) -> Optional[str]:
     return cleaned
 
 
-def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
+def _apply_ambank_statement_totals_to_monthly_summary(rows: List[dict], statement_totals: List[dict]) -> List[dict]:
+    if not rows or not statement_totals:
+        return rows
+
+    totals_by_month: Dict[str, List[dict]] = {}
+    for total in statement_totals:
+        if not isinstance(total, dict):
+            continue
+        month = normalize_text(total.get("statement_month"))
+        if month:
+            totals_by_month.setdefault(month, []).append(total)
+
+    out: List[dict] = []
+    for row in rows:
+        row_out = dict(row)
+        month = normalize_text(row_out.get("month"))
+        refs = totals_by_month.get(month, [])
+        if not refs:
+            out.append(row_out)
+            continue
+
+        source_files = normalize_text(row_out.get("source_files"))
+        ref = None
+        if source_files:
+            for candidate in refs:
+                source_file = normalize_text(candidate.get("source_file"))
+                if source_file and source_file in source_files:
+                    ref = candidate
+                    break
+        if ref is None and len(refs) == 1:
+            ref = refs[0]
+        if ref is None:
+            out.append(row_out)
+            continue
+
+        for field in ("opening_balance", "ending_balance", "total_debit", "total_credit"):
+            value = ref.get(field)
+            if value is not None:
+                row_out[field] = round(safe_float(value), 2)
+        if row_out.get("total_debit") is not None and row_out.get("total_credit") is not None:
+            row_out["net_change"] = round(
+                safe_float(row_out.get("total_credit")) - safe_float(row_out.get("total_debit")),
+                2,
+            )
+        out.append(row_out)
+
+    return out
+
+
+def _ambank_company_candidate_description_hits(rows: pd.DataFrame, candidate: str) -> int:
+    if not candidate or "description" not in rows.columns:
+        return 0
+    candidate_upper = normalize_text(candidate).upper()
+    hits = 0
+    for desc in rows["description"].dropna().astype(str).tolist():
+        if candidate_upper and candidate_upper in normalize_text(desc).upper():
+            hits += 1
+    return hits
+
+
+def _choose_ambank_account_company(rows: pd.DataFrame) -> Optional[str]:
+    if rows.empty or "company_name" not in rows.columns:
+        return None
+
+    scored = []
+    for value in rows["company_name"].dropna().astype(str).tolist():
+        candidate = _clean_ambank_summary_company_name(value)
+        if not candidate:
+            continue
+        candidate_count = sum(
+            1
+            for other in rows["company_name"].dropna().astype(str).tolist()
+            if _clean_ambank_summary_company_name(other) == candidate
+        )
+        scored.append(
+            (
+                _ambank_company_candidate_description_hits(rows, candidate),
+                -candidate_count,
+                -len(candidate),
+                candidate,
+            )
+        )
+
+    if not scored:
+        return None
+    return sorted(set(scored))[0][3]
+
+
+def calculate_monthly_summary(
+    transactions: List[dict],
+    ambank_statement_totals: Optional[List[dict]] = None,
+) -> List[dict]:
     if not transactions:
         return []
 
@@ -3200,12 +3291,41 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
         )
 
     fallback_company_name = None
+    account_company_names = {}
     if is_ambank_summary and "company_name" in df.columns:
-        for value in df["company_name"].dropna().tolist():
+        fallback_company_name = _choose_ambank_account_company(df)
+        if "account_no" in df.columns:
+            for account_no_value, account_group in df.groupby("account_no", dropna=True):
+                account_key = normalize_text(account_no_value)
+                candidate = _choose_ambank_account_company(account_group)
+                if account_key and candidate:
+                    account_company_names[account_key] = candidate
+        if not fallback_company_name:
+            for value in df["company_name"].dropna().tolist():
+                candidate = _clean_ambank_summary_company_name(value)
+                if candidate:
+                    fallback_company_name = candidate
+                    break
+
+    def ambank_group_company_name(group_rows: pd.DataFrame, values: List[str]) -> Optional[str]:
+        account_keys = [
+            normalize_text(x)
+            for x in group_rows.get("account_no", pd.Series([], dtype=object)).dropna().astype(str).unique().tolist()
+            if normalize_text(x)
+        ]
+        for account_key in account_keys:
+            if account_key in account_company_names:
+                return account_company_names[account_key]
+
+        candidate = _choose_ambank_account_company(group_rows)
+        if candidate:
+            return candidate
+
+        for value in values:
             candidate = _clean_ambank_summary_company_name(value)
             if candidate:
-                fallback_company_name = candidate
-                break
+                return candidate
+        return fallback_company_name
 
     monthly_summary: List[dict] = []
     for period, group in df.groupby("month_period", sort=True):
@@ -3228,14 +3348,7 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
             if x.strip()
         ]
         if is_ambank_summary:
-            company_name = next(
-                (
-                    candidate
-                    for candidate in (_clean_ambank_summary_company_name(x) for x in company_vals)
-                    if candidate
-                ),
-                fallback_company_name,
-            )
+            company_name = ambank_group_company_name(group_sorted, company_vals)
         else:
             company_name = company_vals[0] if company_vals else None
 
@@ -3299,7 +3412,13 @@ def calculate_monthly_summary(transactions: List[dict]) -> List[dict]:
         if r.get("ending_balance") is not None:
             prev_end = safe_float(r.get("ending_balance"))
 
-    return standardize_monthly_summary_balance_chain(monthly_summary_sorted)
+    standardized = standardize_monthly_summary_balance_chain(monthly_summary_sorted)
+    if is_ambank_summary:
+        standardized = _apply_ambank_statement_totals_to_monthly_summary(
+            standardized,
+            ambank_statement_totals or [],
+        )
+    return standardized
 
 
 def present_monthly_summary_standard(rows: List[dict]) -> List[dict]:
@@ -3750,7 +3869,10 @@ if st.session_state.results:
             top_n=10,
             high_value_threshold=high_value_threshold,
         )
-        monthly_summary_raw = calculate_monthly_summary(st.session_state.results)
+        monthly_summary_raw = calculate_monthly_summary(
+            st.session_state.results,
+            ambank_statement_totals=st.session_state.get("ambank_statement_totals", []),
+        )
         monthly_summary = present_monthly_summary_standard(monthly_summary_raw)
 
         # Build serialized inputs and shared_report_data EARLY so the
