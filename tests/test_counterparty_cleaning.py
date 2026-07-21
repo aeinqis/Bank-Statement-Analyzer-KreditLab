@@ -7,7 +7,8 @@ from maybank import annotate_maybank_counterparties, extract_maybank_party_name
 from ambank import clean_ambank_company_name, extract_ambank_company_name
 from bank_rakyat import extract_bank_rakyat_party_name
 from hong_leong import extract_hong_leong_party_name
-from pdf_utils import _clean_candidate_name, extract_company_name
+from ocbc import extract_ocbc_party_name
+from pdf_utils import _clean_candidate_name, clean_extracted_company_name, extract_company_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
     build_own_related_party_groups_for_report,
@@ -553,6 +554,26 @@ class CounterpartyCleaningTests(unittest.TestCase):
         )
         self.assertTrue(_is_report_special_counterparty_bucket("BULK DUITNOW"))
         self.assertTrue(_is_excluded_related_party_name("BULK DUITNOW"))
+
+    def test_ocbc_duitnow_counterparty_keeps_sdn_bhd_suffix(self):
+        self.assertEqual(
+            extract_ocbc_party_name("DUITNOW(INST TRF) CR /IB LF SERVICES SDN. BH DESC REF: PV13/2023/LFS"),
+            "LF SERVICES SDN BHD",
+        )
+        self.assertEqual(
+            extract_ocbc_party_name("DUITNOW SC /IB LF SERVICES SDN, BH DESC REF: PV03/2023/LFS/MBB"),
+            "LF SERVICES SDN BHD",
+        )
+        self.assertEqual(
+            clean_counterparty_name(
+                extract_ocbc_party_name("DUITNOW(INST TRF) DR /IB LF SERVICES SDN. BHD DESC REF: PV01 2023 LFS OCBC")
+            ),
+            "LF SERVICES SDN BHD",
+        )
+
+    def test_extracted_company_name_strips_leading_short_number(self):
+        self.assertEqual(clean_extracted_company_name("709 LF SERVICES SDN BHD"), "LF SERVICES SDN BHD")
+        self.assertEqual(clean_extracted_company_name("24SEVEN SERVICES SDN BHD"), "24SEVEN SERVICES SDN BHD")
 
     def test_hong_leong_ledger_resolves_description_only_counterparties(self):
         ledger = build_track2_counterparty_ledger(

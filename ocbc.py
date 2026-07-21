@@ -244,11 +244,14 @@ def _normalize_ocbc_party_name(name: str) -> str:
 
     normalized_tokens = []
     for token in cleaned.split():
-        if token in {"SND", "SD"}:
-            token = "SDN"
-        if token in {"BH", "BDH", "B"} and any(existing == "SDN" for existing in normalized_tokens):
-            token = "BHD"
-        normalized_tokens.append(token)
+        token_core = token.strip(" .,-")
+        if not token_core:
+            continue
+        if token_core in {"SND", "SD", "SDN"}:
+            token_core = "SDN"
+        if token_core in {"BH", "BDH", "B", "BHD"} and any(existing == "SDN" for existing in normalized_tokens):
+            token_core = "BHD"
+        normalized_tokens.append(token_core)
 
     cleaned = normalize_company_suffix(" ".join(normalized_tokens))
     return cleaned or "UNKNOWN"

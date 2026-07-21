@@ -49,6 +49,12 @@ def _clean_candidate_name(s: str) -> str:
         flags=re.IGNORECASE,
     )
     s = re.sub(r"^\s*(?:[A-Z]{1,4}[-/]?\d{2,6}|\d{2,6}[-/]?[A-Z]{1,4})\s+", "", s, flags=re.IGNORECASE)
+    s = re.sub(
+        r"^\s*\d{1,5}\s+(?=[A-Z][A-Z0-9&().,'\/-]*(?:\s|$))",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
     # stop at common trailing fields
     s = re.split(
         r"\s{2,}|ACCOUNT\s+NO|A\/C\s+NO|NO\.\s*AKAUN|NO\s+AKAUN|STATEMENT|PENYATA|DATE|TARIKH|CURRENCY|BRANCH|PAGE|HALAMAN",
