@@ -662,6 +662,21 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(prepared.iloc[0]["counterparty_name_raw"], "MURUGAN A/L VASU")
         self.assertEqual(prepared.iloc[0]["counterparty_name"], "MURUGAN A/L VASU")
 
+    def test_rhb_ledger_rescues_indian_parentage_without_bank_label(self):
+        ledger = build_track2_counterparty_ledger(
+            [
+                {
+                    "date": "2025-03-19",
+                    "description": "RPP INWARD INST TRF MURUGAN A / L VASU / FUND TRANSFER / CAR REPAIR",
+                    "credit": 635.0,
+                    "debit": 0.0,
+                    "balance": 1000.0,
+                    "party_name": "A L",
+                }
+            ]
+        )
+        self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "MURUGAN A/L VASU")
+
     def test_hong_leong_ledger_resolves_description_only_counterparties(self):
         ledger = build_track2_counterparty_ledger(
             [
