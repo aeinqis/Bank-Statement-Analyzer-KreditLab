@@ -230,6 +230,13 @@ _OWN_PARTY_BOILER_SUFFIX = {
 _OWN_PARTY_DESC_TOKEN_RE = re.compile(r"[A-Z0-9]+")
 
 
+def _tokens_contain_sequence(tokens: List[str], sequence: Tuple[str, ...]) -> bool:
+    if not sequence or len(tokens) < len(sequence):
+        return False
+    sequence_len = len(sequence)
+    return any(tuple(tokens[idx:idx + sequence_len]) == sequence for idx in range(len(tokens) - sequence_len + 1))
+
+
 def _normalise_counterparty(name: str) -> str:
     """CP11 normalisation: uppercase, preserve legal suffixes, merge known variants.
 
@@ -1668,6 +1675,80 @@ def _cp_choose_shared_prefix_canonical(
     return sorted(prefixed or list(candidates), key=lambda value: (len(value.split()), len(value), value))[0]
 
 
+def _cp_common_sequence_tokens(tokens: List[str]) -> List[str]:
+    return [
+        token
+        for token in tokens
+        if token
+        and token not in CP_SHARED_TOKEN_EXCLUDE
+        and not token.isdigit()
+    ]
+
+
+def _cp_longest_common_token_sequence(
+    left_tokens: List[str],
+    right_tokens: List[str],
+) -> Tuple[str, ...]:
+    left = _cp_common_sequence_tokens(left_tokens)
+    right = _cp_common_sequence_tokens(right_tokens)
+    if len(left) < 2 or len(right) < 2:
+        return ()
+
+    best: Tuple[str, ...] = ()
+    lengths = [[0] * (len(right) + 1) for _ in range(len(left) + 1)]
+    for left_idx, left_token in enumerate(left, start=1):
+        for right_idx, right_token in enumerate(right, start=1):
+            if left_token != right_token:
+                continue
+            lengths[left_idx][right_idx] = lengths[left_idx - 1][right_idx - 1] + 1
+            run_len = lengths[left_idx][right_idx]
+            if run_len < 2:
+                continue
+            candidate = tuple(left[left_idx - run_len:left_idx])
+            if (len(candidate), sum(len(token) for token in candidate)) > (
+                len(best),
+                sum(len(token) for token in best),
+            ):
+                best = candidate
+    return best
+
+
+def _cp_common_embedded_sequence_match(
+    left_variants: List[List[str]],
+    right_variants: List[List[str]],
+) -> Tuple[str, ...]:
+    best: Tuple[str, ...] = ()
+    for left_tokens in left_variants:
+        for right_tokens in right_variants:
+            candidate = _cp_longest_common_token_sequence(left_tokens, right_tokens)
+            if (len(candidate), sum(len(token) for token in candidate), candidate) > (
+                len(best),
+                sum(len(token) for token in best),
+                best,
+            ):
+                best = candidate
+    return best
+
+
+def _cp_choose_common_sequence_canonical(
+    names: List[str],
+    groups: Dict[str, dict],
+    anchor: Tuple[str, ...],
+) -> str:
+    legal_candidates: List[str] = []
+    for name in names:
+        if name not in groups:
+            continue
+        for tokens in _cp_group_token_variants(name, groups[name]):
+            legal_candidate = _cp_legal_entity_candidate(tokens)
+            if legal_candidate and _tokens_contain_sequence(legal_candidate.split(), anchor):
+                legal_candidates.append(legal_candidate)
+
+    if legal_candidates:
+        return sorted(set(legal_candidates), key=lambda value: (len(value.split()), len(value), value))[0]
+    return " ".join(anchor)
+
+
 def _cp_meaningful_shared_tokens(tokens: List[str]) -> set:
     return {
         token
@@ -1971,6 +2052,26 @@ def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
                 if not anchor:
                     continue
                 canonical = _cp_choose_prefix_canonical([a, b], groups, anchor)
+                _cp_merge_pair(groups, a, b, canonical)
+                merged_any = True
+
+        names = [n for n in groups.keys() if not _is_protected(n)]
+        variant_tokens = {n: _cp_group_token_variants(n, groups[n]) for n in names}
+
+        name_list = list(names)
+        for i, a in enumerate(name_list):
+            if a not in groups:
+                continue
+            for b in name_list[i + 1:]:
+                if b not in groups or a not in groups:
+                    continue
+                anchor = _cp_common_embedded_sequence_match(
+                    variant_tokens.get(a, []),
+                    variant_tokens.get(b, []),
+                )
+                if not anchor:
+                    continue
+                canonical = _cp_choose_common_sequence_canonical([a, b], groups, anchor)
                 _cp_merge_pair(groups, a, b, canonical)
                 merged_any = True
 

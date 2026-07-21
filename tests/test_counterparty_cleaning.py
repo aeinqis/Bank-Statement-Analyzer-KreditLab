@@ -73,6 +73,49 @@ class CounterpartyCleaningTests(unittest.TestCase):
             "SAKURA FERROALLOYS",
         )
 
+    def test_embedded_two_token_counterparty_variants_merge(self):
+        names = [
+            "JANUA RI PERKHIDMATA DEWAN BANDARAYA KUALA LUMPUR",
+            "2 PERKHIDMATAN PE DEWAN BANDARAYA KUALA LUMPUR",
+            "MEI 2 PERKHIDMATAN PE DEWAN BANDARAYA KUALA LUMPUR",
+            "APRIL PERKHIDMATAN DEWAN BANDARAYA KUALA LUMPUR",
+            "MAC 2 9 PERKHIDMATAN PE 0 DEWAN BANDARAYA KUALA LUMPUR",
+        ]
+
+        groups = {
+            name: {
+                "counterparty_name": name,
+                "total_credits": 0.0,
+                "total_debits": float(idx + 1),
+                "transaction_count": 1,
+            }
+            for idx, name in enumerate(names)
+        }
+
+        merged = _merge_counterparty_groups(groups)
+        self.assertEqual(set(merged.keys()), {"DEWAN BANDARAYA KUALA LUMPUR"})
+        row = merged["DEWAN BANDARAYA KUALA LUMPUR"]
+        self.assertEqual(row["total_debits"], 15.0)
+        self.assertEqual(row["transaction_count"], 5)
+
+        generic_groups = {
+            "APRIL PERKHIDMATAN MAJLIS BANDARAYA SHAH ALAM": {
+                "counterparty_name": "APRIL PERKHIDMATAN MAJLIS BANDARAYA SHAH ALAM",
+                "total_credits": 10.0,
+                "total_debits": 0.0,
+                "transaction_count": 1,
+            },
+            "MEI 2 BAYARAN MAJLIS BANDARAYA SHAH ALAM": {
+                "counterparty_name": "MEI 2 BAYARAN MAJLIS BANDARAYA SHAH ALAM",
+                "total_credits": 0.0,
+                "total_debits": 5.0,
+                "transaction_count": 1,
+            },
+        }
+
+        generic_merged = _merge_counterparty_groups(generic_groups)
+        self.assertEqual(set(generic_merged.keys()), {"MAJLIS BANDARAYA SHAH ALAM"})
+
     def test_preserves_and_expands_company_suffixes(self):
         self.assertEqual(clean_counterparty_name("ALPHA SB"), "ALPHA SDN BHD")
         self.assertEqual(clean_counterparty_name("ALPHA MTSB"), "ALPHA")
@@ -991,7 +1034,7 @@ class CounterpartyCleaningTests(unittest.TestCase):
         self.assertEqual(row["total_credits"], 10.0)
         self.assertEqual(row["total_debits"], 5.0)
 
-    def test_shared_three_token_prefix_requires_allowed_suffixes(self):
+    def test_shared_three_token_phrase_merges_even_with_different_suffixes(self):
         groups = {
             "ALPHA BETA GAMMA PROJECT": {
                 "counterparty_name": "ALPHA BETA GAMMA PROJECT",
@@ -1008,7 +1051,10 @@ class CounterpartyCleaningTests(unittest.TestCase):
         }
 
         merged = _merge_counterparty_groups(groups)
-        self.assertEqual(len(merged), 2)
+        self.assertEqual(set(merged.keys()), {"ALPHA BETA GAMMA"})
+        row = merged["ALPHA BETA GAMMA"]
+        self.assertEqual(row["total_credits"], 10.0)
+        self.assertEqual(row["total_debits"], 5.0)
 
     def test_shared_three_token_prefix_skips_protected_buckets(self):
         groups = {
