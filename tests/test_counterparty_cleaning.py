@@ -9,6 +9,7 @@ from bank_rakyat import extract_bank_rakyat_party_name
 from hong_leong import extract_hong_leong_party_name
 from ocbc import extract_ocbc_party_name
 from public_bank import extract_pbb_party_name, resolve_pbb_party_name
+from rhb import extract_rhb_party_name
 from pdf_utils import _clean_candidate_name, clean_extracted_company_name, extract_company_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
@@ -614,6 +615,17 @@ class CounterpartyCleaningTests(unittest.TestCase):
                 "BOT XREF123456789A G 99999 sifar toleransi terhadap apa-apa bentuk rasuah"
             ),
             "SANKYU (MALAYSIA) SDN BHD",
+        )
+
+    def test_rhb_rpp_inward_keeps_person_name_before_bin(self):
+        description = "RPP INWARD INST TRF CR 0000003562 LUTFIRRAHMAN BIN ABDULLAH Pay"
+        self.assertEqual(extract_rhb_party_name(description), "LUTFIRRAHMAN BIN ABDULLAH")
+        self.assertEqual(
+            normalise_counterparty_for_ledger(
+                extract_rhb_party_name(description),
+                description=description,
+            ),
+            "LUTFIRRAHMAN ABDULLAH",
         )
 
     def test_hong_leong_ledger_resolves_description_only_counterparties(self):

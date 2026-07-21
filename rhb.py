@@ -261,7 +261,7 @@ def extract_rhb_party_name(description: str) -> str:
     party = re.sub(r"^(?:\d{12,}\s+)+", "", party)
     party = re.sub(r"^invoice\s+T\d+\s+", "", party, flags=re.I)
     party = re.sub(r"^(?:PV\d+\s+)?(?:AP-\d+(?:-\d+)?\s+)?", "", party, flags=re.I)
-    party = re.sub(r"^(?:\d{12,}\s+|[A-Z0-9]{10,}\s+)+", "", party, flags=re.I)
+    party = re.sub(r"^(?:\d{12,}\s+|(?=[A-Z0-9]*\d)[A-Z0-9]{10,}\s+)+", "", party, flags=re.I)
 
     # Remove channel / QR IDs at the start.
     party = re.sub(r"^(?:IBK\s+)?", "", party, flags=re.I)
