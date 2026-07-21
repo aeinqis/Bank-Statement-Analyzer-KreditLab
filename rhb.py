@@ -93,8 +93,24 @@ RHB_PREFIX_RE = re.compile(r"""
 \s+\d{10}\s*
 (?P<body>.*)$
 """, re.I | re.X)
+RHB_TRANSFER_PARTY_RE = re.compile(
+    r"""
+    ^
+    (?:
+        RPP\s+INWARD\s+INST\s+TRF |
+        RFLX\s+INSTANT\s+TRF |
+        REFLEX\s+INST\s+TRF
+    )
+    (?:\s+(?:CR|DR))?
+    (?:\s+\d{6,})?
+    \s+
+    (?P<body>.+)
+    $
+    """,
+    re.I | re.X,
+)
 RHB_RPP_INWARD_PARTY_RE = re.compile(
-    r"^RPP\s+INWARD\s+INST\s+TRF(?:\s+CR)?(?:\s+\d{6,})?\s+(?P<body>.+)$",
+    r"^RPP\s+INWARD\s+INST\s+TRF(?:\s+(?:CR|DR))?(?:\s+\d{6,})?\s+(?P<body>.+)$",
     re.I,
 )
 RHB_INDIAN_PARENTAGE_RE = re.compile(r"\bA\s*/\s*([LP])\b", re.I)
@@ -158,13 +174,30 @@ def _normalize_rhb_indian_parentage_markers(value: str) -> str:
     return RHB_INDIAN_PARENTAGE_RE.sub(lambda match: f"A/{match.group(1).upper()}", str(value or ""))
 
 
-def _extract_rhb_rpp_inward_party(description: str) -> str:
-    match = RHB_RPP_INWARD_PARTY_RE.match(normalize_text(description))
+def _strip_rhb_transfer_reference_tail(party: str) -> str:
+    tokens = normalize_text(party).split()
+    tail_start = len(tokens)
+    while tail_start > 0:
+        token = tokens[tail_start - 1].strip(".,")
+        if _looks_like_reference_token(token) or token.isdigit():
+            tail_start -= 1
+            continue
+        break
+
+    tail = tokens[tail_start:]
+    if tail and any(_looks_like_reference_token(token.strip(".,")) for token in tail):
+        return " ".join(tokens[:tail_start]).strip() or party
+    return party
+
+
+def _extract_rhb_transfer_party(description: str) -> str:
+    match = RHB_TRANSFER_PARTY_RE.match(normalize_text(description))
     if not match:
         return ""
 
     party = _normalize_rhb_indian_parentage_markers(match.group("body"))
     party = re.split(r"\s+/\s+", party, maxsplit=1)[0]
+    party = _strip_rhb_transfer_reference_tail(party)
     return normalize_text(party).strip(" -/.")
 
 
@@ -275,7 +308,7 @@ def extract_rhb_party_name(description: str) -> str:
     ):
         return "UNKNOWN"
 
-    party = _extract_rhb_rpp_inward_party(desc)
+    party = _extract_rhb_transfer_party(desc)
     if not party:
         m = RHB_PREFIX_RE.search(desc)
         if not m:

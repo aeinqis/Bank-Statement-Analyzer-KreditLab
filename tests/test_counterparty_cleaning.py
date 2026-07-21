@@ -643,6 +643,16 @@ class CounterpartyCleaningTests(unittest.TestCase):
             with self.subTest(description=description):
                 self.assertEqual(extract_rhb_party_name(description), expected)
 
+    def test_rhb_transfer_extracts_name_after_trf_until_next_slash(self):
+        examples = {
+            "RPP INWARD INST TRF KUMARAN A / L KANAPATH / FROM KUMARAN": "KUMARAN A/L KANAPATH",
+            "RFLX INSTANT TRF DR SUNDAR DASS A / L MANG 25052022272 4 / ANU 9737 - ALZA": "SUNDAR DASS A/L MANG",
+            "RFLX INSTANT TRF DR VIJENDARA N A / L ARUMU 25062624145 6 / ALAN FOMEMA": "VIJENDARA N A/L ARUMU",
+        }
+        for description, expected in examples.items():
+            with self.subTest(description=description):
+                self.assertEqual(extract_rhb_party_name(description), expected)
+
     def test_rhb_ledger_rescues_incomplete_indian_parentage_column(self):
         prepared = prepare_counterparty_dataframe(
             pd.DataFrame(
@@ -661,6 +671,20 @@ class CounterpartyCleaningTests(unittest.TestCase):
         )
         self.assertEqual(prepared.iloc[0]["counterparty_name_raw"], "MURUGAN A/L VASU")
         self.assertEqual(prepared.iloc[0]["counterparty_name"], "MURUGAN A/L VASU")
+
+    def test_rhb_ledger_resolves_reflex_transfer_without_bank_label(self):
+        ledger = build_track2_counterparty_ledger(
+            [
+                {
+                    "date": "2025-05-24",
+                    "description": "RFLX INSTANT TRF DR SUNDAR DASS A / L MANG 25052022272 4 / ANU 9737 - ALZA",
+                    "credit": 0.0,
+                    "debit": 97.0,
+                    "balance": 1000.0,
+                }
+            ]
+        )
+        self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "SUNDAR DASS A/L MANG")
 
     def test_rhb_ledger_rescues_indian_parentage_without_bank_label(self):
         ledger = build_track2_counterparty_ledger(

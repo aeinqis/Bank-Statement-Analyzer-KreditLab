@@ -581,10 +581,16 @@ def _resolve_transaction_counterparty_details(row: pd.Series) -> Tuple[str, bool
 
     existing_party = normalize_counterparty_value(row.get("party_name", ""))
     has_incomplete_indian_parentage_party = existing_party.upper() in {"A L", "A/L", "A P", "A/P"}
-    has_rpp_inward_description = bool(re.match(r"^\s*RPP\s+INWARD\s+INST\s+TRF\b", str(description or ""), re.I))
+    has_rhb_transfer_description = bool(
+        re.match(
+            r"^\s*(?:RPP\s+INWARD\s+INST\s+TRF|RFLX\s+INSTANT\s+TRF|REFLEX\s+INST\s+TRF)\b",
+            str(description or ""),
+            re.I,
+        )
+    )
     if (
         extract_rhb_party_name is not None
-        and ("RHB" in bank or has_incomplete_indian_parentage_party or has_rpp_inward_description)
+        and ("RHB" in bank or has_incomplete_indian_parentage_party or has_rhb_transfer_description)
     ):
         counterparty = normalize_counterparty_value(extract_rhb_party_name(description))
         if (
@@ -594,7 +600,7 @@ def _resolve_transaction_counterparty_details(row: pd.Series) -> Tuple[str, bool
                 not existing_party
                 or _is_report_unknown_counterparty(existing_party)
                 or has_incomplete_indian_parentage_party
-                or has_rpp_inward_description
+                or has_rhb_transfer_description
             )
         ):
             return counterparty, True
