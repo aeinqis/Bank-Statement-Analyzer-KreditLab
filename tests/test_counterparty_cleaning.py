@@ -588,6 +588,11 @@ class CounterpartyCleaningTests(unittest.TestCase):
                     {**base_row, "company_name": manual_company_name}
                 ])
                 self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "LF SERVICES SDN BHD")
+                report_rows = build_report_counterparty_ledger_rows(
+                    ledger,
+                    company_name=manual_company_name,
+                )
+                self.assertIn("SDN BHD", report_rows[0]["counterparty_name"])
 
     def test_extracted_company_name_strips_leading_short_number(self):
         self.assertEqual(clean_extracted_company_name("709 LF SERVICES SDN BHD"), "LF SERVICES SDN BHD")
