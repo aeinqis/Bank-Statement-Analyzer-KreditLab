@@ -571,6 +571,24 @@ class CounterpartyCleaningTests(unittest.TestCase):
             "LF SERVICES SDN BHD",
         )
 
+    def test_ocbc_manual_company_name_does_not_strip_counterparty_sdn_bhd(self):
+        base_row = {
+            "date": "2023-02-21",
+            "description": "DUITNOW(INST TRF) CR /IB LF SERVICES SDN. BH DESC REF: PV13/2023/LFS",
+            "credit": 501.0,
+            "debit": 0.0,
+            "balance": 501.0,
+            "bank": "OCBC Bank",
+            "party_name": "LF SERVICES SDN BHD",
+        }
+
+        for manual_company_name in ("LF SERVICE", "LF SERVICES", "709 LF SERVICE", "709 LF SERVICES"):
+            with self.subTest(manual_company_name=manual_company_name):
+                ledger = build_track2_counterparty_ledger([
+                    {**base_row, "company_name": manual_company_name}
+                ])
+                self.assertEqual(ledger["counterparties"][0]["counterparty_name"], "LF SERVICES SDN BHD")
+
     def test_extracted_company_name_strips_leading_short_number(self):
         self.assertEqual(clean_extracted_company_name("709 LF SERVICES SDN BHD"), "LF SERVICES SDN BHD")
         self.assertEqual(clean_extracted_company_name("24SEVEN SERVICES SDN BHD"), "24SEVEN SERVICES SDN BHD")

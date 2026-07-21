@@ -356,6 +356,8 @@ def _strip_own_party_tokens(name: str, own_party: str) -> str:
     remainder = " ".join(name_up[:start] + name_up[end:]).strip()
     if len(remainder) < 3 or should_drop_as_counterparty(remainder):
         return name
+    if _remainder_is_only_own_party_boilerplate(remainder):
+        return name
     if _remainder_is_truncated_own_party(remainder, own_core):
         return name
 
@@ -383,6 +385,12 @@ def _remainder_is_truncated_own_party(remainder: str, own_core: List[str]) -> bo
         any(_own_party_token_matches(token, own_token) for own_token in own_core)
         for token in remainder_tokens
     )
+
+
+def _remainder_is_only_own_party_boilerplate(remainder: str) -> bool:
+    """Avoid stripping a counterparty down to only legal suffix words."""
+    remainder_tokens = _OWN_PARTY_DESC_TOKEN_RE.findall(normalize_text(remainder).upper())
+    return bool(remainder_tokens) and all(token in _OWN_PARTY_BOILER_SUFFIX for token in remainder_tokens)
 
 
 def normalize_company_suffix(name: Any) -> str:
