@@ -120,6 +120,14 @@ PBB_PERSON_REMARK_START_TOKENS = {
     "TRANSFER",
 }
 
+PBB_BANK_PREFIX_RE = r"(?:CIM|CIMB|HSB|HSBC|RHB|MBB|PBB|HLB|AMB|BIMB|BMMB|BSN|UOB|OCBC|CIT|BOT)"
+PBB_ECP_EMBEDDED_COMPANY_RE = re.compile(
+    rf"^(?:DEP|DR)-ECP\s+\d+\s+\S+\s+"
+    rf"(?:(?:{PBB_BANK_PREFIX_RE})\s+)?"
+    r"(?P<party>.+?\b(?:SDN\.?\s*(?:BHD|BH|B)\.?|BHD|BERHAD))\b",
+    re.I,
+)
+
 PBB_PATTERNS = [
     re.compile(
         r"^DUITNOW\s+TRSF\s+(?:DR|CR)\s+\d+\s+"
@@ -131,7 +139,7 @@ PBB_PATTERNS = [
     ),
     re.compile(
         r"^DEP-ECP\s+\d+\s+\S+\s+"
-        r"(?:(?:CIM|CIMB|HSB|HSBC|RHB|MBB|PBB|HLB|AMB|BIMB|BMMB|BSN|UOB|OCBC|CIT|BOT)\s+)?"
+        rf"(?:(?:{PBB_BANK_PREFIX_RE})\s+)?"
         r"(?P<party>.+?)"
         r"(?=(?:\s+(?:CIM|HSB|RHB|MBB|PBB|/GHL/|TNG|GRB|66174|CIT|BOT|"
         r"MTHLY|XREF|APPY|\.|202\d{5,}))|$)",
@@ -274,6 +282,13 @@ def _strip_pbb_person_party_remarks(value: str) -> str:
     return party
 
 
+def _extract_pbb_embedded_company_party(description: str) -> str:
+    match = PBB_ECP_EMBEDDED_COMPANY_RE.search(str(description or ""))
+    if not match:
+        return "UNKNOWN"
+    return clean_pbb_party_name(match.group("party"))
+
+
 def extract_pbb_party_name(description: str) -> str:
     desc = re.sub(r"\s+", " ", str(description or "")).strip()
 
@@ -287,7 +302,8 @@ def extract_pbb_party_name(description: str) -> str:
         return "BANK CHARGES"
 
     if re.match(r"^DR-ECP\s+000001\b", desc, re.I):
-        return "INTERNAL BATCH PAYMENT"
+        embedded_party = _extract_pbb_embedded_company_party(desc)
+        return embedded_party if embedded_party != "UNKNOWN" else "UNKNOWN"
 
     if re.match(r"^DEP-CASH\s+CDT\b", desc, re.I):
         return "CASH DEPOSIT"
@@ -304,10 +320,16 @@ def extract_pbb_party_name(description: str) -> str:
             return "BANK CHARGES"
 
         if pattern.pattern.startswith("^DR-ECP\\s+000001"):
-            return "INTERNAL BATCH PAYMENT"
+            return "UNKNOWN"
 
         party = match.groupdict().get("party", "")
-        return clean_pbb_party_name(party)
+        cleaned_party = clean_pbb_party_name(party)
+        if cleaned_party != "UNKNOWN":
+            return cleaned_party
+
+    embedded_party = _extract_pbb_embedded_company_party(desc)
+    if embedded_party != "UNKNOWN":
+        return embedded_party
 
     return "UNKNOWN"
 

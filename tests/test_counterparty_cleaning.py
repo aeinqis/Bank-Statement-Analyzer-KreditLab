@@ -8,6 +8,7 @@ from ambank import clean_ambank_company_name, extract_ambank_company_name
 from bank_rakyat import extract_bank_rakyat_party_name
 from hong_leong import extract_hong_leong_party_name
 from ocbc import extract_ocbc_party_name
+from public_bank import extract_pbb_party_name, resolve_pbb_party_name
 from pdf_utils import _clean_candidate_name, clean_extracted_company_name, extract_company_name
 from app import (
     _align_related_party_candidates_to_counterparty_rows,
@@ -592,6 +593,28 @@ class CounterpartyCleaningTests(unittest.TestCase):
     def test_extracted_company_name_strips_leading_short_number(self):
         self.assertEqual(clean_extracted_company_name("709 LF SERVICES SDN BHD"), "LF SERVICES SDN BHD")
         self.assertEqual(clean_extracted_company_name("24SEVEN SERVICES SDN BHD"), "24SEVEN SERVICES SDN BHD")
+
+    def test_public_bank_dr_ecp_batch_reference_stays_unknown(self):
+        self.assertEqual(
+            extract_pbb_party_name("DR-ECP 000001 CW6PBB12032501 PVCWS 12032025"),
+            "UNKNOWN",
+        )
+
+    def test_public_bank_ecp_extracts_embedded_company_counterparties(self):
+        self.assertEqual(
+            resolve_pbb_party_name(
+                "DEP-ECP 196467 IMEPS20250304100002189839974 RHB DAYANG ENTERPRISE SDN. BHD. "
+                "RHB MTHLY-2/25 APPY 1875 3"
+            ),
+            "DAYANG ENTERPRISE SDN BHD",
+        )
+        self.assertEqual(
+            resolve_pbb_party_name(
+                "DEP-ECP 108074 IMEPS20250430100002105242979 SANKYU (MALAYSIA) SDN. BHD. "
+                "BOT XREF123456789A G 99999 sifar toleransi terhadap apa-apa bentuk rasuah"
+            ),
+            "SANKYU (MALAYSIA) SDN BHD",
+        )
 
     def test_hong_leong_ledger_resolves_description_only_counterparties(self):
         ledger = build_track2_counterparty_ledger(
