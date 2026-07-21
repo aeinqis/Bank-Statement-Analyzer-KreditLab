@@ -93,6 +93,11 @@ RHB_PREFIX_RE = re.compile(r"""
 \s+\d{10}\s*
 (?P<body>.*)$
 """, re.I | re.X)
+RHB_RPP_INWARD_PARTY_RE = re.compile(
+    r"^RPP\s+INWARD\s+INST\s+TRF(?:\s+CR)?(?:\s+\d{6,})?\s+(?P<body>.+)$",
+    re.I,
+)
+RHB_INDIAN_PARENTAGE_RE = re.compile(r"\bA\s*/\s*([LP])\b", re.I)
 RHB_NOTE_TAIL_RE = re.compile(r"""
 \s+
 (?:
@@ -147,6 +152,25 @@ def _strip_trailing_description_by_case(party: str) -> str:
         if len(prefix_tokens) >= 2 and prefix_letters and prefix_letters == prefix_letters.upper():
             return " ".join(prefix_tokens).strip(" -/.")
     return party
+
+
+def _normalize_rhb_indian_parentage_markers(value: str) -> str:
+    return RHB_INDIAN_PARENTAGE_RE.sub(lambda match: f"A/{match.group(1).upper()}", str(value or ""))
+
+
+def _extract_rhb_rpp_inward_party(description: str) -> str:
+    match = RHB_RPP_INWARD_PARTY_RE.match(normalize_text(description))
+    if not match:
+        return ""
+
+    party = _normalize_rhb_indian_parentage_markers(match.group("body"))
+    party = re.split(r"\s+/\s+", party, maxsplit=1)[0]
+    return normalize_text(party).strip(" -/.")
+
+
+def _is_incomplete_rhb_party_name(value: str) -> bool:
+    party = _normalize_rhb_indian_parentage_markers(normalize_text(value).upper())
+    return party in {"A/L", "A/P", "A L", "A P"}
 
 
 def _strip_leading_description_before_party(party: str) -> str:
@@ -251,13 +275,15 @@ def extract_rhb_party_name(description: str) -> str:
     ):
         return "UNKNOWN"
 
-    m = RHB_PREFIX_RE.search(desc)
-    if not m:
-        return "UNKNOWN"
-
-    party = m.group("body").strip()
+    party = _extract_rhb_rpp_inward_party(desc)
+    if not party:
+        m = RHB_PREFIX_RE.search(desc)
+        if not m:
+            return "UNKNOWN"
+        party = m.group("body").strip()
 
     # Reflex/FPX/IBG formats often carry operational references before the party.
+    party = _normalize_rhb_indian_parentage_markers(party)
     party = re.sub(r"^(?:\d{12,}\s+)+", "", party)
     party = re.sub(r"^invoice\s+T\d+\s+", "", party, flags=re.I)
     party = re.sub(r"^(?:PV\d+\s+)?(?:AP-\d+(?:-\d+)?\s+)?", "", party, flags=re.I)
@@ -903,10 +929,15 @@ def _parse_rhb_reflex_layout(pdf_bytes: bytes, source_filename: str) -> List[Dic
 def _attach_rhb_party_names(transactions: List[Dict]) -> List[Dict]:
     for transaction in transactions:
         existing_party = normalize_text(transaction.get("party_name", ""))
-        if existing_party:
+        if existing_party and not _is_incomplete_rhb_party_name(existing_party):
             transaction["party_name"] = existing_party.upper()
         else:
-            transaction["party_name"] = extract_rhb_party_name(transaction.get("description", ""))
+            extracted_party = extract_rhb_party_name(transaction.get("description", ""))
+            transaction["party_name"] = (
+                extracted_party
+                if extracted_party != "UNKNOWN" or not existing_party
+                else existing_party.upper()
+            )
     return transactions
 
 

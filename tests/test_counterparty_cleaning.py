@@ -1,5 +1,7 @@
 import unittest
 
+import pandas as pd
+
 from cimb import annotate_cimb_counterparties, extract_cimb_party_name
 from alliance import annotate_alliance_counterparties, extract_alliance_party_name
 from agro_bank import extract_agrobank_party_name
@@ -26,6 +28,7 @@ from app import (
     generate_excel_report,
     get_report_counterparty_rows_from_data,
     partition_related_party_candidates_for_manager,
+    prepare_counterparty_dataframe,
     prepare_top_parties_for_report,
 )
 from kredit_lab_classify_track2 import _build_own_related_transactions_list_track2, _is_excluded_related_party_name
@@ -627,6 +630,37 @@ class CounterpartyCleaningTests(unittest.TestCase):
             ),
             "LUTFIRRAHMAN ABDULLAH",
         )
+
+    def test_rhb_rpp_inward_extracts_indian_parentage_names(self):
+        examples = {
+            "RPP INWARD INST TRF MURUGAN A / L VASU / FUND TRANSFER / CAR REPAIR": "MURUGAN A/L VASU",
+            "RPP INWARD INST TRF MUTHUKUM ARAN A / L VAD / CAR REPARING / HONDA ACCORD SDA": "MUTHUKUM ARAN A/L VAD",
+            "RPP INWARD INST TRF ANANDAN A / L PERUMAL / MBBQR1111 12151224216 / 476763182Q": "ANANDAN A/L PERUMAL",
+            "RPP INWARD INST TRF VEISHALA A / L LINGESWA / MBBQR1111 12160598855 / 815753759Q": "VEISHALA A/L LINGESWA",
+            "RPP INWARD INST TRF AMRIT SINGH A / L GURD / MBBQR1111 12179055816 / 393162231Q": "AMRIT SINGH A/L GURD",
+        }
+        for description, expected in examples.items():
+            with self.subTest(description=description):
+                self.assertEqual(extract_rhb_party_name(description), expected)
+
+    def test_rhb_ledger_rescues_incomplete_indian_parentage_column(self):
+        prepared = prepare_counterparty_dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "date": "2025-03-19",
+                        "description": "RPP INWARD INST TRF MURUGAN A / L VASU / FUND TRANSFER / CAR REPAIR",
+                        "credit": 635.0,
+                        "debit": 0.0,
+                        "balance": 1000.0,
+                        "bank": "RHB Bank",
+                        "party_name": "A L",
+                    }
+                ]
+            )
+        )
+        self.assertEqual(prepared.iloc[0]["counterparty_name_raw"], "MURUGAN A/L VASU")
+        self.assertEqual(prepared.iloc[0]["counterparty_name"], "MURUGAN A/L VASU")
 
     def test_hong_leong_ledger_resolves_description_only_counterparties(self):
         ledger = build_track2_counterparty_ledger(

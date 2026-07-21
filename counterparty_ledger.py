@@ -39,6 +39,11 @@ try:
 except Exception:  # pragma: no cover - Hong Leong parser may be unavailable in isolated imports
     extract_hong_leong_party_name = None
 
+try:
+    from rhb import extract_rhb_party_name
+except Exception:  # pragma: no cover - RHB parser may be unavailable in isolated imports
+    extract_rhb_party_name = None
+
 
 def bind_app_globals(app_globals: dict) -> None:
     """Expose app.py helpers/constants that these extracted functions already use."""
@@ -572,6 +577,20 @@ def _resolve_transaction_counterparty_details(row: pd.Series) -> Tuple[str, bool
     if "HONG" in bank and "LEONG" in bank and extract_hong_leong_party_name is not None:
         counterparty = normalize_counterparty_value(extract_hong_leong_party_name(description))
         if counterparty and not _is_report_unknown_counterparty(counterparty):
+            return counterparty, True
+
+    if "RHB" in bank and extract_rhb_party_name is not None:
+        existing_party = normalize_counterparty_value(row.get("party_name", ""))
+        counterparty = normalize_counterparty_value(extract_rhb_party_name(description))
+        if (
+            counterparty
+            and not _is_report_unknown_counterparty(counterparty)
+            and (
+                not existing_party
+                or _is_report_unknown_counterparty(existing_party)
+                or existing_party.upper() in {"A L", "A/L", "A P", "A/P"}
+            )
+        ):
             return counterparty, True
 
     for column in COUNTERPARTY_NAME_FIELDS:

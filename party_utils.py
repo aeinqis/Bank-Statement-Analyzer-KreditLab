@@ -20,7 +20,7 @@ GENERIC_PARTY_SUFFIX_TOKENS = {
 }
 
 PARTY_NUMERIC_TOKEN_RE = re.compile(r"\b\S*\d\S*\b")
-PERSON_NAME_MARKER_TOKENS = {"BIN", "BINT", "BINTE", "BINTI", "B", "BT", "ANAK"}
+PERSON_NAME_MARKER_TOKENS = {"BIN", "BINT", "BINTE", "BINTI", "B", "BT", "ANAK", "A/L", "A/P"}
 TRANSACTION_DETAIL_SUFFIX_TOKENS = {
     "AC", "BERAM", "CASH", "CLAIM", "DELIVERY", "DET", "EC", "EXCEL",
     "DIRECTOR", "FAREWELL", "GENERAL", "HOUSE", "HP", "INSURANCE", "INVOICE", "LABOUR", "PAYMENT",
@@ -280,7 +280,14 @@ def _normalise_counterparty(name: str) -> str:
     if n in _CP_NOISE_NAMES or len(n) < 3 or should_drop_as_counterparty(n):
         return "UNCATEGORIZED"
 
-    return n or "UNIDENTIFIED"
+    return _format_indian_parentage_markers(n) or "UNIDENTIFIED"
+
+
+def _format_indian_parentage_markers(name: Any) -> str:
+    cleaned = normalize_text(name).upper()
+    cleaned = re.sub(r"\bA\s*/\s*([LP])\b", lambda match: f"A/{match.group(1).upper()}", cleaned)
+    cleaned = re.sub(r"\bA\s+([LP])(?=\s+\S)", lambda match: f"A/{match.group(1).upper()}", cleaned)
+    return normalize_text(cleaned)
 
 
 def _own_party_core_tokens(own_party: Any) -> List[str]:
@@ -771,13 +778,15 @@ def canonicalize_party_name(name: Any) -> str:
     if re.fullmatch(r"(?:TM\s+)?UNIFI", cleaned, re.I):
         return "UNIFI"
 
-    normalised = _normalise_counterparty(cleaned)
+    normalised = _format_indian_parentage_markers(_normalise_counterparty(cleaned))
     return "UNKNOWN" if normalised == "UNIDENTIFIED" else normalised
 
 
 def looks_like_suspicious_short_party(name: Any) -> bool:
     cleaned = normalize_text(name).upper()
     if not cleaned or cleaned == "UNKNOWN":
+        return True
+    if cleaned in {"A L", "A/L", "A P", "A/P"}:
         return True
 
     tokens = cleaned.split()
