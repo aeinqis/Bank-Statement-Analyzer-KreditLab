@@ -14,6 +14,24 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
+from app import (
+    _build_reconciliation_lookup,
+    _effective_reconciliation_values,
+    _pdf_finding_is_benign_for_export,
+    build_related_party_summary_rows_for_report,
+)
+from report_generator import (
+    _top_parties_from_counterparty_rows,
+    build_formula_validation_checks_for_report,
+    build_own_related_party_groups_for_report,
+    build_track2_counterparty_ledger,
+    filter_report_related_parties,
+    get_report_counterparty_rows_from_data,
+    get_round_transactions_for_report,
+    normalize_observations,
+    prepare_top_parties_for_report,
+)
+
 try:
     from core_utils import safe_float
 except Exception:  # pragma: no cover - rebound from app.py during normal use
@@ -36,6 +54,8 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         from openpyxl.utils import get_column_letter
     except ImportError:
         return BytesIO()
+
+    from report_utils import normalize_report_data_for_export
 
     report_data = normalize_report_data_for_export(data)
     own_related = report_data.get("own_related_transactions", {}) or {}

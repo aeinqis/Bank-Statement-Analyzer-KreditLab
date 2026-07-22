@@ -14,6 +14,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
+from app import AI_EDITING_INSTRUCTIONS, DEFAULT_REPORT_SECTIONS, REPORT_JSON_MAX_SIZE_BYTES, _fingerprint_status_for_report, _first_present, _has_top_party_rows, build_protected_report_snapshot, calculate_protected_section_fingerprints, make_json_serializable
+from report_generator import _sync_data_quality_status, generate_interactive_html, normalize_observations
+
 try:
     from core_utils import safe_float
 except Exception:  # pragma: no cover - rebound from app.py during normal use
