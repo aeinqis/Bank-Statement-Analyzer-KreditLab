@@ -1034,7 +1034,447 @@ def _report_period_label(report_data: dict) -> str:
     return "Not specified"
 
 
+def _merge_report_unique_rows(rows: list, key_fields: tuple[str, ...]) -> list:
+    merged = []
+    seen = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        key_parts = tuple(str(row.get(field, "") or "").strip().casefold() for field in key_fields)
+        key = key_parts if any(key_parts) else ("row", json.dumps(row, sort_keys=True, default=str))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(copy.deepcopy(row))
+    return merged
+
+
+def _merge_related_party_entries_for_reports(reports: list[dict]) -> list:
+    merged = []
+    seen = set()
+    for report in reports or []:
+        report_info = report.get("report_info", {}) if isinstance(report, dict) else {}
+        parties = report_info.get("related_parties", []) if isinstance(report_info, dict) else []
+        for party in parties or []:
+            if isinstance(party, dict):
+                name = str(party.get("name") or party.get("party_name") or "").strip()
+                item = copy.deepcopy(party)
+                if name:
+                    item["name"] = name
+            else:
+                name = str(party or "").strip()
+                item = {"name": name, "relationship": ""}
+            key = name.upper()
+            if not key or key in seen:
+                continue
+            merged.append(item)
+            seen.add(key)
+    return merged
+
+
+def _merge_report_info_for_reports(reports: list[dict], source_names: list[str] | None = None) -> dict:
+    infos = [
+        report.get("report_info", {})
+        for report in reports or []
+        if isinstance(report, dict) and isinstance(report.get("report_info"), dict)
+    ]
+    merged = copy.deepcopy(infos[0]) if infos else {}
+    company_names = [
+        str(info.get("company_name") or "").strip()
+        for info in infos
+        if str(info.get("company_name") or "").strip()
+    ]
+    unique_company_names = []
+    for name in company_names:
+        if name not in unique_company_names:
+            unique_company_names.append(name)
+    if unique_company_names:
+        merged["company_name"] = unique_company_names[0]
+        if len(unique_company_names) > 1:
+            merged["company_names"] = unique_company_names
+    merged["schema_version"] = merged.get("schema_version") or "6.3.5"
+
+    starts = [str(info.get("period_start") or "").strip() for info in infos if str(info.get("period_start") or "").strip()]
+    ends = [str(info.get("period_end") or "").strip() for info in infos if str(info.get("period_end") or "").strip()]
+    if starts:
+        merged["period_start"] = min(starts)
+    if ends:
+        merged["period_end"] = max(ends)
+
+    merged["related_parties"] = _merge_related_party_entries_for_reports(reports)
+    merged["merged_source_files"] = list(source_names or [])
+    merged["merged_report_count"] = len(reports or [])
+    return merged
+
+
+def _merge_observations_for_reports(reports: list[dict]) -> dict:
+    merged = {"positive": [], "concerns": []}
+    for report in reports or []:
+        observations = normalize_observations(report.get("observations", {}) if isinstance(report, dict) else {})
+        for key in ("positive", "concerns"):
+            for item in observations.get(key, []) or []:
+                text = str(item)
+                if text and text not in merged[key]:
+                    merged[key].append(text)
+    return merged
+
+
+def _merge_flags_for_reports(reports: list[dict]) -> dict:
+    indicators = []
+    seen = set()
+    for report in reports or []:
+        flags = report.get("flags", {}) if isinstance(report, dict) else {}
+        report_indicators = flags.get("indicators", []) if isinstance(flags, dict) else []
+        for indicator in report_indicators or []:
+            if not isinstance(indicator, dict):
+                continue
+            key = (
+                str(indicator.get("id") or indicator.get("flag_id") or "").strip(),
+                str(indicator.get("message") or indicator.get("description") or "").strip(),
+            )
+            if not any(key):
+                key = ("flag", json.dumps(indicator, sort_keys=True, default=str))
+            if key in seen:
+                continue
+            indicators.append(copy.deepcopy(indicator))
+            seen.add(key)
+    return {"indicators": indicators}
+
+
+def _merge_transaction_container_for_reports(reports: list[dict], section_key: str) -> dict:
+    transactions = []
+    disbursements = []
+    repayments = []
+    for report in reports or []:
+        section = report.get(section_key, {}) if isinstance(report, dict) else {}
+        if isinstance(section, list):
+            transactions.extend(copy.deepcopy(row) for row in section if isinstance(row, dict))
+            continue
+        if not isinstance(section, dict):
+            continue
+        transactions.extend(copy.deepcopy(row) for row in section.get("transactions", []) or [] if isinstance(row, dict))
+        disbursements.extend(copy.deepcopy(row) for row in section.get("disbursements", []) or [] if isinstance(row, dict))
+        repayments.extend(copy.deepcopy(row) for row in section.get("repayments", []) or [] if isinstance(row, dict))
+    output = {"transactions": transactions, "summary": {}}
+    if disbursements:
+        output["disbursements"] = disbursements
+    if repayments:
+        output["repayments"] = repayments
+    return output
+
+
+def _merge_consolidated_for_reports(reports: list[dict]) -> dict:
+    consolidated_rows = [
+        report.get("consolidated", {})
+        for report in reports or []
+        if isinstance(report, dict) and isinstance(report.get("consolidated"), dict)
+    ]
+    merged: dict = {}
+    min_keys = {"eod_lowest", "lowest_balance", "lowest_closing_balance"}
+    max_keys = {"eod_highest", "highest_balance", "highest_closing_balance"}
+    threshold_keys = {"high_value_threshold", "large_transaction_threshold", "large_credit_threshold"}
+    average_values: dict[str, list[float]] = {}
+
+    for row in consolidated_rows:
+        for key, value in row.items():
+            if isinstance(value, bool):
+                continue
+            numeric = safe_float(value)
+            if isinstance(value, (int, float)) or (isinstance(value, str) and re.search(r"\d", value)):
+                if key in threshold_keys:
+                    merged[key] = max(safe_float(merged.get(key, 0)), numeric)
+                elif key in min_keys:
+                    merged[key] = numeric if key not in merged else min(safe_float(merged.get(key)), numeric)
+                elif key in max_keys:
+                    merged[key] = numeric if key not in merged else max(safe_float(merged.get(key)), numeric)
+                elif "average" in key or key.endswith("_avg"):
+                    average_values.setdefault(key, []).append(numeric)
+                else:
+                    merged[key] = safe_float(merged.get(key, 0)) + numeric
+            elif key not in merged and value not in (None, ""):
+                merged[key] = copy.deepcopy(value)
+
+    for key, values in average_values.items():
+        merged[key] = round(sum(values) / len(values), 2) if values else 0.0
+    for key, value in list(merged.items()):
+        if isinstance(value, float):
+            merged[key] = round(value, 2)
+    return merged
+
+
+def _merge_parsing_metadata_for_reports(reports: list[dict]) -> dict:
+    merged: dict = {"merged_reports": []}
+    for report in reports or []:
+        metadata = report.get("parsing_metadata", {}) if isinstance(report, dict) else {}
+        if not isinstance(metadata, dict):
+            continue
+        merged["merged_reports"].append(copy.deepcopy(metadata))
+        for key, value in metadata.items():
+            if isinstance(value, list):
+                merged.setdefault(key, [])
+                merged[key].extend(copy.deepcopy(item) for item in value)
+            elif isinstance(value, dict):
+                merged.setdefault(key, {})
+                merged[key].update(copy.deepcopy(value))
+            elif key not in merged:
+                merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def merge_report_json_payloads(reports: list[dict], source_names: list[str] | None = None) -> dict:
+    """Merge multiple Kredit Lab report JSON payloads into one canonical report."""
+    normalized_reports = [
+        normalize_report_data_for_export(prepare_uploaded_report(report))
+        for report in reports or []
+        if isinstance(report, dict)
+    ]
+    if not normalized_reports:
+        raise ValueError("No valid report JSON payloads were provided.")
+
+    transactions = [
+        copy.deepcopy(txn)
+        for report in normalized_reports
+        for txn in (report.get("transactions", []) or [])
+        if isinstance(txn, dict)
+    ]
+    monthly_analysis = [
+        copy.deepcopy(row)
+        for report in normalized_reports
+        for row in (report.get("monthly_analysis", []) or [])
+        if isinstance(row, dict)
+    ]
+    monthly_summary = [
+        copy.deepcopy(row)
+        for report in normalized_reports
+        for row in (report.get("monthly_summary", []) or [])
+        if isinstance(row, dict)
+    ]
+
+    threshold = max(
+        [
+            safe_float(
+                report.get("classification_config", {}).get("large_transaction_threshold")
+                if isinstance(report.get("classification_config"), dict)
+                else 0
+            )
+            or safe_float(
+                report.get("consolidated", {}).get("high_value_threshold")
+                if isinstance(report.get("consolidated"), dict)
+                else 0
+            )
+            for report in normalized_reports
+        ]
+        or [100000.0]
+    )
+    if threshold <= 0:
+        threshold = 100000.0
+
+    merged = {
+        "report_info": _merge_report_info_for_reports(normalized_reports, source_names),
+        "accounts": _merge_report_unique_rows(
+            [
+                copy.deepcopy(row)
+                for report in normalized_reports
+                for row in (report.get("accounts", []) or [])
+                if isinstance(row, dict)
+            ],
+            ("bank_name", "bank", "account_no", "account_number"),
+        ),
+        "transactions": transactions,
+        "monthly_analysis": monthly_analysis,
+        "monthly_summary": monthly_summary,
+        "consolidated": _merge_consolidated_for_reports(normalized_reports),
+        "flags": _merge_flags_for_reports(normalized_reports),
+        "observations": _merge_observations_for_reports(normalized_reports),
+        "own_related_transactions": _merge_transaction_container_for_reports(
+            normalized_reports,
+            "own_related_transactions",
+        ),
+        "loan_transactions": _merge_transaction_container_for_reports(
+            normalized_reports,
+            "loan_transactions",
+        ),
+        "large_credits": [
+            copy.deepcopy(row)
+            for report in normalized_reports
+            for row in (report.get("large_credits", []) or [])
+            if isinstance(row, dict)
+        ],
+        "large_transactions": [
+            copy.deepcopy(row)
+            for report in normalized_reports
+            for row in (report.get("large_transactions", []) or [])
+            if isinstance(row, dict)
+        ],
+        "round_transactions": [
+            copy.deepcopy(row)
+            for report in normalized_reports
+            for row in (report.get("round_transactions", []) or [])
+            if isinstance(row, dict)
+        ],
+        "unclassified_transactions": [
+            copy.deepcopy(row)
+            for report in normalized_reports
+            for row in (report.get("unclassified_transactions", []) or [])
+            if isinstance(row, dict)
+        ],
+        "classification_config": {
+            "large_transaction_threshold": threshold,
+            "large_credit_threshold": threshold,
+        },
+        "parsing_metadata": _merge_parsing_metadata_for_reports(normalized_reports),
+        "pdf_integrity": {
+            (
+                str(source_names[idx]).strip()
+                if source_names and idx < len(source_names) and str(source_names[idx]).strip()
+                else f"report_{idx + 1}"
+            ): copy.deepcopy(report.get("pdf_integrity", {}))
+            for idx, report in enumerate(normalized_reports)
+        },
+    }
+
+    if transactions and build_track2_counterparty_ledger is not None:
+        merged["counterparty_ledger"] = build_track2_counterparty_ledger(transactions)
+    else:
+        merged["counterparty_ledger"] = {
+            "counterparties": [
+                copy.deepcopy(cp)
+                for report in normalized_reports
+                for cp in (report.get("counterparty_ledger", {}).get("counterparties", []) if isinstance(report.get("counterparty_ledger"), dict) else [])
+                if isinstance(cp, dict)
+            ]
+        }
+
+    merged["consolidated"].setdefault("high_value_threshold", threshold)
+    merged["consolidated"]["large_transaction_threshold"] = threshold
+    merged["consolidated"]["large_credit_threshold"] = threshold
+
+    merged = normalize_report_data_for_export(apply_report_defaults(merged))
+    return prepare_report_for_export(merged)
+
+
+def render_merged_report_json_section() -> None:
+    st.markdown("---")
+    st.subheader("Merge Report JSON Files")
+
+    uploaded_report_jsons = st.file_uploader(
+        "Upload Multiple Report JSON Files",
+        type=["json"],
+        key="merged_report_json_upload",
+        accept_multiple_files=True,
+        help=(
+            "Upload two or more Kredit Lab report JSON files from different banks. "
+            "They will be merged into one report and exported using the same HTML format."
+        ),
+    )
+
+    if not uploaded_report_jsons:
+        return
+
+    file_payloads = []
+    errors = []
+    source_names = []
+    hash_builder = hashlib.sha256()
+    total_size = 0
+
+    for uploaded_file in uploaded_report_jsons:
+        file_bytes = uploaded_file.getvalue()
+        total_size += len(file_bytes)
+        hash_builder.update(str(uploaded_file.name or "").encode("utf-8"))
+        hash_builder.update(file_bytes)
+        source_names.append(str(uploaded_file.name or "report.json"))
+        if not str(uploaded_file.name or "").lower().endswith(".json"):
+            errors.append(f"{uploaded_file.name}: only .json report files are accepted.")
+            continue
+        try:
+            payload = json.loads(file_bytes.decode("utf-8"))
+        except UnicodeDecodeError as exc:
+            errors.append(f"{uploaded_file.name}: invalid JSON encoding ({exc}).")
+        except json.JSONDecodeError as exc:
+            errors.append(f"{uploaded_file.name}: invalid JSON ({exc}).")
+        else:
+            if not isinstance(payload, dict):
+                errors.append(f"{uploaded_file.name}: report JSON must be a JSON object.")
+            else:
+                file_payloads.append(payload)
+
+    upload_hash = hash_builder.hexdigest()
+    if st.session_state.get("merged_report_upload_sha256") != upload_hash:
+        st.session_state.merged_report_upload_sha256 = upload_hash
+        st.session_state.merged_report_data = None
+        st.session_state.merged_report_errors = []
+        st.session_state.merged_report_warnings = []
+
+        if len(uploaded_report_jsons) < 2:
+            errors.append("Upload at least two report JSON files to merge.")
+        if total_size > REPORT_JSON_MAX_SIZE_BYTES:
+            errors.append("Combined uploaded report JSON size is larger than the 50 MB limit.")
+
+        if not errors:
+            try:
+                merged_report_data = merge_report_json_payloads(file_payloads, source_names)
+            except Exception as exc:
+                errors.append(f"Could not merge report JSON files: {exc}")
+            else:
+                is_valid, validation_errors, warnings = validate_canonical_report_data(merged_report_data)
+                errors.extend(validation_errors)
+                st.session_state.merged_report_warnings = warnings
+                if is_valid:
+                    st.session_state.merged_report_data = merged_report_data
+
+        st.session_state.merged_report_errors = errors
+
+    for warning in st.session_state.get("merged_report_warnings", []) or []:
+        st.warning(warning)
+    for error in st.session_state.get("merged_report_errors", []) or []:
+        st.error(error)
+
+    merged_report_data = st.session_state.get("merged_report_data")
+    if not merged_report_data:
+        return
+
+    report_info = merged_report_data.get("report_info", {}) if isinstance(merged_report_data, dict) else {}
+    st.success(f"Merged {len(uploaded_report_jsons)} report JSON files successfully.")
+
+    metric_values = [
+        ("Company", report_info.get("company_name", "Unknown")),
+        ("Banks / accounts", len(merged_report_data.get("accounts", []) or [])),
+        ("Transactions", len(merged_report_data.get("transactions", []) or [])),
+        ("Months", len(merged_report_data.get("monthly_analysis", []) or [])),
+        ("Counterparties", len(merged_report_data.get("counterparty_ledger", {}).get("counterparties", []) or [])),
+    ]
+    metric_cols = st.columns(5)
+    for idx, (label, value) in enumerate(metric_values):
+        metric_cols[idx].metric(label, value)
+
+    safe_company_name = safe_report_filename(report_info.get("company_name", "merged_report"))
+    merged_html = generate_interactive_html(merged_report_data)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            "Generate HTML from Merged JSON",
+            merged_html,
+            file_name=f"{safe_company_name}_merged_report.html",
+            mime="text/html",
+            use_container_width=True,
+        )
+    with col2:
+        st.download_button(
+            "Download Merged JSON",
+            json.dumps(
+                make_json_serializable(merged_report_data),
+                indent=2,
+                ensure_ascii=False,
+            ),
+            file_name=f"{safe_company_name}_merged_report.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+
 def render_imported_report_json_section() -> None:
+    render_merged_report_json_section()
+
     st.markdown("---")
     st.subheader("Upload Edited Report JSON")
 
@@ -1212,6 +1652,7 @@ __all__ = [
     'build_shared_report_data',
     'build_report_data_from_analysis',
     'normalize_report_data_for_export',
+    'merge_report_json_payloads',
     'prepare_report_for_export',
     'prepare_uploaded_report',
     'convert_legacy_report_to_canonical',
@@ -1225,5 +1666,6 @@ __all__ = [
     '_hash_json_value',
     'safe_report_filename',
     '_report_period_label',
+    'render_merged_report_json_section',
     'render_imported_report_json_section',
 ]
