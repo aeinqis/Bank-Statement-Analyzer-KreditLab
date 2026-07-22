@@ -20,6 +20,59 @@ except Exception:  # pragma: no cover - rebound from app.py during normal use
     safe_float = float
 
 
+try:
+    from counterparty_ledger import (
+        build_report_counterparty_ledger_rows,
+        _top_parties_from_counterparty_rows,
+        get_report_counterparty_rows_from_data,
+        filter_report_related_parties,
+    )
+except Exception:  # pragma: no cover - fallback for standalone use
+    build_report_counterparty_ledger_rows = None
+    _top_parties_from_counterparty_rows = None
+    get_report_counterparty_rows_from_data = None
+    filter_report_related_parties = None
+
+
+try:
+    from kredit_lab_classify_track2 import account_meta_from_determinations, build_track2_result
+except Exception:  # pragma: no cover - fallback for standalone use
+    account_meta_from_determinations = None
+    build_track2_result = None
+
+
+try:
+    from report_generator import (
+        adapt_to_v6,
+        build_large_transactions,
+        build_round_transactions,
+        get_round_transactions_for_report,
+        _sync_transaction_pattern_flags,
+        apply_standard_monthly_summary_to_report,
+    )
+except Exception:  # pragma: no cover - fallback for standalone use
+    adapt_to_v6 = None
+    build_large_transactions = None
+    build_round_transactions = None
+    get_round_transactions_for_report = None
+    _sync_transaction_pattern_flags = None
+    apply_standard_monthly_summary_to_report = None
+
+
+try:
+    from counterparty_ledger import build_track2_counterparty_ledger
+except Exception:  # pragma: no cover - fallback for standalone use
+    build_track2_counterparty_ledger = None
+
+
+_TRACK2_AVAILABLE = (
+    build_track2_result is not None
+    and build_track2_counterparty_ledger is not None
+    and build_report_counterparty_ledger_rows is not None
+    and _top_parties_from_counterparty_rows is not None
+)
+
+
 def bind_app_globals(app_globals: dict) -> None:
     """Expose app.py helpers/constants that these extracted functions already use."""
     for name, value in app_globals.items():
@@ -37,6 +90,39 @@ def _manual_company_identity_override_info() -> dict:
         "manual_company_name": company_name if is_manual_identity else "",
         "manual_company_account_no": account_no if is_manual_identity else "",
     }
+
+
+def _fallback_filter_report_related_parties(related_parties, company_name: str = "") -> List[dict]:
+    """Fallback implementation for related-party filtering when the shared helper is unavailable."""
+    if not related_parties:
+        return []
+    if isinstance(related_parties, str):
+        return [{"name": related_parties.strip()}] if related_parties.strip() else []
+
+    normalized: List[dict] = []
+    for party in related_parties or []:
+        if isinstance(party, dict):
+            name = (
+                party.get("name")
+                or party.get("party_name")
+                or party.get("counterparty")
+                or party.get("related_party")
+                or ""
+            )
+            if not name:
+                continue
+            item = dict(party)
+            item["name"] = str(name).strip()
+            normalized.append(item)
+        else:
+            name = str(party or "").strip()
+            if name:
+                normalized.append({"name": name})
+    return normalized
+
+
+if filter_report_related_parties is None:
+    filter_report_related_parties = _fallback_filter_report_related_parties
 
 
 def build_shared_report_data(
