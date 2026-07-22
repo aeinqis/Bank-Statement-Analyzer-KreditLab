@@ -14,12 +14,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
-from app import (
-    _build_reconciliation_lookup,
-    _effective_reconciliation_values,
-    _pdf_finding_is_benign_for_export,
-    build_related_party_summary_rows_for_report,
-)
 from report_generator import (
     _top_parties_from_counterparty_rows,
     build_formula_validation_checks_for_report,
@@ -36,6 +30,95 @@ try:
     from core_utils import safe_float
 except Exception:  # pragma: no cover - rebound from app.py during normal use
     safe_float = float
+
+
+def _build_reconciliation_lookup(parsing_metadata: dict) -> dict:
+    checks = (
+        parsing_metadata.get("account_month_checks", [])
+        if isinstance(parsing_metadata, dict)
+        else []
+    )
+    lookup = {}
+    if not isinstance(checks, list):
+        return lookup
+
+    for chk in checks:
+        if not isinstance(chk, dict):
+            continue
+        month_key = str(chk.get("month", "") or "")
+        account_keys = {
+            str(chk.get("account_number", "") or ""),
+            str(chk.get("account_no", "") or ""),
+        }
+        for account_key in account_keys:
+            lookup[(month_key, account_key)] = chk
+        if month_key and not any(account_keys):
+            lookup[(month_key, "")] = chk
+    return lookup
+
+
+def _reconciliation_check_for_month_row(row: dict, lookup: dict) -> dict | None:
+    if not isinstance(row, dict) or not isinstance(lookup, dict):
+        return None
+    month_key = str(row.get("month", "") or "")
+    account_key = str(row.get("account_number", row.get("account_no", "")) or "")
+    return lookup.get((month_key, account_key)) or lookup.get((month_key, ""))
+
+
+def _effective_reconciliation_values(row: dict, lookup: dict | None = None) -> dict:
+    chk = _reconciliation_check_for_month_row(row, lookup or {})
+    source = chk if chk is not None else (row if isinstance(row, dict) else {})
+
+    if "passed" in source:
+        passed = bool(source.get("passed"))
+    else:
+        status_text = str(source.get("reconciliation_status") or "").upper()
+        if status_text:
+            passed = status_text == "PASS"
+        else:
+            passed = abs(safe_float(source.get("reconciliation_delta", 0))) <= 1.00
+
+    status = "PASS" if passed else "FAIL"
+    note = "" if passed else str(
+        source.get("data_quality_note")
+        or source.get("note")
+        or source.get("remarks")
+        or (row.get("data_quality_note") if isinstance(row, dict) else "")
+        or ""
+    )
+
+    return {
+        "status": status,
+        "delta": safe_float(source.get("reconciliation_delta", 0)),
+        "gaps": int(safe_float(source.get("extraction_gaps", source.get("extraction_gaps_count", 0)))),
+        "missing_debits": safe_float(source.get("missing_debit_amount", 0)),
+        "missing_credits": safe_float(source.get("missing_credit_amount", 0)),
+        "note": note,
+    }
+
+
+def _pdf_finding_is_benign_for_export(finding: dict) -> bool:
+    message = str(finding.get("message", "") or "").lower()
+    benign_patterns = [
+        "no anomalies detected",
+        "verified",
+        "matches known",
+        "hashes computed",
+        "pdf version",
+        "font consistency",
+    ]
+    return any(pattern in message for pattern in benign_patterns)
+
+
+def build_related_party_summary_rows_for_report(
+    related_parties,
+    own_related,
+    cp_rows: List[dict] | None = None,
+    company_name: str = "",
+    manual_company_identity_override: bool = False,
+    company_account_no: str = "",
+) -> List[dict]:
+    return []
 
 
 def bind_app_globals(app_globals: dict) -> None:

@@ -14,13 +14,170 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
-from app import AI_EDITING_INSTRUCTIONS, DEFAULT_REPORT_SECTIONS, REPORT_JSON_MAX_SIZE_BYTES, _fingerprint_status_for_report, _first_present, _has_top_party_rows, build_protected_report_snapshot, calculate_protected_section_fingerprints, make_json_serializable
 from report_generator import _sync_data_quality_status, generate_interactive_html, normalize_observations
 
 try:
     from core_utils import safe_float
 except Exception:  # pragma: no cover - rebound from app.py during normal use
     safe_float = float
+
+
+def make_json_serializable(obj):
+    """Recursively convert common pandas/numpy/date objects to JSON-safe values."""
+    if isinstance(obj, dict):
+        return {str(key): make_json_serializable(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [make_json_serializable(item) for item in obj]
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    if isinstance(obj, pd.Period):
+        return str(obj)
+    try:
+        if pd.isna(obj):
+            return None
+    except Exception:
+        pass
+    if hasattr(obj, "item") and callable(obj.item):
+        try:
+            return make_json_serializable(obj.item())
+        except Exception:
+            pass
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    return obj
+
+
+def _has_top_party_rows(top_parties: dict) -> bool:
+    if not isinstance(top_parties, dict):
+        return False
+    payers = top_parties.get("top_payers") or top_parties.get("top_creditors") or []
+    payees = top_parties.get("top_payees") or top_parties.get("top_debtors") or []
+    return bool(payers or payees)
+
+
+REPORT_JSON_MAX_SIZE_BYTES = 50 * 1024 * 1024
+
+DEFAULT_REPORT_SECTIONS = {
+    "top_parties": {
+        "top_payers": [],
+        "top_payees": [],
+    },
+    "large_credits": [],
+    "large_transactions": [],
+    "round_transactions": [],
+    "round_figure_credits": [],
+    "own_related_transactions": {
+        "transactions": [],
+        "summary": {},
+    },
+    "loan_transactions": {
+        "transactions": [],
+        "disbursements": [],
+        "repayments": [],
+        "summary": {},
+    },
+    "flags": {
+        "indicators": [],
+    },
+    "observations": {
+        "positive": [],
+        "concerns": [],
+    },
+    "parsing_metadata": {},
+    "unclassified_transactions": [],
+    "classification_config": {},
+    "pdf_integrity": {},
+    "counterparty_ledger": {
+        "counterparties": [],
+        "total_counterparties": 0,
+        "extraction_stats": {},
+    },
+}
+
+AI_EDITING_INSTRUCTIONS = {
+    "purpose": "Add analyst observations and concerns without changing calculated report data.",
+    "editable_fields": [
+        "observations.positive",
+        "observations.concerns",
+    ],
+    "protected_fields": [
+        "report_info",
+        "accounts",
+        "monthly_analysis",
+        "consolidated",
+        "top_parties",
+        "large_credits",
+        "round_figure_credits",
+        "own_related_transactions",
+        "loan_transactions",
+        "flags",
+        "parsing_metadata",
+        "unclassified_transactions",
+        "classification_config",
+        "pdf_integrity",
+        "counterparty_ledger",
+    ],
+    "rules": [
+        "Return valid JSON only.",
+        "Preserve all existing keys and values unless explicitly authorised.",
+        "Do not modify calculated financial amounts.",
+        "Do not delete transactions, flags, accounts, months, or report sections.",
+        "Add plain text only to observations.positive and observations.concerns.",
+        "Do not include HTML, Markdown scripts, JavaScript, or executable content.",
+    ],
+}
+
+
+def _first_present(*values):
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def build_protected_report_snapshot(data: dict) -> dict:
+    snapshot = copy.deepcopy(make_json_serializable(data if isinstance(data, dict) else {}))
+    snapshot.pop("observations", None)
+    snapshot.pop("ai_editing_instructions", None)
+
+    report_metadata = snapshot.get("report_metadata")
+    if isinstance(report_metadata, dict):
+        for volatile_key in (
+            "exported_at",
+            "imported_at",
+            "protected_data_sha256",
+            "protected_section_sha256",
+        ):
+            report_metadata.pop(volatile_key, None)
+        if not report_metadata:
+            snapshot.pop("report_metadata", None)
+
+    return snapshot
+
+
+def calculate_protected_section_fingerprints(data: dict) -> dict:
+    snapshot = build_protected_report_snapshot(data)
+    return {
+        key: _hash_json_value(value)
+        for key, value in snapshot.items()
+    }
+
+
+def _fingerprint_status_for_report(report_data: dict) -> tuple[str, list[str]]:
+    metadata = report_data.get("report_metadata", {}) if isinstance(report_data, dict) else {}
+    expected = metadata.get("protected_data_sha256") if isinstance(metadata, dict) else None
+    if not expected:
+        return "No export fingerprint found.", []
+
+    actual = calculate_report_fingerprint(report_data)
+    if actual == expected:
+        return "Protected report data is unchanged. Only editable content appears to have been modified.", []
+
+    changed_sections = compare_protected_sections(metadata, report_data)
+    return (
+        "The uploaded JSON contains changes outside the editable observations fields.",
+        changed_sections,
+    )
 
 
 try:

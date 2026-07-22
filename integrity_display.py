@@ -14,12 +14,22 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
-from app import FRAUD_LAYER_ORDER
-
 try:
     from core_utils import safe_float
 except Exception:  # pragma: no cover - rebound from app.py during normal use
     safe_float = float
+
+
+FRAUD_LAYER_ORDER = [
+    ("metadata", "Layer 1: Metadata"),
+    ("fonts", "Layer 2: Fonts"),
+    ("text_layers", "Layer 3: Text Layers"),
+    ("visual", "Layer 4: Visual"),
+    ("cross_validation", "Layer 5: Cross Validation"),
+    ("bank_profile", "Layer 6: Bank Profile"),
+    ("structural", "Layer 7: Structural"),
+    ("arithmetic", "Layer 8: Arithmetic"),
+]
 
 
 def bind_app_globals(app_globals: dict) -> None:
