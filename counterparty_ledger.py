@@ -20,6 +20,67 @@ except Exception:  # pragma: no cover - rebound from app.py during normal use
     safe_float = float
 
 try:
+    from cimb import extract_cimb_party_name
+except Exception:  # pragma: no cover - CIMB parser may be unavailable in isolated imports
+    def extract_cimb_party_name(description: str) -> str:
+        return ""
+
+try:
+    from party_utils import (
+        _merge_counterparty_groups,
+        apply_party_aliasing,
+        clean_counterparty_name,
+        deduplicate_counterparty_names,
+        normalise_counterparty_for_ledger,
+    )
+except Exception:  # pragma: no cover - rebound from app.py during normal use
+    def clean_counterparty_name(raw_name) -> str:
+        return re.sub(r"\s+", " ", str(raw_name or "").strip()).upper()
+
+    def deduplicate_counterparty_names(raw_names) -> List[str]:
+        return [clean_counterparty_name(name) for name in raw_names or []]
+
+    def normalise_counterparty_for_ledger(raw_name, own_party: str = "", description: str = "") -> str:
+        return clean_counterparty_name(raw_name)
+
+    def apply_party_aliasing(party_series):
+        return party_series
+
+    def _merge_counterparty_groups(groups: Dict[str, dict]) -> Dict[str, dict]:
+        return groups
+
+try:
+    from report_generator import (
+        _top_parties_from_counterparty_rows,
+        build_own_related_party_groups_for_report,
+        prepare_top_parties_for_report,
+    )
+except Exception:  # pragma: no cover - rebound from app.py during normal use
+    def _top_parties_from_counterparty_rows(
+        counterparty_rows: List[dict],
+        limit: Optional[int] = 10,
+        company_name: str = "",
+    ) -> dict:
+        return {"top_payers": [], "top_payees": []}
+
+    def build_own_related_party_groups_for_report(
+        own_related=None,
+        related_parties=None,
+        company_name: str = "",
+    ) -> List[dict]:
+        return []
+
+    def prepare_top_parties_for_report(
+        top_parties: dict,
+        limit: int = 10,
+        company_name: str = "",
+    ) -> dict:
+        return {
+            "payers": (top_parties or {}).get("top_payers", [])[:limit],
+            "payees": (top_parties or {}).get("top_payees", [])[:limit],
+        }
+
+try:
     from agro_bank import resolve_agrobank_party_name
 except Exception:  # pragma: no cover - Agrobank parser may be unavailable in isolated imports
     resolve_agrobank_party_name = None
@@ -45,12 +106,156 @@ except Exception:  # pragma: no cover - RHB parser may be unavailable in isolate
     extract_rhb_party_name = None
 
 
+UNKNOWN_COUNTERPARTY_VALUES = {"", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
+IBG_CREDIT_DESCRIPTION_RE = re.compile(r"^\s*IBG\s+CREDIT\b", re.I)
+COUNTERPARTY_NAME_FIELDS = (
+    "counterparty_name_clean",
+    "counterparty_name",
+    "counterparty",
+    "party_name",
+    "counterparty_name_raw",
+    "party",
+    "merchant",
+    "merchant_name",
+    "recipient",
+    "beneficiary",
+    "payer",
+    "payee",
+)
+
+_REPORT_SPECIAL_COUNTERPARTY_BUCKETS = {
+    "UNIDENTIFIED",
+    "UNKNOWN",
+    "UNKNOWN PARTY",
+    "UNCATEGORIZED",
+    "CHEQUE",
+    "UNIDENTIFIED (CHEQUE)",
+    "UNIDENTIFIED (CASH)",
+    "BILLS",
+    "BILL PAYMENT",
+    "BILL PAYMENT TO FIN",
+    "BILL TO FIN",
+    "CASH DEPOSIT",
+    "CASH WITHDRAWAL",
+    "BANK FEES",
+    "BANK FEE",
+    "SYSTEM",
+    "BANK SYSTEM",
+    "BANK / SYSTEM",
+    "SERVICE CHARGE",
+    "BULK SALARY",
+    "BULK DUITNOW",
+    "FD/INTEREST",
+    "FD INTEREST",
+    "INTEREST",
+    "PROFIT PAID",
+    "PROFIT CHARGED",
+    "LOAN REPAYMENT",
+    "LOAN DISBURSEMENT",
+    "KWSP",
+    "KUMPULAN WANG SIMPAN PEKERJA",
+    "KUMPULAN WANG SIMPANAN PEKERJA",
+    "SOCSO",
+    "LHDN",
+    "HRDF",
+    "TRANSFER FEE",
+    "OTHER TRANSFER FEE",
+    "FUND",
+    "FUND TRANSFER",
+    "TO SAVINGS",
+    "SAVINGS",
+    "REVERSAL",
+    "RETURNED CHEQUE",
+    "INWARD RETURN",
+    "APAYLATER",
+    "AUTOPAY CR",
+    "AUTOPAY DR",
+    "MTH END",
+    "MONTH END",
+    "OPENING BALANCE",
+    "CLOSING BALANCE",
+    "SPECIAL BUCKET",
+}
+_REPORT_RANKABLE_SPECIAL_BUCKETS = {"JANM"}
+_REPORT_LEGAL_SUFFIX_TOKENS = {
+    "SDN", "BHD", "BERHAD", "PLT", "LLP", "LTD", "LIMITED"
+}
+_REPORT_PERSON_CONNECTOR_TOKENS = {
+    "BIN", "BINTI", "BINTE", "BT", "BTE", "B", "A/L", "A/P", "ANAK"
+}
+
+
 def bind_app_globals(app_globals: dict) -> None:
     """Expose app.py helpers/constants that these extracted functions already use."""
     for name, value in app_globals.items():
         if name.startswith("__") and name.endswith("__"):
             continue
         globals()[name] = value
+
+
+def normalize_counterparty_value(value) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = re.sub(r"\s+", " ", str(value).strip().upper())
+    if text in UNKNOWN_COUNTERPARTY_VALUES:
+        return ""
+    return text
+
+
+def _report_counterparty_label(name) -> str:
+    return re.sub(r"[_\s]+", " ", str(name or "").strip().upper())
+
+
+def _is_report_special_counterparty_bucket(name) -> bool:
+    upper = _report_counterparty_label(name)
+    if not upper:
+        return True
+    if upper in _REPORT_RANKABLE_SPECIAL_BUCKETS:
+        return False
+    if upper in _REPORT_SPECIAL_COUNTERPARTY_BUCKETS:
+        return True
+    return bool(
+        re.match(r"^UNIDENTIFIED(?:\s.*)?$", upper)
+        or re.match(r"^UNNAMED\s+.+?\s+TRANSFER\s*\((?:CR|DR)\)\s*$", upper)
+        or re.match(r"^UNNAMED\s+INTERNAL\s+PAYROLL\s*\((?:CR|DR)\)\s*$", upper)
+        or re.match(r"^CARD\s+POS\s*\([A-Z]+\)\s*$", upper)
+        or re.match(r"^(?:MTH|MONTH)\s+END(?:\s+.*)?$", upper)
+    )
+
+
+def _is_report_unknown_counterparty(name) -> bool:
+    upper = _report_counterparty_label(name)
+    return upper in {"", "UNKNOWN", "UNKNOWN PARTY", "UNIDENTIFIED", "UNCATEGORIZED"}
+
+
+def _counterparty_override_candidates(raw_name: str, clean_name: str = "") -> List[str]:
+    candidates = [
+        normalize_counterparty_value(raw_name),
+        normalize_counterparty_value(clean_name),
+    ]
+    try:
+        candidates.append(normalize_counterparty_value(clean_counterparty_name(raw_name)))
+    except Exception:
+        pass
+    seen = set()
+    return [name for name in candidates if name and not (name in seen or seen.add(name))]
+
+
+def _apply_counterparty_overrides(raw_name: str, clean_name: str) -> str:
+    overrides = st.session_state.get("counterparty_name_overrides", {}) or {}
+    if not overrides:
+        return clean_name
+
+    for candidate in _counterparty_override_candidates(raw_name, clean_name):
+        override = normalize_counterparty_value(overrides.get(candidate))
+        if override:
+            return override
+    return clean_name
 
 
 def build_track2_counterparty_ledger(transactions: List[dict]) -> dict:
@@ -739,6 +944,92 @@ def _build_counterparty_json_payload(prepared_df: pd.DataFrame, summary_df: pd.D
     }
 
 
+def build_canonical_counterparty_ledger_rows(cp_ledger: dict) -> List[dict]:
+    """Return the shared counterparty ledger view used by UI, HTML, and Excel."""
+    raw_counterparties = cp_ledger.get("counterparties", []) if isinstance(cp_ledger, dict) else []
+    raw_counterparties = [cp for cp in raw_counterparties or [] if isinstance(cp, dict)]
+    if not raw_counterparties:
+        return []
+
+    raw_names = [str(cp.get("counterparty_name", cp.get("counterparty", "")) or "") for cp in raw_counterparties]
+    try:
+        clean_names = deduplicate_counterparty_names(raw_names)
+    except Exception:
+        clean_names = [clean_counterparty_name(name) or name for name in raw_names]
+
+    merged_counterparties = {}
+    for cp, clean_name in zip(raw_counterparties, clean_names):
+        clean_name = clean_name or clean_counterparty_name(cp.get("counterparty_name", "")) or "UNKNOWN"
+        clean_name = re.sub(r"\s+", " ", str(clean_name).strip()).upper() or "UNKNOWN"
+        key = clean_name.casefold()
+        merged = merged_counterparties.setdefault(
+            key,
+            {
+                "counterparty_name": clean_name,
+                "total_credits": 0.0,
+                "total_debits": 0.0,
+                "net_position": 0.0,
+                "transaction_count": 0,
+                "credit_count": 0,
+                "debit_count": 0,
+                "pattern_matched": 0,
+                "special_bucket": 0,
+                "raw_fallback": 0,
+                "transactions": [],
+                "raw_names": set(),
+                "is_related_party": False,
+            },
+        )
+
+        raw_name = str(cp.get("counterparty_name", cp.get("counterparty", "")) or "").strip()
+        if raw_name:
+            merged["raw_names"].add(raw_name)
+        merged["total_credits"] += safe_float(cp.get("total_credits", cp.get("total_credit", 0)))
+        merged["total_debits"] += safe_float(cp.get("total_debits", cp.get("total_debit", 0)))
+        merged["credit_count"] += int(safe_float(cp.get("credit_count", cp.get("credit_tx_count", 0))))
+        merged["debit_count"] += int(safe_float(cp.get("debit_count", cp.get("debit_tx_count", 0))))
+        merged["transaction_count"] += int(safe_float(cp.get("transaction_count", 0)))
+        merged["pattern_matched"] += int(safe_float(cp.get("pattern_matched", 0)))
+        merged["special_bucket"] += int(safe_float(cp.get("special_bucket", 0)))
+        merged["raw_fallback"] += int(safe_float(cp.get("raw_fallback", 0)))
+
+        related_raw = cp.get("is_related_party", cp.get("related_party", False))
+        if bool(related_raw) and str(related_raw).strip().lower() not in {"false", "no", "0"}:
+            merged["is_related_party"] = True
+
+        for txn in cp.get("transactions", []) or []:
+            if isinstance(txn, dict):
+                txn_copy = dict(txn)
+                txn_copy["counterparty_name_clean"] = clean_name
+                merged["transactions"].append(txn_copy)
+
+    merged_counterparties = _merge_counterparty_groups(
+        {
+            str(cp.get("counterparty_name") or "UNKNOWN"): cp
+            for cp in merged_counterparties.values()
+        }
+    )
+
+    rows = []
+    for cp in merged_counterparties.values():
+        cp["total_credits"] = round(cp["total_credits"], 2)
+        cp["total_debits"] = round(cp["total_debits"], 2)
+        cp["net_position"] = round(cp["total_credits"] - cp["total_debits"], 2)
+        if not cp["transaction_count"]:
+            cp["transaction_count"] = cp["credit_count"] + cp["debit_count"]
+        if not cp["transaction_count"]:
+            cp["transaction_count"] = len(cp.get("transactions", []) or [])
+        cp["raw_names"] = sorted(name for name in cp["raw_names"] if name)
+        cp["transactions"] = sorted(
+            cp.get("transactions", []) or [],
+            key=lambda tx: (str(tx.get("date") or ""), str(tx.get("description") or "")),
+        )
+        rows.append(cp)
+
+    rows.sort(key=lambda cp: str(cp.get("counterparty_name", "") or "").casefold())
+    return rows
+
+
 def build_report_counterparty_ledger_rows(
     cp_ledger: dict,
     related_parties=None,
@@ -1067,6 +1358,92 @@ def _prefer_own_party_counterparty_display_name(cp: dict, target_name: str) -> s
     )
 
 
+def _report_match_tokens(value) -> List[str]:
+    text = re.sub(r"[^A-Z0-9/\s]", " ", str(value or "").upper())
+    return [token for token in re.sub(r"\s+", " ", text).strip().split() if token]
+
+
+def _report_party_core_tokens(name) -> List[str]:
+    tokens = _report_match_tokens(name)
+    core = [token for token in tokens if token not in _REPORT_LEGAL_SUFFIX_TOKENS]
+    return core or tokens
+
+
+def _report_party_alias_core_tokens(name) -> List[str]:
+    tokens = _report_party_core_tokens(name)
+    core = [token for token in tokens if token not in _REPORT_PERSON_CONNECTOR_TOKENS]
+    return core or tokens
+
+
+def _report_token_compatible(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    shorter, longer = sorted((left, right), key=len)
+    return len(shorter) >= 3 and longer.startswith(shorter) and len(longer) - len(shorter) <= 2
+
+
+def _report_tokens_ordered_match(needle_tokens: List[str], haystack_tokens: List[str]) -> bool:
+    if len(needle_tokens) < 2 or len(haystack_tokens) < len(needle_tokens):
+        return False
+
+    search_start = 0
+    for needle_token in needle_tokens:
+        found_at = None
+        for idx in range(search_start, len(haystack_tokens)):
+            if _report_token_compatible(needle_token, haystack_tokens[idx]):
+                found_at = idx
+                break
+        if found_at is None:
+            return False
+        search_start = found_at + 1
+    return True
+
+
+def _counterparty_row_matches_report_party(cp: dict, party_name: str) -> bool:
+    return any(
+        _report_candidate_contains_party_tokens(source, party_name)
+        for source in _counterparty_row_report_match_sources(cp)
+    )
+
+
+def _counterparty_row_name_sources(cp: dict) -> List[str]:
+    """Return the identity labels for a counterparty ledger row."""
+    sources = [
+        cp.get("counterparty_name"),
+        cp.get("counterparty"),
+    ]
+    raw_names = cp.get("raw_names", [])
+    if isinstance(raw_names, (list, tuple, set)):
+        sources.extend(raw_names)
+    elif raw_names:
+        sources.append(raw_names)
+
+    return [str(source) for source in sources if source]
+
+
+def _report_party_identity_names_match(left, right) -> bool:
+    left_display = _report_party_display_name(left)
+    right_display = _report_party_display_name(right)
+    if not left_display or not right_display:
+        return False
+    if left_display.upper() == right_display.upper():
+        return True
+
+    left_canonical = _canonical_report_counterparty_display_name(left_display)
+    right_canonical = _canonical_report_counterparty_display_name(right_display)
+    if left_canonical.upper() == right_canonical.upper():
+        return True
+
+    left_tokens = _report_party_alias_core_tokens(left_canonical)
+    right_tokens = _report_party_alias_core_tokens(right_canonical)
+    if len(left_tokens) != len(right_tokens) or not left_tokens:
+        return False
+    return all(
+        _report_token_compatible(left_token, right_token)
+        for left_token, right_token in zip(left_tokens, right_tokens)
+    )
+
+
 def _counterparty_row_matches_alignment_target(cp: dict, target: dict) -> bool:
     name = target.get("name", "") if isinstance(target, dict) else ""
     if target.get("is_own_party"):
@@ -1183,6 +1560,12 @@ def filter_report_related_parties(related_parties, company_name: str = "") -> Li
                 continue
             filtered.append({"name": name, "relationship": relationship})
     return filtered
+
+
+def _report_party_relationship(party) -> str:
+    if not isinstance(party, dict):
+        return ""
+    return re.sub(r"\s+", " ", str(party.get("relationship") or "").strip())
 
 
 def _report_related_party_entries(related_parties) -> List[tuple[str, str]]:

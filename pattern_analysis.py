@@ -302,6 +302,38 @@ def render_pattern_details(df: pd.DataFrame, high_value_threshold: float) -> Non
                 st.dataframe(hrdf_hits[display_cols], use_container_width=True)
 
 
+def filter_statement_transactions_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter out balance-marker rows from statement-style transaction data."""
+    if df.empty:
+        return df
+
+    balance_marker_patterns = [
+        r"\bOPENING\s+BAL(?:ANCE)?\b",
+        r"\bCLOSING\s+BAL(?:ANCE)?\b",
+        r"\bBEGINNING\s+BAL(?:ANCE)?\b",
+        r"\bENDING\s+BAL(?:ANCE)?\b",
+        r"\bBALANCE\s+B\/F\b",
+        r"\bBALANCE\s+C\/F\b",
+        r"\bB\/F\s+BALANCE\b",
+        r"\bC\/F\s+BALANCE\b",
+        r"\bBROUGHT\s+FORWARD\b",
+        r"\bCARRIED\s+FORWARD\b",
+        r"\bBAKI\s+AWAL\b",
+        r"\bBAKI\s+AKHIR\b",
+        r"\bBAKI\s+PEMBUKA\b",
+        r"\bBAKI\s+PENUTUP\b",
+        r"\bBAKI\s+B\/B\b",
+        r"\bBAKI\s+C\/F\b",
+    ]
+
+    def is_balance_marker_transaction(tx: dict) -> bool:
+        desc = normalize_text(tx.get("description", ""))
+        return any(re.search(pattern, desc, flags=re.IGNORECASE) for pattern in balance_marker_patterns)
+
+    mask = [not is_balance_marker_transaction(tx) for tx in df.to_dict(orient="records")]
+    return df.loc[mask].copy()
+
+
 def render_transaction_overview(df: pd.DataFrame, high_value_threshold: float) -> None:
     """Render the transaction pattern overview dashboard"""
     analysis_df = filter_statement_transactions_df(df)
