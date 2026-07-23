@@ -1003,6 +1003,15 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     party_view = prepare_top_parties_for_report(top_parties, limit=10, company_name=company_name)
     payers = party_view["payers"]
     payees = party_view["payees"]
+
+    def _top_party_type_label(party: dict) -> str:
+        labels = []
+        if party.get("is_own_party"):
+            labels.append("Own")
+        if party.get("is_related_party"):
+            labels.append("Related")
+        return "/".join(labels)
+
     all_party_rows = list(payers) + list(payees)
     monthly_bd = sorted({
         mb.get("month", "")
@@ -1010,7 +1019,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         for mb in (party.get("monthly_breakdown") or [])
         if isinstance(mb, dict) and mb.get("month")
     })
-    party_headers = ["Rank", "Party Name", "Total Amount", "Transactions", "Related Party"] + monthly_bd
+    party_headers = ["Rank", "Party Name", "Total Amount", "Transactions", "Party Type"] + monthly_bd
     party_num_cols = {3, *range(6, 6 + len(monthly_bd))}
 
     # Start from row 3 to leave space for title
@@ -1024,7 +1033,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     for party in payers:
         lookup = {mb.get("month"): safe_float(mb.get("amount")) for mb in (party.get("monthly_breakdown") or []) if isinstance(mb, dict)}
-        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
+        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), _top_party_type_label(party)]
         values.extend(lookup.get(month, 0) for month in monthly_bd)
         write_values(ws3, row, values, number_cols=party_num_cols, credit_cols=party_num_cols)
         ws3.cell(row=row, column=1).number_format = "0"
@@ -1045,7 +1054,7 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
 
     for party in payees:
         lookup = {mb.get("month"): safe_float(mb.get("amount")) for mb in (party.get("monthly_breakdown") or []) if isinstance(mb, dict)}
-        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), "Yes" if party.get("is_related_party") else "No"]
+        values = [party.get("rank"), party.get("party_name") or party.get("name"), party.get("total_amount"), party.get("transaction_count"), _top_party_type_label(party)]
         values.extend(lookup.get(month, 0) for month in monthly_bd)
         write_values(ws3, row, values, number_cols=party_num_cols, debit_cols=party_num_cols)
         ws3.cell(row=row, column=1).number_format = "0"

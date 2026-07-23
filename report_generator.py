@@ -3562,8 +3562,12 @@ def _top_parties_from_counterparty_rows(counterparty_rows: List[dict], limit: Op
             continue
 
         transactions = cp.get("transactions") or []
+        own_raw = cp.get("is_own_party", cp.get("own_party", False))
+        is_own = bool(own_raw) and str(own_raw).strip().lower() not in {"false", "no", "0"}
         related_raw = cp.get("is_related_party", cp.get("related_party", False))
         is_related = bool(related_raw) and str(related_raw).strip().lower() not in {"false", "no", "0"}
+        if is_own:
+            is_related = False
 
         credit_amount = safe_float(cp.get("total_credits", cp.get("total_credit", 0)))
         debit_amount = safe_float(cp.get("total_debits", cp.get("total_debit", 0)))
@@ -3577,6 +3581,7 @@ def _top_parties_from_counterparty_rows(counterparty_rows: List[dict], limit: Op
                 "total_amount": round(credit_amount, 2),
                 "transaction_count": credit_count or sum(m.get("count", 0) for m in monthly),
                 "is_related_party": is_related,
+                "is_own_party": is_own,
                 "monthly_breakdown": monthly,
             })
         if debit_amount > 0:
@@ -3586,6 +3591,7 @@ def _top_parties_from_counterparty_rows(counterparty_rows: List[dict], limit: Op
                 "total_amount": round(debit_amount, 2),
                 "transaction_count": debit_count or sum(m.get("count", 0) for m in monthly),
                 "is_related_party": is_related,
+                "is_own_party": is_own,
                 "monthly_breakdown": monthly,
             })
 
