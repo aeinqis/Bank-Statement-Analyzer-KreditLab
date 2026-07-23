@@ -1221,6 +1221,98 @@ def _merge_parsing_metadata_for_reports(reports: list[dict]) -> dict:
     return merged
 
 
+def _is_pdf_integrity_result(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if isinstance(value.get("layer_results"), dict):
+        return True
+    legacy_layers = value.get("layers", value.get("checks", value.get("findings")))
+    if legacy_layers:
+        return True
+    return bool(value.get("overall_risk") and (value.get("all_findings") is not None or value.get("summary") is not None))
+
+
+def _pdf_integrity_filename(item: dict, fallback: str) -> str:
+    if not isinstance(item, dict):
+        return fallback
+    for key in ("filename", "file_name", "file", "name", "source_file"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return fallback
+
+
+def _flatten_pdf_integrity_entries(pdf_integrity: Any, source_label: str = "") -> list[tuple[str, dict]]:
+    """Return per-PDF integrity results from canonical, legacy, and merged JSON shapes."""
+    entries: list[tuple[str, dict]] = []
+    source_label = str(source_label or "").strip()
+
+    if isinstance(pdf_integrity, list):
+        for idx, item in enumerate(pdf_integrity, start=1):
+            if not isinstance(item, dict):
+                continue
+            filename = _pdf_integrity_filename(item, f"{source_label or 'pdf'}_{idx}")
+            entries.append((filename, copy.deepcopy(item)))
+        return entries
+
+    if not isinstance(pdf_integrity, dict):
+        return entries
+
+    for list_key in ("files", "results"):
+        items = pdf_integrity.get(list_key)
+        if isinstance(items, list):
+            for idx, item in enumerate(items, start=1):
+                if not isinstance(item, dict):
+                    continue
+                filename = _pdf_integrity_filename(item, f"{source_label or list_key}_{idx}")
+                entries.append((filename, copy.deepcopy(item)))
+
+    if entries:
+        return entries
+
+    skipped_keys = {"summary", "counts", "headline", "overall_risk", "files", "results"}
+    for key, value in pdf_integrity.items():
+        if key in skipped_keys:
+            continue
+        if _is_pdf_integrity_result(value):
+            filename = _pdf_integrity_filename(value, str(key))
+            result = copy.deepcopy(value)
+            result.setdefault("filename", filename)
+            entries.append((filename, result))
+        elif isinstance(value, (dict, list)):
+            nested_source = str(key) if not source_label else f"{source_label} :: {key}"
+            entries.extend(_flatten_pdf_integrity_entries(value, nested_source))
+
+    return entries
+
+
+def _merge_pdf_integrity_for_reports(reports: list[dict], source_names: list[str] | None = None) -> dict:
+    merged: dict = {}
+    seen: set[str] = set()
+    for idx, report in enumerate(reports or []):
+        if not isinstance(report, dict):
+            continue
+        source_label = (
+            str(source_names[idx]).strip()
+            if source_names and idx < len(source_names) and str(source_names[idx]).strip()
+            else f"report_{idx + 1}"
+        )
+        for filename, result in _flatten_pdf_integrity_entries(report.get("pdf_integrity", {}), source_label):
+            clean_filename = str(filename or "").strip() or source_label
+            output_name = clean_filename
+            if output_name in seen:
+                output_name = f"{source_label} :: {clean_filename}"
+            suffix = 2
+            while output_name in seen:
+                output_name = f"{source_label} :: {clean_filename} ({suffix})"
+                suffix += 1
+            seen.add(output_name)
+            result_copy = copy.deepcopy(result)
+            result_copy["filename"] = output_name
+            merged[output_name] = result_copy
+    return merged
+
+
 def merge_report_json_payloads(reports: list[dict], source_names: list[str] | None = None) -> dict:
     """Merge multiple Kredit Lab report JSON payloads into one canonical report."""
     normalized_reports = [
@@ -1323,14 +1415,7 @@ def merge_report_json_payloads(reports: list[dict], source_names: list[str] | No
             "large_credit_threshold": threshold,
         },
         "parsing_metadata": _merge_parsing_metadata_for_reports(normalized_reports),
-        "pdf_integrity": {
-            (
-                str(source_names[idx]).strip()
-                if source_names and idx < len(source_names) and str(source_names[idx]).strip()
-                else f"report_{idx + 1}"
-            ): copy.deepcopy(report.get("pdf_integrity", {}))
-            for idx, report in enumerate(normalized_reports)
-        },
+        "pdf_integrity": _merge_pdf_integrity_for_reports(normalized_reports, source_names),
     }
 
     if transactions and build_track2_counterparty_ledger is not None:
