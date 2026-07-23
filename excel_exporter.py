@@ -15,6 +15,8 @@ import pandas as pd
 import streamlit as st
 
 from report_generator import (
+    _report_party_display_name,
+    _report_party_names_equivalent,
     _top_parties_from_counterparty_rows,
     build_formula_validation_checks_for_report,
     build_own_related_party_groups_for_report,
@@ -158,15 +160,16 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
         report_data["counterparty_ledger"] = cp_ledger
     report_info = report_data.get("report_info", {}) or {}
     company_name = report_info.get("company_name", "")
+    related_parties_for_report = filter_report_related_parties(
+        report_info.get("related_parties", []) or [],
+        company_name=company_name,
+    )
     
     # Build top_parties from the same aligned CP ledger rows used by the Counterparty sheets.
     report_counterparty_rows = get_report_counterparty_rows_from_data(
         report_data,
         cp_ledger,
-        related_parties=filter_report_related_parties(
-            report_info.get("related_parties", []) or [],
-            company_name=company_name,
-        ),
+        related_parties=related_parties_for_report,
         own_related=own_related,
         company_name=company_name,
     )
@@ -1003,14 +1006,24 @@ def generate_excel_report(data: dict, monthly_summary: List[dict] = None, transa
     party_view = prepare_top_parties_for_report(top_parties, limit=10, company_name=company_name)
     payers = party_view["payers"]
     payees = party_view["payees"]
+    related_party_names = [
+        _report_party_display_name(party)
+        for party in related_parties_for_report
+        if _report_party_display_name(party)
+    ]
 
     def _top_party_type_label(party: dict) -> str:
+        party_name = party.get("party_name") or party.get("name") or ""
         labels = []
         if party.get("is_own_party"):
             labels.append("Own")
-        if party.get("is_related_party"):
+        is_related = bool(party.get("is_related_party")) or any(
+            _report_party_names_equivalent(party_name, related_name)
+            for related_name in related_party_names
+        )
+        if is_related:
             labels.append("Related")
-        return "/".join(labels)
+        return "/".join(labels) if labels else "-"
 
     all_party_rows = list(payers) + list(payees)
     monthly_bd = sorted({
