@@ -83,17 +83,56 @@ HLB_PERSON_RE = re.compile(
     re.I,
 )
 
+HLB_TRUNCATED_PERSON_RE = re.compile(
+    r"\b(?P<party>[A-Z][A-Z.'@/-]+(?:\s+[A-Z][A-Z.'@/-]+){1,5}\s+"
+    r"(?:BIN|BINTI|BINTE|BT|BTE|A/L|AL|BI)\s*"
+    r"(?:[A-Z][A-Z.'@/-]+(?:\s+[A-Z][A-Z.'@/-]+){0,4})?)\b",
+    re.I,
+)
+
+HLB_DIRECT_PARTY_PATTERNS = (
+    re.compile(
+        r"\b(?:OWN\s+ACC\s+TXN|ITB\s+TRF(?:\s+[A-Z0-9]+){0,4}|"
+        r"INTERBANK-?\s*(?:O\s+AND\s+M)?|INTERBANK)\s+"
+        r"(?P<party>MTC\s+ENGINEERING(?:\s+SDN\.?\s*BHD\.?)?)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?P<party>TENAGA\s+NASIONAL\s+BERHAD|TM\s+UNIFI|MAXIS|"
+        r"CITY-LINK\s+EXPRESS(?:\s+SHAH)?|NATIONAL\s+INSTITUTE\s+OF\s+OCCUPATI|"
+        r"LEMBAGA\s+HASIL\s+DALAM\s+NEGERI\s+MAL)\b",
+        re.I,
+    ),
+    re.compile(
+        r"(?=\b(?P<party>[A-Z][A-Z0-9 &'()./@-]{2,}?\s+&\s+"
+        r"(?:ASSOCIATES|CONSULTANCY|PARTNERS(?:\s+\(?CLIENT'?S?\s+ACCOUNT\)?)?|"
+        r"CONSTRUCT(?:ION)?|CO(?:\s+CLIENT\s+ACCOUNT)?))\b)",
+        re.I,
+    ),
+    re.compile(
+        r"(?=\b(?P<party>[A-Z][A-Z0-9 &'()./@-]{2,}?\s+"
+        r"(?:SDN\.?\s*BHD\.?|SDN\.?\s*B\.?|SDN\.?|S\s*/\s*B|SB|"
+        r"BHD\.?|BERHAD))\b)",
+        re.I,
+    ),
+)
+
 HLB_LEADING_NOISE_TOKENS = {
     "A/C", "ADV", "ADVANCE", "ADVANVE", "AMG", "AMPANG", "APR25", "APR2025",
-    "BAKI", "BALIK", "BAYARAN", "BERNIAGA", "BIZ", "BLN", "BRG2", "BYRN", "CARD",
-    "CATERING", "CLAIM", "DISBURSEMENT", "DUIT", "FEB", "FOR", "FUND",
-    "GAJI", "GAJAH", "GE", "HANG", "HIACE", "HILIR", "HITAM", "INV",
-    "INTERBANK", "INVOIS", "ITEMS", "JLN", "JUNE", "JUNE2", "KATERING", "KELANG",
-    "KTERING", "KUBANG", "LAMA", "MAC", "MASJID", "MAY25", "MEI", "MODAL",
-    "MONKIARA", "MOREH", "NEGAR", "NEGARA", "NETWORK", "PAY",
-    "PAYMENT", "PEJABAT", "PEKERJA", "PETTY", "PLAQUE", "PLASTIK", "PPC", "RAYA",
-    "RORO", "RTM", "SAMPLE", "SERVICES", "SITE", "STAFF", "TRANSFER", "TRANSPORT",
-    "TRAVEL", "TUAH", "CASH", "CC", "CREDIT", "INSTALMENT", "KSB", "KUIH", "ONM",
+    "ASDT", "ASDTNC", "BAKI", "BAL", "BALIK", "BAYARAN", "BERNIAGA", "BIZ", "BLN", "BRG2", "BYRN",
+    "CARD", "CASH", "CATERING", "CC", "CLAIM", "CONSULTANCY", "CREDIT", "CCTV", "CYLINDER",
+    "DEED", "DEPO", "DISBURSEMENT", "DTD", "DUIT", "FIRE", "FOR", "FUND",
+    "GAJI", "GAJAH", "GAS", "GE", "HANG", "HIACE", "HILIR", "HITAM", "INV", "IV",
+    "INTERBANK", "INVOICES", "INVOIS", "ISPS", "ITEMS", "JLN", "JUNE", "JUNE2",
+    "KATERING", "KELANG", "KTERING", "KUBANG", "LAMA", "FEE", "LEGAL", "MAC", "MASJID",
+    "MAY25", "MEI", "MODAL", "MONKIARA", "MOREH", "N", "NEGAR", "NEGARA",
+    "NETWORK", "NITRO", "OFF", "ONM", "OPINION", "OPS", "P", "PAX", "PAY", "PAYMENT",
+    "PEJABAT", "PEKERJA", "PETTY", "PLAQUE", "PLASTIK", "PPC", "PURCHASE", "RACK", "CARGO",
+    "RAYA", "RENT", "RENTAL", "REPAIR", "RORO", "RR", "RTM", "SAMPLE", "SEMINAR",
+    "SERVICE", "SERVICES", "SITE", "SOLAR", "STAFF", "SYSTEM", "TRANSPORT", "TRANSPORTATION",
+    "TRANSFER", "TRAVEL", "TUAH", "CASH", "CC", "CREDIT", "INSTALMENT", "KSB",
+    "KUIH", "ALLOWANCE", "CALIBRATE", "CHALOK", "JOHOR", "MMHE", "MTCE/RR", "SEPAT", "FNB",
+    "PJO", "50PCT", "IP", "PBX",
 }
 
 HLB_TRAILING_NOISE_TOKENS = {
@@ -109,7 +148,9 @@ def _is_hlb_reference_token(token: str) -> bool:
         return True
     if re.search(r"\d", token) and len(token) >= 5:
         return True
-    if re.fullmatch(r"C[0-9A-Z]{8,}", token):
+    if "/" in token and len(token) >= 4:
+        return True
+    if re.fullmatch(r"C[0-9A-Z]{8,}", token) and re.search(r"\d", token):
         return True
     return False
 
@@ -120,9 +161,12 @@ def _trim_hong_leong_candidate(value: str) -> str:
     text = re.sub(r"^\s*MTC\s+STAFF\s+", "", text, flags=re.I)
     text = re.sub(r"^.*?\bADVANCE\s+PAYMENT\s+", "", text, flags=re.I)
     text = re.sub(r"^\s*2ND\s+INSTALMENT\s+", "", text, flags=re.I)
+    text = re.sub(r"\bS\s*/\s*B\b", "SDN BHD", text, flags=re.I)
+    text = re.sub(r"\bSB\b", "SDN BHD", text, flags=re.I)
     text = re.sub(r"\bSDN\.?\s*B\.?\b", "SDN BHD", text, flags=re.I)
     text = re.sub(r"\bSDN\.?\s*BHD\.?\b", "SDN BHD", text, flags=re.I)
     text = re.sub(r"\bSDNBHD\b", "SDN BHD", text, flags=re.I)
+    text = re.sub(r"\bSDN\s*$", "SDN BHD", text, flags=re.I)
     text = re.sub(r"\bSD\s*$", "SDN BHD", text, flags=re.I)
     text = re.sub(r"\bBERHAD\b", "BHD", text, flags=re.I)
     mtc_match = re.search(r"\bMTC\s+ENGINEERING(?:\s+SDN\s+BHD)?\b", text, flags=re.I)
@@ -149,6 +193,27 @@ def _trim_hong_leong_candidate(value: str) -> str:
     return text or "UNKNOWN"
 
 
+def _score_hong_leong_direct_candidate(candidate: str) -> tuple:
+    has_legal_suffix = bool(re.search(r"\b(?:SDN\s+BHD|BHD|BERHAD|S/B|SB)\b", candidate, re.I))
+    return (1 if has_legal_suffix else 0, len(candidate.split()), len(candidate))
+
+
+def _extract_hong_leong_direct_regex_party(body: str) -> str:
+    candidates = []
+    for pattern in HLB_DIRECT_PARTY_PATTERNS:
+        for match in pattern.finditer(body):
+            party = _trim_hong_leong_candidate(match.group("party"))
+            if (
+                party
+                and party != "UNKNOWN"
+                and not re.fullmatch(r"(?:SDN\s+BHD|SDN|BHD|BERHAD)", party, re.I)
+            ):
+                candidates.append(party)
+    if not candidates:
+        return "UNKNOWN"
+    return max(candidates, key=_score_hong_leong_direct_candidate)
+
+
 def extract_hong_leong_party_name(description: str) -> str:
     desc = re.sub(r"\s+", " ", str(description or "")).strip()
     if not desc:
@@ -172,7 +237,11 @@ def extract_hong_leong_party_name(description: str) -> str:
     body = re.sub(r"\b[A-Z]{1,3}\d{4,}[A-Z0-9./-]*\b", " ", body)
     body = re.sub(r"\s+", " ", body).strip()
 
-    person_matches = list(HLB_PERSON_RE.finditer(body))
+    direct_candidate = _extract_hong_leong_direct_regex_party(body)
+    if direct_candidate != "UNKNOWN":
+        return direct_candidate
+
+    person_matches = list(HLB_TRUNCATED_PERSON_RE.finditer(body)) or list(HLB_PERSON_RE.finditer(body))
     if person_matches:
         return _trim_hong_leong_candidate(person_matches[-1].group("party"))
 
